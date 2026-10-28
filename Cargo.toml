@@ -14,7 +14,7 @@ members = [
 exclude = ["crates/sdk/seal-go"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 rust-version = "1.92"
 license = "Apache-2.0"
@@ -23,25 +23,25 @@ repository = "https://github.com/sealzone/seal"
 
 [workspace.dependencies]
 # internal
-seal-proto = { path = "crates/shared/seal-proto", version = "0.1.0", package = "sealzone-proto" }
-seal-crypto = { path = "crates/shared/seal-crypto", version = "0.1.0", package = "sealzone-crypto" }
-seal-attest = { path = "crates/shared/seal-attest", version = "0.1.0", package = "sealzone-attest" }
-seal-tee = { path = "crates/shared/seal-tee", version = "0.1.0" }
-seal-tlog = { path = "crates/shared/seal-tlog", version = "0.1.0", package = "sealzone-tlog" }
-seal-net = { path = "crates/shared/seal-net", version = "0.1.0", package = "sealzone-net" }
-seal-verify = { path = "crates/shared/seal-verify", version = "0.1.0", package = "sealzone-verify" }
-seal-authz = { path = "crates/enclave/seal-authz", version = "0.1.0" }
-seal-integrity = { path = "crates/enclave/seal-integrity", version = "0.1.0" }
-seal-cloud = { path = "crates/enclave/seal-cloud", version = "0.1.0" }
-seal-guardian = { path = "crates/guardian/seal-guardian", version = "0.1.0" }
-seal-control = { path = "crates/control-plane/seal-control", version = "0.1.0", package = "sealzone-control" }
-seal-adapter = { path = "crates/enclave/adapters/seal-adapter", version = "0.1.0" }
-seal-adapter-http = { path = "crates/enclave/adapters/seal-adapter-http", version = "0.1.0" }
-seal-adapter-pg = { path = "crates/enclave/adapters/seal-adapter-pg", version = "0.1.0" }
-seal-adapter-redis = { path = "crates/enclave/adapters/seal-adapter-redis", version = "0.1.0" }
-seal-adapter-clickhouse = { path = "crates/enclave/adapters/seal-adapter-clickhouse", version = "0.1.0" }
-seal-client = { path = "crates/sdk/seal-client", version = "0.1.0", package = "sealzone" }
-seal-sim = { path = "crates/sim/seal-sim", version = "0.1.0" }
+seal-proto = { path = "crates/shared/seal-proto", version = "0.1.1", package = "sealzone-proto" }
+seal-crypto = { path = "crates/shared/seal-crypto", version = "0.1.1", package = "sealzone-crypto" }
+seal-attest = { path = "crates/shared/seal-attest", version = "0.1.1", package = "sealzone-attest" }
+seal-tee = { path = "crates/shared/seal-tee", version = "0.1.1" }
+seal-tlog = { path = "crates/shared/seal-tlog", version = "0.1.1", package = "sealzone-tlog" }
+seal-net = { path = "crates/shared/seal-net", version = "0.1.1", package = "sealzone-net" }
+seal-verify = { path = "crates/shared/seal-verify", version = "0.1.1", package = "sealzone-verify" }
+seal-authz = { path = "crates/enclave/seal-authz", version = "0.1.1" }
+seal-integrity = { path = "crates/enclave/seal-integrity", version = "0.1.1" }
+seal-cloud = { path = "crates/enclave/seal-cloud", version = "0.1.1" }
+seal-guardian = { path = "crates/guardian/seal-guardian", version = "0.1.1" }
+seal-control = { path = "crates/control-plane/seal-control", version = "0.1.1", package = "sealzone-control" }
+seal-adapter = { path = "crates/enclave/adapters/seal-adapter", version = "0.1.1" }
+seal-adapter-http = { path = "crates/enclave/adapters/seal-adapter-http", version = "0.1.1" }
+seal-adapter-pg = { path = "crates/enclave/adapters/seal-adapter-pg", version = "0.1.1" }
+seal-adapter-redis = { path = "crates/enclave/adapters/seal-adapter-redis", version = "0.1.1" }
+seal-adapter-clickhouse = { path = "crates/enclave/adapters/seal-adapter-clickhouse", version = "0.1.1" }
+seal-client = { path = "crates/sdk/seal-client", version = "0.1.1", package = "sealzone" }
+seal-sim = { path = "crates/sim/seal-sim", version = "0.1.1" }
 # external. Every crate takes versions from here. Read docs/DEPS.md before adding or upgrading.
 async-trait = "0.1"
 base64 = "0.22"
