@@ -19,8 +19,8 @@ environment on first use (`SEAL_ENDPOINT`, `SEAL_TENANT`, the detected workload 
 `DatabaseSession` (`dsn`, `protocol`), whichever the blob is; both have `info`, `receipts()`,
 `extend()` and `close()`.
 
-Whether this workload may seal or start sessions is decided by the enclave from the tenant's
-grants, never by the SDK. Errors are `SealError`s named after their `ErrorCode`: `Expired`,
+Anyone may seal; whether this workload may start sessions is decided by the enclave from the
+tenant's grants, never by the SDK. Errors are `SealError`s named after their `ErrorCode`: `Expired`,
 `NotAllowed`, `TierTooLow`, `IntegrityFailed`, `SessionEnded`, `Unavailable`,
 `VerificationFailed`, `BadRequest`, `ResealRequired`, ...
 """

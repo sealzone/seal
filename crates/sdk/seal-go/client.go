@@ -69,8 +69,8 @@ func FromEnv(ctx context.Context) (*Client, error) {
 }
 
 // Connect verifies the enclave and returns a client. Every client verifies the enclave before
-// it sends anything; whether this workload may seal or start sessions is decided by the
-// enclave from the tenant's grants.
+// it sends anything. Anyone may seal; whether this workload may start sessions is decided by
+// the enclave from the tenant's grants.
 func Connect(ctx context.Context, opts Options) (*Client, error) {
 	options, err := json.Marshal(struct {
 		Endpoints []string `json:"endpoints,omitempty"`

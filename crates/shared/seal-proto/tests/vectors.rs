@@ -615,7 +615,6 @@ fn labels_are_distinct() {
         GUARDIAN_IDENTITY_LABEL,
         seal_proto::control::CONTROL_REQUEST_LABEL,
         TENANT_ANCHOR_LABEL,
-        "seal/seal-request/v1",
         "seal/session-request/v1",
         "seal/extend-request/v1",
         "seal/signal-request/v1",

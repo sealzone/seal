@@ -15,8 +15,8 @@
 //
 // FromEnv reads SEAL_ENDPOINT, SEAL_TENANT and the first workload identity found; Connect
 // takes explicit Options. Every client verifies the enclave before it sends anything.
-// Whether this workload may seal or start sessions is decided by the enclave from the
-// tenant's grants, never by the SDK.
+// Anyone may seal; whether this workload may start sessions is decided by the enclave from
+// the tenant's grants, never by the SDK.
 //
 // Errors are *Error values with a Code; errors.Is(err, seal.ErrNotAllowed) and the other
 // sentinels match by code.

@@ -36,8 +36,8 @@ the first workload identity found (`SEAL_APP_KEY`, Azure managed identity with
 `Client.connect({ endpoints, tenant, rootId, identity, trust })` sets any of them; the rest
 still come from the environment. Every client verifies the enclave before it sends anything,
 against the release trust the package ships, or the one it is given: `trust: "trust.json"`
-(a path, or the JSON as a string or Buffer). Whether this workload may seal or start sessions
-is decided by the enclave from the tenant's grants. Every operation returns a Promise.
+(a path, or the JSON as a string or Buffer). Anyone may seal; whether this workload may start
+sessions is decided by the enclave from the tenant's grants. Every operation returns a Promise.
 
 ## Sessions
 

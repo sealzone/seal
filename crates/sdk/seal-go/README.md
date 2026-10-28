@@ -34,8 +34,8 @@ explicitly: `Endpoints`, `Tenant`, `RootID`, `Identity` (`seal.AppKeyIdentity`,
 `seal.AzureManagedIdentity`, `seal.KubernetesIdentity`, `seal.GCPIdentity`,
 `seal.GitHubActionsIdentity`, `seal.AWSIdentity` in `--aws` builds) and `Trust`
 (`seal.TrustFile("trust.json")` or `seal.TrustJSON(b)`). Every client verifies the enclave
-before it sends anything; whether this workload may seal or start sessions is decided by the
-enclave from the tenant's grants.
+before it sends anything. Anyone may seal; whether this workload may start sessions is decided
+by the enclave from the tenant's grants.
 
 ## Sessions
 
