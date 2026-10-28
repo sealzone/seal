@@ -7,7 +7,7 @@ license.workspace = true
 homepage.workspace = true
 repository.workspace = true
 readme = "README.md"
-keywords = ["secrets", "tee", "attestation", "enclave", "confidential-computing"]
+keywords = ["secrets", "tee", "attestation", "enclave", "confidential"]
 categories = ["cryptography", "authentication", "api-bindings"]
 
 [lib]
