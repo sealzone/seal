@@ -215,13 +215,10 @@ class World:
         print(f"$ seal {' '.join(args)}\n{out.stdout}{out.stderr}")
         return out.returncode, out.stdout
 
-    def seal_with_cli(self, secret: str, to: str, *extra: str, endpoints: Optional[List[str]] = None,
-                      wake_url: Optional[str] = None) -> str:
+    def seal_with_cli(self, secret: str, to: str, *extra: str, endpoints: Optional[List[str]] = None) -> str:
         """Seals `secret` for `checkout` with the CLI, as the producer; returns the blob."""
         env = {"SEAL_APP_KEY": self.producer_key, "SEAL_TENANT": self.pin,
                "SEAL_ENDPOINT": ",".join(endpoints or self.endpoints())}
-        if wake_url:
-            env["SEAL_WAKE_URL"] = wake_url
         return self.admin("secret", "--to", to, "--app", APP, *extra, stdin=secret, env=env).strip()
 
     def client(self, key: Optional[str] = None, endpoints: Optional[List[str]] = None) -> seal.Client:

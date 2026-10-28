@@ -41,23 +41,27 @@
 //! and those keys checked against the guardian's certificate, which proves the guardian
 //! released them. The TLS connection is then pinned to that key, so a misissued
 //! certificate cannot intercept.
+//!
+//! When no replica is reachable, the SDK keeps retrying for up to `UNREACHABLE_WAIT_SECS`:
+//! a replica restarting or cold-starting is waited for, and whatever answers is verified as
+//! above.
 
 pub mod admin;
 mod client;
 pub mod identity;
 pub mod integrity;
 pub mod receipts;
+mod retry;
 mod session;
 mod transport;
 mod tunnel;
 pub mod verify;
-mod wake;
 
 pub use client::{built_in_trust, Client, ClientBuilder, SealBuilder};
 pub use identity::{detect_identity, IdentityProvider};
 pub use receipts::TelemetryReceipt;
+pub use retry::UNREACHABLE_WAIT_SECS;
 pub use session::{DatabaseSession, HttpSession, Session, SessionBuilder};
-pub use wake::WAKE_WAIT_SECS;
 
 // Everything a caller touches, so no one needs `seal_proto` directly.
 pub use seal_proto::integrity::Severity;

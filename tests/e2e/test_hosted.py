@@ -1,43 +1,20 @@
-"""A Seal-hosted replica for the tenant: it seals and serves sessions, exits when idle, and is
-woken by the SDK through the wake URL."""
+"""A Seal-hosted replica for the tenant: it seals and serves sessions and exits when idle, and a
+client that finds it stopped keeps retrying until it serves again."""
 
 from __future__ import annotations
 
 import json
 import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
-from typing import Callable, List
+import time
 
 from world import SECRET, World, get
 
 IDLE_SECS = 5  # how long the hosted replica stays up idle (`HOSTED_IDLE_SECS` in a release)
 HOSTED = {"kind": "confidential_space", "project_number": 2, "service_account": "t-acme@hosted.sim.seal.zone"}
+RESTART_SECS = 3  # how long the stopped replica takes to come back
 
 
-class WakeStandIn:
-    """Stands in for the console's wake URL: on the first POST, records the body and starts the
-    hosted replica; answers 202 every time."""
-
-    def __init__(self, start_replica: Callable[[], None]) -> None:
-        self.bodies: List[str] = []
-        started = threading.Lock()
-        stand_in = self
-
-        class Handler(BaseHTTPRequestHandler):
-            def do_POST(self) -> None:  # noqa: N802
-                stand_in.bodies.append(self.rfile.read(int(self.headers["content-length"])).decode())
-                if started.acquire(blocking=False):
-                    start_replica()
-                self.send_response(202)
-                self.send_header("content-length", "0")
-                self.end_headers()
-
-        self.server = HTTPServer(("127.0.0.1", 0), Handler)
-        self.url = f"http://127.0.0.1:{self.server.server_port}/api/v1/wake"
-        threading.Thread(target=self.server.serve_forever, daemon=True).start()
-
-
-def test_a_hosted_replica_serves_idles_out_and_wakes(world: World) -> None:
+def test_a_hosted_replica_serves_idles_out_and_clients_wait_for_it(world: World) -> None:
     # The tenant's signed consent to a Seal-hosted replica.
     world.admin("grant", "enclave", "sim", json.dumps(HOSTED), "--hosted", "--yes")
     config = world.replica_config("hosted", ip="127.0.0.3", hosted_idle_secs=IDLE_SECS)
@@ -57,14 +34,18 @@ def test_a_hosted_replica_serves_idles_out_and_wakes(world: World) -> None:
     assert world.procs["hosted"].wait(timeout=IDLE_SECS + 30) == 0
     assert "hosted replica idle" in world.log("hosted") and "ERROR" not in world.log("hosted")
 
-    # The SDK finds nothing listening, asks the wake URL once, and seals once it is back.
+    # The SDK finds nothing listening and keeps retrying; it seals once the replica is back. (Seal's
+    # front door starts a stopped hosted replica on the connection; here the test starts it.)
     def start_hosted_again() -> None:
         world.start("hosted-2", "seal-enclave", env=world.replica_env(config, HOSTED))
 
-    wake = WakeStandIn(start_hosted_again)
-    blob = world.seal_with_cli(SECRET, world.upstream_url, endpoints=[hosted], wake_url=wake.url)
+    restart = threading.Timer(RESTART_SECS, start_hosted_again)
+    started = time.monotonic()
+    restart.start()
+    blob = world.seal_with_cli(SECRET, world.upstream_url, endpoints=[hosted])
+    restart.join()
     assert blob.startswith("seal1.acme.")
-    assert wake.bodies == ['{"tenant":"acme"}']
+    assert time.monotonic() - started > RESTART_SECS, "sealed by the restarted replica"
 
     # Telemetry of both hosted boots is complete: each idle exit sends its last batch.
     assert world.procs["hosted-2"].wait(timeout=IDLE_SECS + 30) == 0

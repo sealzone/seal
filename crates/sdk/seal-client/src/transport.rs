@@ -129,17 +129,6 @@ pub(crate) async fn plain_get(
     headers: &[(&str, &str)],
     timeout: Duration,
 ) -> Result<(u16, Vec<u8>), ClientError> {
-    plain(hyper::Method::GET, url, headers, None, timeout).await
-}
-
-/// One request over plain HTTP: `plain_get`, or a sim build's local wake stand-in.
-pub(crate) async fn plain(
-    method: hyper::Method,
-    url: &str,
-    headers: &[(&str, &str)],
-    body: Option<Vec<u8>>,
-    timeout: Duration,
-) -> Result<(u16, Vec<u8>), ClientError> {
     let parsed = url::Url::parse(url).map_err(|_| ClientError::Invalid(format!("invalid URL {url}")))?;
     if parsed.scheme() != "http" {
         return Err(ClientError::Invalid("plain HTTP takes http:// URLs only".into()));
@@ -157,7 +146,7 @@ pub(crate) async fn plain(
     let net = |e: String| ClientError::Network(format!("{host}: {e}"));
     let run = async {
         let tcp = TcpStream::connect((unbracket(&host), port)).await.map_err(|e| net(e.to_string()))?;
-        exchange(tcp, method, &authority, &path, headers, body).await.map_err(net)
+        exchange(tcp, hyper::Method::GET, &authority, &path, headers, None).await.map_err(net)
     };
     tokio::time::timeout(timeout, run).await.map_err(|_| net("timed out".into()))?
 }

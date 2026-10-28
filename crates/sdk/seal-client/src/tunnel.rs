@@ -14,7 +14,9 @@
 //! name, identifies it. Connections go to the replica that last answered; when it does not,
 //! the others are tried at once and the first to answer is used from then on. A replica that
 //! serves no sessions (draining, or no longer listed) refuses before the TLS handshake, so the
-//! next one is tried.
+//! next one is tried. When none is reachable, the app's connection is held while the replicas
+//! are retried as for any call (`retry`, up to `UNREACHABLE_WAIT_SECS`), until the app closes
+//! it or the tunnel stops.
 //!
 //! Each connection pays TCP and TLS to the replica; the tunnel keeps one spare, opened right
 //! after a connection takes the last one and kept at most `SPARE_SECS`, so connections that
@@ -34,6 +36,7 @@ use tokio::sync::watch;
 use tokio::time::Instant;
 use tokio_rustls::client::TlsStream;
 
+use crate::retry::{self, Pass};
 use crate::transport::{self, ConnectError};
 use crate::verify::VerifiedEnclave;
 use crate::{Client, ClientError};
@@ -213,19 +216,22 @@ impl Shared {
     }
 
     /// A connection to the preferred replica; when it does not answer, to whichever other
-    /// answers first, which becomes the preferred one. `None` when none answers, or one
-    /// presented a key other than the attested one.
-    async fn open(&self, enclave: &Arc<VerifiedEnclave>) -> Option<(usize, TlsStream<TcpStream>)> {
+    /// answers first, which becomes the preferred one. A replica presenting a key other than
+    /// the attested one ends the search.
+    async fn open(&self, enclave: &Arc<VerifiedEnclave>) -> Pass<(usize, TlsStream<TcpStream>)> {
         let first = self.preferred.load(Ordering::Relaxed);
         let (host, port) = &self.replicas[first];
-        match transport::tls_connect(enclave.tunnel_config(), host, *port).await {
-            Ok(tls) => return Some((first, tls)),
-            Err(ConnectError::Pin) => {
+        let mut last = match transport::tls_connect(enclave.tunnel_config(), host, *port).await {
+            Ok(tls) => return Pass::Answered(Ok((first, tls))),
+            Err(e @ ConnectError::Pin) => {
                 tracing::warn!(host, "tunnel: replica presented a key other than the attested one");
-                return None;
+                return Pass::Answered(Err(e.into()));
             }
-            Err(ConnectError::Unreachable(m)) => tracing::debug!(error = %m, "tunnel: replica unreachable"),
-        }
+            Err(ConnectError::Unreachable(m)) => {
+                tracing::debug!(error = %m, "tunnel: replica unreachable");
+                m
+            }
+        };
         let mut racing = tokio::task::JoinSet::new();
         for (i, (host, port)) in self.replicas.iter().enumerate().filter(|(i, _)| *i != first) {
             let (config, host, port) = (enclave.tunnel_config(), host.clone(), *port);
@@ -235,22 +241,23 @@ impl Shared {
             match done {
                 Ok((i, Ok(tls))) => {
                     self.preferred.store(i, Ordering::Relaxed);
-                    return Some((i, tls));
+                    return Pass::Answered(Ok((i, tls)));
                 }
-                Ok((i, Err(ConnectError::Pin))) => {
+                Ok((i, Err(e @ ConnectError::Pin))) => {
                     tracing::warn!(
                         host = self.replicas[i].0,
                         "tunnel: replica presented a key other than the attested one"
                     );
-                    return None;
+                    return Pass::Answered(Err(e.into()));
                 }
                 Ok((_, Err(ConnectError::Unreachable(m)))) => {
-                    tracing::debug!(error = %m, "tunnel: replica unreachable")
+                    tracing::debug!(error = %m, "tunnel: replica unreachable");
+                    last = m;
                 }
                 Err(_) => {}
             }
         }
-        None
+        Pass::Unreachable(ClientError::Network(last))
     }
 
     /// Opens a spare unless one is kept or being opened.
@@ -305,24 +312,39 @@ async fn accept_loop(shared: Arc<Shared>, listener: TcpListener) {
     connections.shutdown().await;
 }
 
-/// One app connection: the spare or a new connection to a replica, the `Connect` preamble,
-/// then bytes both ways until either side closes or the tunnel stops.
+/// One app connection: the spare or a new connection to a replica (held while none is
+/// reachable), the `Connect` preamble, then bytes both ways until either side closes or the
+/// tunnel stops.
 async fn connection(shared: Arc<Shared>, mut inbound: TcpStream) {
     let mut stop = shared.stop.subscribe();
-    let enclave = match shared.client.enclave().await {
-        Ok(e) => e,
-        Err(e) => {
-            tracing::warn!(error = %e, "tunnel: enclave not verified; connection refused");
-            return;
-        }
+    let enclave = tokio::select! {
+        _ = stop.wait_for(|s| *s) => return,
+        _ = closed(&inbound) => return,
+        enclave = shared.client.enclave() => match enclave {
+            Ok(e) => e,
+            Err(e) => {
+                tracing::warn!(error = %e, "tunnel: enclave not verified; connection refused");
+                return;
+            }
+        },
     };
     let upstream = match shared.take_spare(&enclave) {
-        Some(spare) => Some(spare),
-        None => shared.open(&enclave).await,
+        Some(spare) => Ok(spare),
+        None => match shared.open(&enclave).await {
+            Pass::Answered(result) => result,
+            Pass::Unreachable(missed) => tokio::select! {
+                _ = stop.wait_for(|s| *s) => return,
+                _ = closed(&inbound) => return,
+                result = retry::while_unreachable(missed, || shared.open(&enclave)) => result,
+            },
+        },
     };
-    let Some((replica, mut tls)) = upstream else {
-        tracing::warn!("tunnel: no replica reachable");
-        return;
+    let (replica, mut tls) = match upstream {
+        Ok(upstream) => upstream,
+        Err(e) => {
+            tracing::warn!(error = %e, "tunnel: no replica connection; connection refused");
+            return;
+        }
     };
     shared.refill(enclave);
     *shared.live.lock().unwrap_or_else(|e| e.into_inner()).entry(replica).or_default() += 1;
@@ -342,6 +364,15 @@ async fn connection(shared: Arc<Shared>, mut inbound: TcpStream) {
                 tracing::debug!(error = %e, "tunnel: connection ended");
             }
         }
+    }
+}
+
+/// Resolves once the app has closed `inbound` before sending anything. Pending for good once it
+/// has sent something: its first bytes stay unread until a replica takes them.
+async fn closed(inbound: &TcpStream) {
+    let mut byte = [0u8; 1];
+    if let Ok(1..) = inbound.peek(&mut byte).await {
+        std::future::pending::<()>().await;
     }
 }
 

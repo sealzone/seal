@@ -202,7 +202,7 @@ pub const TENANT_KEY_CACHE_SECS: u64 = 900;
 /// A Seal-hosted replica (one whose `deployments` entry has a `HostedMode`) stops once it has
 /// had no live session connection and no seal, session, extend, end or signal by an
 /// authenticated caller for this long (`SealService::idle_exit`); its VM then stops, and
-/// the SDK's wake request starts it again. Customer replicas never idle out.
+/// Seal's front door starts it on the next connection. Customer replicas never idle out.
 pub const HOSTED_IDLE_SECS: u64 = 900;
 
 // No session token an idle replica issued is still valid when it stops, so no tunnel is left

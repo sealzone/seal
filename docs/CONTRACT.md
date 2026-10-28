@@ -44,7 +44,7 @@ field a tenant may set must be in the guardian before it freezes.
 | proposal | A root or state on the control plane collecting admin signatures one at a time; once it has the latest root's threshold it is submitted: logged and stored |
 | deployment identity | Who runs an enclave replica: an ACI group's managed identity, a Nitro parent's instance role, or a Confidential Space VM's project and service account; it must be in `TenantState::deployments` before the enclave requests keys. Seal's hosted entry (an Azure or Confidential Space identity) also carries a `HostedMode` |
 | `HostedMode` | Marks the tenant's signed deployment entry for Seal's hosted replicas: `HostedMode::Sessions`, they seal and serve sessions like the tenant's own replicas, and exit when idle |
-| wake | Starting a tenant's stopped hosted replicas: when no replica answers and one of the endpoints is `<tenant>.enclave.seal.zone`, the SDK asks Seal's wake URL, then retries for `WAKE_WAIT_SECS`; nothing to configure (sim builds: `SEAL_WAKE_URL`) |
+| front door | What `<tenant>.enclave.seal.zone` resolves to: a Seal-run TCP front that reads only the TLS SNI, starts the tenant's stopped hosted replica on a connection, holds the connection until the replica serves and then splices it through; TLS stays end to end, pinned to the attested key. The SDK knows nothing of it: it retries unreachable endpoints for `UNREACHABLE_WAIT_SECS` |
 | periodic attestation | The enclave attests every `ATTESTATION_REFRESH_SECS` (30 s) and serves that to every client, who accepts it within `ATTESTATION_MAX_AGE_SECS` (120 s) |
 | `ProofTicket`, `TicketKey` | Stateless, MAC'd challenge an identity proof binds to, and the key that issues it |
 | `ConsumerTier`, `PlatformTier` | One assurance floor per attacker: `ConsumerTier` (Base < Hardened) is how much the *endpoint* proved — Base is identity, grants and the artifact rule; Hardened adds verified integrity evidence at every start and extend. `PlatformTier` is how well the *enclave* is protected |
@@ -106,23 +106,25 @@ with seal.session(blob) as s:                          # HttpSession or Database
   Identity hints: `SEAL_APP_KEY`; `SEAL_AZURE_AUDIENCE` (Azure managed identity, with
   `AZURE_CLIENT_ID`); GitHub's `ACTIONS_ID_TOKEN_REQUEST_*`; `SEAL_KUBERNETES_TOKEN_FILE`
   (default `/var/run/secrets/seal.zone/token`); the GCP metadata server; the AWS credential
-  chain (`aws` feature). Waking hosted replicas needs no setting: it follows from a
-  `<tenant>.enclave.seal.zone` endpoint (sim builds take `SEAL_WAKE_URL`).
+  chain (`aws` feature).
   Replicas share keys and template-fixed ports, so a session works on any of them and the
   SDK fails over to the next one without a load balancer. Producers outside the tenant's
   network (CI runners, laptops) use Seal's hosted replica for the tenant
   (`<tenant>.enclave.seal.zone`), which also serves sessions; blobs sealed there open in the
   tenant's own replicas, and the other way round. A tenant that wants its apps only on its own
   replicas gives them only those endpoints, or disables Seal's.
-- **Wake**: when no endpoint accepts a connection (at connect, when re-verifying past
-  `ATTESTATION_MAX_AGE_SECS`, or on any API call) and a wake URL is set, the SDK POSTs
-  `{"tenant": "<id>"}` to it without credentials, at most once per client per `WAKE_WAIT_SECS`
-  (120 s), and retries the same pass over the endpoints with backoff (2 s, doubling to 15 s)
-  until a replica answers or 120 s pass; then it fails with `Unavailable`. A `404` (the tenant
-  has no hosted replicas) ends it at once with the original error; any other answer, or none,
-  still waits. Whatever answers is verified as on any call, and one that fails verification is
-  `VerificationFailed` at once. Tunnel data-plane connections never wake: their session keeps
-  the replica up.
+- **Unreachable replicas**: when a pass over the endpoints reaches none of them (no TCP
+  connection and TLS handshake within the 10 s connect timeout, or, when verifying, no
+  attestation served), at connect, when re-verifying past `ATTESTATION_MAX_AGE_SECS`, or on any
+  API call, the SDK repeats the pass
+  with backoff (2 s, doubling to 15 s) until a replica answers or `UNREACHABLE_WAIT_SECS`
+  (120 s) pass; then it fails with `Unavailable`. Every client does this, whatever its
+  endpoints: it rides out a replica restarting, and a Seal-hosted replica that Seal's front
+  door is starting on the connection. An API request is retried only when no connection was
+  made, so none is sent twice. Whatever answers is verified as on any call: a failed verification, a key other
+  than the attested one or an error code from the enclave is the result at once, never
+  retried. A tunnel holds an app connection the same way while no replica is reachable, until
+  the app closes it or the tunnel stops.
 - **Release trust**: what the client verifies enclaves against, a `seal::Trust`
   (`seal_verify::Trust`; its JSON is `trust.json`'s, as in `deploy/example/trust.json`).
   Default: the trust compiled into the SDK build: `crates/sdk/seal-client/release-trust.json`,
@@ -649,7 +651,7 @@ are already in the Mozilla set. Any other CA needs a custom image.
 | `seal-adapter` | Upstream protocols only. Read-only `Session` trait (the private runtime session decides when it ends and attributes `observe` and `complete`); `SessionResolver`, `Adapter`; `HttpPolicy`, `Scrubber`; `testing` doubles. |
 | `seal-integrity` | App Integrity plug-ins in the enclave: `Observation`, `Verdict`, `Finding`, `Detector`, `EvidenceCheck` (report + evidence bytes + the tenant's registered provider key + the request's evidence challenge in, `Finding` out). |
 | `seal-enclave` | Ports (including `Telemetry`), `Components`, `ServiceConfig`, `SealService` (above), `HOSTED_IDLE_SECS`. |
-| `seal-client` | `Client`, `ClientBuilder`, `built_in_trust`, `SealBuilder`, `SessionBuilder`, `HttpSession`, `DatabaseSession`, `Session`, `WAKE_WAIT_SECS`, `integrity::EndpointReporter`, `admin` (above). |
+| `seal-client` | `Client`, `ClientBuilder`, `built_in_trust`, `SealBuilder`, `SessionBuilder`, `HttpSession`, `DatabaseSession`, `Session`, `UNREACHABLE_WAIT_SECS`, `integrity::EndpointReporter`, `admin` (above). |
 | `seal-control` | Untrusted document store (bin) and `client::ControlClient`, one method per endpoint named after its HTTP verb, for the enclave, admin tools and `seal deploy`, carrying one `client::Credential` (an admin key: `SigningKeyCredential`; the enclave's own lives in `seal-enclave`). Read rules and proposals below; enclave-signed documents verify against the telemetry keys of guardian-certified `ServiceKeyCertificate`s, which enclaves post at boot. |
 | `seal-cli`, `seal-py`, `seal-node`, `seal-ffi` (+ Go `seal-go`), `seal-verify-wasm` | `seal` binary, Python, Node (npm `@sealzone/sdk`) and Go (`seal.zone/go`, through the C ABI `seal-ffi`) bindings over `seal-client`, the browser verifier (npm `@sealzone/verify`: `seal-verify` over JSON); no shared types of their own. |
 
@@ -872,11 +874,11 @@ or Nonce trait is introduced.
 - **Postgres cancels** reach only the replica holding the connection; one sent to another
   replica does nothing. A tunnel sends its connections to the replica that last answered, so
   a cancel lands there unless that replica stopped answering in between.
-- **Anyone can wake** a tenant's hosted replicas: it costs Seal a container group start and
-  nothing else, is rate limited, and keeps nothing running, since unauthenticated requests do
-  not count as activity. The first request after a quiet period waits for the group to start
-  (about a minute, up to
-  `WAKE_WAIT_SECS`).
+- **Anyone can start** a tenant's stopped hosted replica by connecting to
+  `<tenant>.enclave.seal.zone`: it costs Seal a replica start and nothing else, is rate
+  limited, and keeps nothing running, since unauthenticated requests do not count as activity.
+  The first request after a quiet period waits for the replica to start (about a minute,
+  within `UNREACHABLE_WAIT_SECS`).
 - **Attested boot reads do not check the deployment identity.** Any released enclave build
   pinned to a tenant reads that tenant's bundle: the pin is unattested, but such an enclave
   holds the grants in memory nobody can inspect, finds its identity unlisted and stops.

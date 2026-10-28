@@ -1,5 +1,5 @@
-// The in-test enclave the integration tests share, `include!`d by each (`fake_enclave.rs`,
-// `wake.rs`): real sim evidence binding a real `TlsKey` chain and service keys, a release from
+// The in-test enclave the integration tests share, `include!`d by each (`fake_enclave.rs`):
+// real sim evidence binding a real `TlsKey` chain and service keys, a release from
 // the `dev` log, a guardian certificate from a test platform master key, and canned answers on
 // every enclave route. The enclave side checks every proof the SDK sends (ticket, TLS key,
 // purpose, app-key signature) and opens sealed uploads with the ingest key.
@@ -418,11 +418,20 @@ fn json<T: serde::Serialize>(value: &T) -> Result<Vec<u8>, ApiError> {
 }
 
 /// The enclave's one port: tunnels (ALPN `seal_proto::tunnel::ALPN`) to `tunnel`, the rest to
-/// the API.
+/// the API. Its connections live in this task: aborting it closes them, as a replica stopping
+/// does.
 async fn serve(enclave: Arc<Enclave>, listener: TcpListener, tls: Arc<rustls::ServerConfig>) {
-    while let Ok((tcp, _)) = listener.accept().await {
+    let mut connections = tokio::task::JoinSet::new();
+    loop {
+        let tcp = tokio::select! {
+            accepted = listener.accept() => match accepted {
+                Ok((tcp, _)) => tcp,
+                Err(_) => return,
+            },
+            Some(_) = connections.join_next(), if !connections.is_empty() => continue,
+        };
         let (enclave, tls) = (enclave.clone(), tls.clone());
-        tokio::spawn(async move {
+        connections.spawn(async move {
             let acceptor = tokio_rustls::LazyConfigAcceptor::new(rustls::server::Acceptor::default(), tcp);
             let Ok(start) = acceptor.await else { return };
             let is_tunnel = start.client_hello().alpn().is_some_and(|mut a| a.any(|p| p == ALPN));

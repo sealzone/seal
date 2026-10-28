@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import signal
+from pathlib import Path
+
 import pytest
 
 import seal
@@ -31,14 +34,29 @@ def test_bad_configuration_fails_before_connecting() -> None:
         seal.AppKeyIdentity("sealak_short")
 
 
-def test_unreachable_enclave_is_unavailable() -> None:
-    with pytest.raises((seal.Unavailable, seal.VerificationFailed)) as raised:
-        seal.Client(
-            endpoints=["https://127.0.0.1:1"],
-            tenant="acme",
-            identity=seal.AppKeyIdentity("sealak_" + "A" * 43),
-        )
-    assert raised.value.code in (seal.ErrorCode.Unavailable, seal.ErrorCode.VerificationFailed)
+class Interrupted(Exception):
+    pass
+
+
+def test_an_unreachable_enclave_is_retried_until_interrupted() -> None:
+    # Nothing listens: the SDK keeps retrying (for up to 120 s) instead of failing at once, and a
+    # signal handler that raises cancels the wait.
+    def interrupt(signum: int, frame: object) -> None:
+        raise Interrupted()
+
+    previous = signal.signal(signal.SIGALRM, interrupt)
+    signal.setitimer(signal.ITIMER_REAL, 3)
+    try:
+        with pytest.raises(Interrupted):
+            seal.Client(
+                endpoints=["https://127.0.0.1:1"],
+                tenant="acme",
+                identity=seal.AppKeyIdentity("sealak_" + "A" * 43),
+                trust=Path(__file__).parents[4] / "deploy/example/trust.json",
+            )
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
 
 
 def test_endpoint_report() -> None:

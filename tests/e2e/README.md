@@ -62,7 +62,7 @@ admin changes show up within a second or two.
 | | `test_the_pending_window_delays_widening_changes` | widening changes wait for the window; a superseded one never applies |
 | | `test_removing_the_app_ends_its_sessions` | removing a grant ends live sessions |
 | `test_telemetry.py` | `test_telemetry_is_complete_and_matches_kept_receipts` | every event is in signed telemetry; a withheld entry is reported |
-| `test_hosted.py` | `test_a_hosted_replica_serves_idles_out_and_wakes` | Seal's hosted replica: seals and serves sessions, exits when idle, woken by the SDK |
+| `test_hosted.py` | `test_a_hosted_replica_serves_idles_out_and_clients_wait_for_it` | Seal's hosted replica: seals and serves sessions, exits when idle; a client keeps retrying until it is back |
 | `test_release.py` | `test_a_replica_boots_after_the_uploaded_release_evidence_goes_stale` | replicas boot on stale release evidence via the log's latest checkpoint |
 | `test_node_sdk.py` | `test_an_api_key_is_used_from_node_without_holding_it` | the Node SDK: a tunnel session, extend, close, typed errors |
 | | `test_a_producer_seals_from_node` | sealing from Node with a receipt; the Python SDK uses that blob |

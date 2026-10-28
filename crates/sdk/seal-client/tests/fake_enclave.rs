@@ -101,8 +101,70 @@ async fn fails_over_to_a_replica_that_answers() {
     let client =
         f.builder().endpoints([format!("https://{dead}").parse().unwrap(), f.endpoint()]).connect().await.unwrap();
     client.signal("edr-alert", Severity::High).await.unwrap();
-    let err = f.builder().endpoints([format!("https://{dead}").parse().unwrap()]).connect().await.err().unwrap();
-    assert!(matches!(err, ClientError::Network(_)), "{err}");
+    // With no replica reachable, connecting keeps trying (`UNREACHABLE_WAIT_SECS`).
+    let only_dead = f.builder().endpoints([format!("https://{dead}").parse().unwrap()]).connect();
+    assert!(tokio::time::timeout(Duration::from_secs(3), only_dead).await.is_err(), "still retrying");
+}
+
+/// An address nothing listens on, for a replica started later.
+async fn free_addr() -> SocketAddr {
+    TcpListener::bind("127.0.0.1:0").await.unwrap().local_addr().unwrap()
+}
+
+/// Serves the in-test enclave at `addr` after `delay`, until the handle is aborted.
+fn replica_at(enclave: Arc<Enclave>, addr: SocketAddr, delay: Duration) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        tokio::time::sleep(delay).await;
+        let listener = TcpListener::bind(addr).await.unwrap();
+        let tls = tls_config(&enclave.keys);
+        serve(enclave, listener, tls).await
+    })
+}
+
+/// Stops a replica: its listener and every connection close.
+async fn stop(replica: tokio::task::JoinHandle<()>) {
+    replica.abort();
+    let _ = replica.await;
+}
+
+#[tokio::test]
+async fn waits_for_a_replica_that_is_not_up_yet() {
+    let f = Fixture::new().await;
+    let addr = free_addr().await;
+    // Nothing listens until a second after the client starts connecting, as with a replica
+    // restarting or a hosted one cold-starting.
+    let replica = replica_at(f.enclave.clone(), addr, Duration::from_secs(1));
+    let client = f.builder().endpoints([format!("https://{addr}").parse().unwrap()]).connect().await.unwrap();
+    // It stops and comes back: a call in between waits for it.
+    stop(replica).await;
+    let replica = replica_at(f.enclave.clone(), addr, Duration::from_secs(1));
+    client.signal("edr-alert", Severity::Low).await.unwrap();
+    assert_eq!(f.seen(|s| s.signals.clone()), [("edr-alert".to_string(), Severity::Low)]);
+    stop(replica).await;
+}
+
+#[tokio::test]
+async fn the_tunnel_holds_connections_while_its_replica_restarts() {
+    let f = Fixture::new().await;
+    let addr = free_addr().await;
+    let replica = replica_at(f.enclave.clone(), addr, Duration::ZERO);
+    let endpoint: url::Url = format!("https://{addr}").parse().unwrap();
+    let client = f.builder().endpoints([endpoint]).connect().await.unwrap();
+    let s = client.session(&f.blob("https://api.example.com/v1")).http().await.unwrap();
+    let tunnel = tunnel_addr(s.url());
+    let mut conn = TcpStream::connect(tunnel).await.unwrap();
+    assert_eq!(http(&mut conn, "/", s.key()).await.0, "HTTP/1.1 200 OK");
+    eventually("a spare", || f.seen(|s| s.tunnel_handshakes == 2)).await;
+
+    // The replica stops, closing the spare, and is back a second later: an app connection
+    // made meanwhile is held until it answers.
+    stop(replica).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let replica = replica_at(f.enclave.clone(), addr, Duration::from_secs(1));
+    let mut conn = TcpStream::connect(tunnel).await.unwrap();
+    assert_eq!(http(&mut conn, "/", s.key()).await.0, "HTTP/1.1 200 OK");
+    s.close().await.unwrap();
+    stop(replica).await;
 }
 
 #[tokio::test]

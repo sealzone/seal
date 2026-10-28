@@ -242,8 +242,11 @@ seal-run, shared by all customers
 - **Seal-hosted replicas stop when idle.** The enclave binary exits on SIGTERM, and on a
   hosted replica (one whose deployment entry has a `HostedMode`) also after
   `HOSTED_IDLE_SECS` without authenticated work; with `restartPolicy: Never` its ACI
-  container group stops, and the SDK wakes it: a client listing a `<tenant>.enclave.seal.zone`
-  endpoint asks `https://console.seal.zone/api/v1/wake` when none answers (nothing to configure). What it serves, and
+  container group stops. `<tenant>.enclave.seal.zone` points at Seal's front door, a TCP
+  front that reads only the TLS SNI, starts the stopped replica on a connection, holds the
+  connection until the replica serves and splices it through (TLS stays end to end, pinned to
+  the attested key). The SDK knows nothing of hosting: any client that reaches no replica
+  retries for up to `UNREACHABLE_WAIT_SECS` (120 s). What a hosted replica serves, and
   whether it idles, come only from the tenant's signed entry.
 - **Every enclave connection is TLS except Roughtime's signed datagrams** (UDP, Azure and GCP). The guardian sits
   behind an ordinary, untrusted TLS-terminating proxy: a `KeyRequest` carries the tenant's

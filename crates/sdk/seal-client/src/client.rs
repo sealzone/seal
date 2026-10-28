@@ -16,9 +16,9 @@ use seal_proto::{ErrorCode, KeyId, PlatformId, SecretVec, TenantPin};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
+use crate::retry::{self, Pass};
 use crate::transport::{self, ConnectError};
 use crate::verify::{self, Expected, VerifiedEnclave};
-use crate::wake::{self, Pass, Waker};
 use crate::{BoxFuture, ClientError, IdentityProvider, SessionBuilder, TenantId, TenantRootId, UnixTime};
 
 /// A verified connection to the tenant's enclaves, acting as one workload identity.
@@ -43,8 +43,6 @@ struct Inner {
     current: AtomicUsize,
     /// The last proof ticket, with the TLS key of the enclave that issued it.
     ticket: Mutex<Option<([u8; 32], ProofTicket)>>,
-    /// Starts the tenant's Seal-hosted replicas when none answers (`wake::url_for`).
-    waker: Option<Waker>,
 }
 
 /// The local clock, seconds since the Unix epoch.
@@ -155,9 +153,9 @@ impl Client {
     }
 
     /// The verified enclave, re-verified when its last check is `ATTESTATION_REFRESH_SECS`
-    /// old. If no replica answers, the last one is used while its attestation is within
-    /// `ATTESTATION_MAX_AGE_SECS`, and after that the wake URL, if any, is asked to start the
-    /// tenant's hosted replicas; a replica that answers but fails verification is an error.
+    /// old. If no replica is reachable, the last one is used while its attestation is within
+    /// `ATTESTATION_MAX_AGE_SECS`, and after that the endpoints are retried for up to
+    /// `UNREACHABLE_WAIT_SECS`; a replica that answers but fails verification is an error.
     pub async fn enclave(&self) -> Result<Arc<VerifiedEnclave>, ClientError> {
         let cached = || self.inner.enclave.read().unwrap_or_else(|e| e.into_inner()).clone();
         let now = now();
@@ -179,7 +177,7 @@ impl Client {
                 return Ok(enclave);
             }
             Err(missed @ ClientError::Network(_)) => {
-                wake::retry_after_wake(inner.waker.as_ref(), missed, || async { pass(verify().await) }).await
+                retry::while_unreachable(missed, || async { pass(verify().await) }).await
             }
             verified => verified,
         };
@@ -265,7 +263,7 @@ impl Client {
     }
 
     /// One POST over TLS pinned to `enclave`'s key. Fails over to the next endpoint when
-    /// nothing was sent; when no endpoint is reachable, asks the wake URL to start the tenant's hosted replicas.
+    /// nothing was sent; when no endpoint is reachable, retries for up to `UNREACHABLE_WAIT_SECS`.
     async fn call_raw(
         &self,
         enclave: &Arc<VerifiedEnclave>,
@@ -275,8 +273,7 @@ impl Client {
         match self.call_once(enclave, path, &body).await {
             Pass::Answered(result) => result,
             Pass::Unreachable(missed) => {
-                let retry = || self.call_once(enclave, path, &body);
-                wake::retry_after_wake(self.inner.waker.as_ref(), missed, retry).await
+                retry::while_unreachable(missed, || self.call_once(enclave, path, &body)).await
             }
         }
     }
@@ -408,8 +405,7 @@ impl ClientBuilder {
         self
     }
     /// Verifies the enclave (see the crate docs) and caches the result for its attestation
-    /// lifetime. When no endpoint answers and some are Seal-hosted, Seal is asked to start
-    /// them first (`wake`).
+    /// lifetime. When no endpoint is reachable, retries for up to `UNREACHABLE_WAIT_SECS`.
     pub async fn connect(self) -> Result<Client, ClientError> {
         let endpoints = match self.endpoints.is_empty() {
             false => self.endpoints,
@@ -428,15 +424,11 @@ impl ClientBuilder {
             Some(i) => i,
             None => crate::identity::detect_identity(&tenant).await?,
         };
-        let waker = match wake::url_for(&endpoints)? {
-            Some(url) => Some(Waker::new(url, tenant.clone())?),
-            None => None,
-        };
         let expected = Expected { tenant, root_id };
         let verify = || verify_any(&endpoints, 0, &trust, &expected);
         let (enclave, index) = match verify().await {
             Err(missed @ ClientError::Network(_)) => {
-                wake::retry_after_wake(waker.as_ref(), missed, || async { pass(verify().await) }).await?
+                retry::while_unreachable(missed, || async { pass(verify().await) }).await?
             }
             verified => verified?,
         };
@@ -451,7 +443,6 @@ impl ClientBuilder {
                 refresh: tokio::sync::Mutex::new(()),
                 current: AtomicUsize::new(index),
                 ticket: Mutex::new(None),
-                waker,
             }),
         })
     }
