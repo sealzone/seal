@@ -1,0 +1,18 @@
+name: release trust
+description: >-
+  Checks the production release trust every SDK compiles in: crates/sdk/seal-client/release-trust.json
+  (seal-client's build.rs), committed and published with the sealzone crate. Fails when it is
+  missing, is not a trust.json, or holds the development keys of deploy/example/trust.json.
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        trust=crates/sdk/seal-client/release-trust.json
+        if [[ ! -f "$trust" ]]; then
+          echo "::error::$trust is missing: commit Seal's production trust.json there (see RELEASING.md)"; exit 1
+        fi
+        if grep -qf <(sed -n 's/.*"\([0-9a-f]\{64\}\)".*/\1/p' deploy/example/trust.json | sort -u) "$trust"; then
+          echo "::error::$trust holds keys of deploy/example/trust.json (the development trust)"; exit 1
+        fi
+        python3 -c 'import json,sys; t=json.load(open(sys.argv[1])); assert {"releases","tenants","guardians"} <= t.keys(), "not a trust.json"' "$trust"

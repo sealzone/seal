@@ -1,0 +1,55 @@
+[package]
+name = "sealzone"
+description = "Seal: use secrets without holding them. Seal a secret for named apps; apps use it through an attested enclave that injects it, never holding it."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["secrets", "tee", "attestation", "enclave", "confidential-computing"]
+categories = ["cryptography", "authentication", "api-bindings"]
+
+[lib]
+# Published as `sealzone`; code writes `use seal::Client`.
+name = "seal"
+
+[features]
+# INSECURE, for tests and local development only: never enable it in anything that handles real
+# secrets. With it the client accepts simulator attestation evidence, which is signed by
+# a public development key and proves nothing, and reads its trust from SEAL_TRUST.
+sim = ["seal-attest/sim", "seal-net/sim"]
+# AWS workload identity (presigned STS GetCallerIdentity). Off by default: a large tree.
+aws = ["dep:aws-sigv4", "dep:aws-config"]
+
+[dependencies]
+seal-control.workspace = true
+seal-proto.workspace = true
+seal-crypto.workspace = true
+seal-tlog.workspace = true
+seal-verify.workspace = true
+seal-net.workspace = true
+seal-attest.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+url.workspace = true
+rustls.workspace = true
+tokio-rustls.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+http-body-util.workspace = true
+sha2.workspace = true
+hex.workspace = true
+zeroize.workspace = true
+x509-cert.workspace = true
+der.workspace = true
+aws-sigv4 = { workspace = true, optional = true }
+aws-config = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile = "3"
+seal-tlog = { workspace = true, features = ["dev"] }

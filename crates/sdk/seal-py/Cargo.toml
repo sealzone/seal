@@ -1,0 +1,28 @@
+[package]
+name = "seal-py"
+description = "Python bindings: `import seal`."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "_seal"
+crate-type = ["cdylib", "rlib"]
+
+[features]
+sim = ["seal-client/sim"]
+# AWS workload identity (`seal.AwsIdentity`, and AWS in detection). A large tree.
+aws = ["seal-client/aws"]
+
+[dependencies]
+seal-proto.workspace = true
+seal-client.workspace = true
+tokio.workspace = true
+pyo3.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+url.workspace = true
+hex.workspace = true
+zeroize.workspace = true

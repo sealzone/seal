@@ -1,0 +1,27 @@
+[package]
+name = "seal-adapter-redis"
+description = "Redis (RESP2/3): AUTH/HELLO interception, upstream TLS AUTH, blocks re-AUTH and ACL changes"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+# Runs inside Seal's own images; never published.
+publish = false
+
+[dependencies]
+seal-proto.workspace = true
+seal-adapter.workspace = true
+async-trait.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+bytes.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+seal-adapter = { workspace = true, features = ["testing"] }
+proptest.workspace = true
+# Docker tests: a test CA trusted through the sim build's extra roots.
+seal-net = { workspace = true, features = ["sim"] }
+p256.workspace = true
+sha2.workspace = true
+x509-cert.workspace = true

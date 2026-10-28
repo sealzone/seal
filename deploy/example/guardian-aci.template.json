@@ -1,0 +1,60 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "name": {"type": "string", "defaultValue": "seal-guardian-azure"},
+    "location": {"type": "string", "defaultValue": "eastus"},
+    "image": {"type": "string", "defaultValue": "sealexample.azurecr.io/guardian-azure@sha256:0000000000000000000000000000000000000000000000000000000000000000", "metadata": {"description": "The guardian image by digest: set before seal-release aci-policy --component guardian"}},
+    "ceremony": {"type": "string", "defaultValue": "0", "metadata": {"description": "SEAL_GUARDIAN_CEREMONY: 1 runs the root ceremony"}},
+    "wrappedRoots": {"type": "string", "defaultValue": "", "metadata": {"description": "SEAL_GUARDIAN_WRAPPED_ROOTS: what the ceremony printed, comma-joined"}},
+    "succeedFrom": {"type": "string", "defaultValue": "", "metadata": {"description": "SEAL_GUARDIAN_SUCCEED_FROM: the https:// origin of the guardian this one succeeds, for a succession"}},
+    "releases": {"type": "string", "defaultValue": "", "metadata": {"description": "SEAL_GUARDIAN_RELEASES: the https:// origin of the control plane, for a succession"}},
+    "restartPolicy": {"type": "string", "defaultValue": "Always", "metadata": {"description": "Never for the ceremony or a succession, which exit"}},
+    "identity": {"type": "string", "defaultValue": "", "metadata": {"description": "Resource id of the group's user-assigned managed identity (the release role on the root keys)"}},
+    "registryServer": {"type": "string", "defaultValue": "sealexample.azurecr.io"},
+    "registryUser": {"type": "string", "defaultValue": "sealexample"},
+    "registryPassword": {"type": "securestring", "defaultValue": ""}
+  },
+  "resources": [
+    {
+      "type": "Microsoft.ContainerInstance/containerGroups",
+      "apiVersion": "2023-05-01",
+      "name": "[parameters('name')]",
+      "location": "[parameters('location')]",
+      "identity": {
+        "type": "UserAssigned",
+        "userAssignedIdentities": {"[parameters('identity')]": {}}
+      },
+      "properties": {
+        "sku": "Confidential",
+        "confidentialComputeProperties": {"ccePolicy": ""},
+        "osType": "Linux",
+        "restartPolicy": "[parameters('restartPolicy')]",
+        "imageRegistryCredentials": [
+          {"server": "[parameters('registryServer')]", "username": "[parameters('registryUser')]", "password": "[parameters('registryPassword')]"}
+        ],
+        "ipAddress": {
+          "type": "Public",
+          "dnsNameLabel": "[parameters('name')]",
+          "ports": [{"protocol": "TCP", "port": 7400}]
+        },
+        "containers": [
+          {
+            "name": "seal-guardian",
+            "properties": {
+              "image": "[parameters('image')]",
+              "environmentVariables": [
+                {"name": "SEAL_GUARDIAN_CEREMONY", "value": "[parameters('ceremony')]"},
+                {"name": "SEAL_GUARDIAN_WRAPPED_ROOTS", "value": "[parameters('wrappedRoots')]"},
+                {"name": "SEAL_GUARDIAN_SUCCEED_FROM", "value": "[parameters('succeedFrom')]"},
+                {"name": "SEAL_GUARDIAN_RELEASES", "value": "[parameters('releases')]"}
+              ],
+              "ports": [{"protocol": "TCP", "port": 7400}],
+              "resources": {"requests": {"cpu": 1, "memoryInGB": 1}}
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

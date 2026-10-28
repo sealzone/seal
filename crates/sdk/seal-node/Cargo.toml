@@ -1,0 +1,33 @@
+[package]
+name = "seal-node"
+description = "Node.js bindings: the npm package `@sealzone/sdk`."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+# Published to npm (`build.sh`, one prebuilt package per platform), not crates.io.
+publish = false
+
+[lib]
+name = "seal_node"
+crate-type = ["cdylib"]
+
+[features]
+sim = ["seal-client/sim"]
+# AWS workload identity (`AwsIdentity`, and AWS in detection). A large tree.
+aws = ["seal-client/aws"]
+
+[dependencies]
+seal-proto.workspace = true
+seal-client.workspace = true
+tokio.workspace = true
+napi.workspace = true
+napi-derive.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+url.workspace = true
+hex.workspace = true
+zeroize.workspace = true
+
+[build-dependencies]
+napi-build.workspace = true

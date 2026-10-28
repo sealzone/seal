@@ -1,0 +1,52 @@
+{
+  "platform": "azure_snp_aci",
+  "runs_on": "azure_snp_aci",
+  "key_vault": {
+    "maa_endpoint": "https://sharedeus.eus.attest.azure.net",
+    "keys": [
+      {
+        "vault_url": "https://sealexample.vault.azure.net",
+        "key_name": "seal-guardian-root"
+      }
+    ]
+  },
+  "trust": {
+    "guardians": {},
+    "releases": {
+      "release_keys": [
+        "f887cd8f32fe03668ee9604d708754799b66a8d5c80f85aea785c6c5e96fdb33",
+        "4aa19827e0966856c96e057e7b03474a449ce1f837ddc6f5a1faace80df66f18",
+        "ad415fde8fd526d94657afd2d244cc2f4a84824034a448bf04b7d5ae089cbc88"
+      ],
+      "release_threshold": 2,
+      "required_auditor": null,
+      "time_lock_secs": 60,
+      "tlog": {
+        "log_key": "6420d8d733a9729b04bc5fb1f256fa83d45ee8886898aa767a4fc552dff772e1",
+        "origin": "dev.log.seal.zone/v1",
+        "witness_keys": [
+          "c2b63bdb3e439c8e3fb78004a8458ef84fd4365ff9049358e1d34f39eae492ba",
+          "8f620069e7726271e388093f2eda550e4468275931f9997d9e3dbbd4e7f30fbe",
+          "0ff12aa481c5dc6149b2ca43e71fbf547d43e35b970ec25bf412e9f2e1e6dffc"
+        ],
+        "witness_quorum": 2
+      }
+    },
+    "tenants": {
+      "registrar_keys": [
+        "46ae68797ee945d2d28d3c2db006a291e5571a336c763df24438ebe0a453285f"
+      ],
+      "registrar_threshold": 1,
+      "tlog": {
+        "log_key": "6420d8d733a9729b04bc5fb1f256fa83d45ee8886898aa767a4fc552dff772e1",
+        "origin": "dev.log.seal.zone/v1",
+        "witness_keys": [
+          "c2b63bdb3e439c8e3fb78004a8458ef84fd4365ff9049358e1d34f39eae492ba",
+          "8f620069e7726271e388093f2eda550e4468275931f9997d9e3dbbd4e7f30fbe",
+          "0ff12aa481c5dc6149b2ca43e71fbf547d43e35b970ec25bf412e9f2e1e6dffc"
+        ],
+        "witness_quorum": 2
+      }
+    }
+  }
+}

@@ -1,0 +1,57 @@
+[package]
+name = "seal-enclave"
+description = "The Seal app enclave: composition root. Boots from the guardian, serves the enclave API and the data-plane tunnels on one port."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+# Runs inside Seal's own images; never published.
+publish = false
+
+[features]
+sim = ["seal-cloud/sim", "seal-net/sim", "seal-guardian/sim", "seal-tee/sim"]
+
+[dependencies]
+seal-control.workspace = true
+seal-proto.workspace = true
+seal-crypto.workspace = true
+seal-tlog.workspace = true
+seal-verify.workspace = true
+seal-net.workspace = true
+seal-guardian.workspace = true
+seal-cloud.workspace = true
+# The key provider's attestor (`ports::guardian`); the sim cloud's attestor and clock in tests.
+seal-tee.workspace = true
+seal-attest.workspace = true
+seal-authz.workspace = true
+seal-integrity.workspace = true
+seal-adapter.workspace = true
+seal-adapter-http.workspace = true
+seal-adapter-pg.workspace = true
+seal-adapter-redis.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+axum.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+# Inbound TLS with the enclave's derived key.
+rustls.workspace = true
+tokio-rustls.workspace = true
+# SHA-256 of tunnel local keys.
+sha2.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+# The dev log produces real release evidence and tenant bundles for the fixtures.
+seal-tlog = { workspace = true, features = ["dev"] }
+# `TestUpstream`: a plain local upstream for the HTTP adapter.
+seal-adapter = { workspace = true, features = ["testing"] }
+http-body-util.workspace = true
+bytes.workspace = true
+# Extra roots: the test TLS proxy's CA.
+seal-net = { workspace = true, features = ["sim"] }
+tokio = { workspace = true, features = ["test-util"] }
+base64.workspace = true

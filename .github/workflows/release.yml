@@ -1,0 +1,233 @@
+# Publishes the SDKs for a version tag (vX.Y.Z): the Rust crates to crates.io, `sealzone` wheels
+# to PyPI, `@sealzone/sdk` and its per-platform addons to npm, and the Go module `seal.zone/go`
+# with its prebuilt static libraries to github.com/sealzone/seal-go. Every build compiles in
+# the production release trust, crates/sdk/seal-client/release-trust.json. Enclave and
+# guardian images are released separately (seal-release, M-of-N signing).
+# See RELEASING.md for the secrets and variables this needs.
+name: release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Build everything, publish nothing
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  PUBLISH: ${{ github.event_name == 'push' || !inputs.dry_run }}
+
+jobs:
+  check:
+    name: tests and version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: version
+        name: The tag matches the packages' version
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          node_version=$(node -p 'require("./crates/sdk/seal-node/package.json").version')
+          if [[ "$GITHUB_REF_TYPE" == tag && "${GITHUB_REF_NAME#v}" != "$version" ]]; then
+            echo "tag $GITHUB_REF_NAME is not the workspace version $version"; exit 1
+          fi
+          [[ "$node_version" == "$version" ]] || { echo "package.json is $node_version, Cargo.toml $version"; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - uses: ./.github/actions/release-trust
+      - name: The crates package and build as crates.io will see them
+        run: cargo publish --workspace --dry-run --locked
+      - name: Their docs build cleanly, as docs.rs will
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: |
+          cargo doc --no-deps --locked -p sealzone -p sealzone-proto -p sealzone-crypto -p sealzone-tlog \
+            -p sealzone-verify -p sealzone-net -p sealzone-attest -p sealzone-control
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.24" }
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - run: cargo test --workspace --locked
+      - name: End-to-end tests (simulator, Docker)
+        run: scripts/e2e.sh -q
+
+  python:
+    name: wheel ${{ matrix.target }}
+    needs: check
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - { runner: ubuntu-latest, target: x86_64, manylinux: "2_28" }
+          - { runner: ubuntu-24.04-arm, target: aarch64, manylinux: "2_28" }
+          - { runner: ubuntu-latest, target: x86_64, manylinux: musllinux_1_2 }
+          - { runner: ubuntu-24.04-arm, target: aarch64, manylinux: musllinux_1_2 }
+          - { runner: macos-13, target: x86_64 }
+          - { runner: macos-14, target: aarch64 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: PyO3/maturin-action@v1
+        with:
+          working-directory: crates/sdk/seal-py
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux || 'auto' }}
+          args: --release --locked --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.manylinux || 'native' }}
+          path: crates/sdk/seal-py/dist/*.whl
+
+  node:
+    name: addon ${{ matrix.platform }}
+    needs: check
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - { runner: ubuntu-latest, platform: linux-x64-gnu }
+          - { runner: ubuntu-24.04-arm, platform: linux-arm64-gnu }
+          - { runner: ubuntu-latest, platform: linux-x64-musl, musl: true }
+          - { runner: ubuntu-24.04-arm, platform: linux-arm64-musl, musl: true }
+          - { runner: macos-13, platform: darwin-x64 }
+          - { runner: macos-14, platform: darwin-arm64 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - if: "!matrix.musl"
+        run: crates/sdk/seal-node/build.sh --release --test
+      # musl in an Alpine container (actions cannot run inside Alpine on arm64 runners, so the
+      # build runs through docker); the addon must link the C runtime dynamically.
+      - if: matrix.musl
+        run: |
+          docker run --rm -v "$PWD:/w" -w /w -e RUSTFLAGS="-C target-feature=-crt-static" \
+            rust:alpine sh -c 'apk add --no-cache bash musl-dev nodejs npm >/dev/null && crates/sdk/seal-node/build.sh --release --test'
+      - name: The addon is the expected platform's
+        shell: bash
+        run: |
+          test -f "crates/sdk/seal-node/seal.${{ matrix.platform }}.node" || { ls crates/sdk/seal-node; exit 1; }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: addon-${{ matrix.platform }}
+          path: crates/sdk/seal-node/seal.${{ matrix.platform }}.node
+
+  go:
+    name: static lib ${{ matrix.goos }}_${{ matrix.goarch }}
+    needs: check
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - { runner: ubuntu-latest, goos: linux, goarch: amd64 }
+          - { runner: ubuntu-24.04-arm, goos: linux, goarch: arm64 }
+          - { runner: macos-13, goos: darwin, goarch: amd64 }
+          - { runner: macos-14, goos: darwin, goarch: arm64 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.24" }
+      - name: Build, then test the module against it
+        run: |
+          crates/sdk/seal-go/build.sh
+          cd crates/sdk/seal-go && go vet ./... && go test ./...
+      - uses: actions/upload-artifact@v4
+        with:
+          name: golib-${{ matrix.goos }}_${{ matrix.goarch }}
+          path: crates/sdk/seal-go/lib/
+
+  publish-crates:
+    needs: check
+    runs-on: ubuntu-latest
+    environment: crates-io
+    permissions:
+      id-token: write # crates.io trusted publishing
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/release-trust
+      - if: env.PUBLISH == 'true'
+        id: auth
+        uses: rust-lang/crates-io-auth-action@v1
+      # In dependency order; crates already published at this version are an error.
+      - if: env.PUBLISH == 'true'
+        run: cargo publish --workspace --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+
+  publish-pypi:
+    needs: [check, python]
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write # PyPI trusted publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { pattern: "wheel-*", path: dist, merge-multiple: true }
+      - run: ls -l dist
+      - if: env.PUBLISH == 'true'
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+  publish-npm:
+    needs: [check, node]
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      id-token: write # npm provenance
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22", registry-url: "https://registry.npmjs.org" }
+      - uses: actions/download-artifact@v4
+        with: { pattern: "addon-*", path: addons, merge-multiple: true }
+      - name: Lay out the packages
+        run: node crates/sdk/seal-node/npm-packages.mjs addons npm "${{ needs.check.outputs.version }}"
+      - name: Publish the platform packages, then @sealzone/sdk
+        if: env.PUBLISH == 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          for dir in npm/*/; do
+            [[ "$dir" == npm/sdk/ ]] && continue
+            npm publish --access public --provenance "$dir"
+          done
+          npm publish --access public --provenance npm/sdk
+
+  publish-go:
+    needs: [check, go]
+    runs-on: ubuntu-latest
+    environment: go
+    steps:
+      - uses: actions/checkout@v4
+        with: { path: seal }
+      - uses: actions/checkout@v4
+        with:
+          repository: sealzone/seal-go
+          ssh-key: ${{ secrets.SEAL_GO_DEPLOY_KEY }}
+          path: seal-go
+      - uses: actions/download-artifact@v4
+        with: { pattern: "golib-*", path: lib, merge-multiple: true }
+      - name: The module and its libraries, as one commit
+        run: |
+          version="v${{ needs.check.outputs.version }}"
+          find seal-go -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp -R seal/crates/sdk/seal-go/. seal-go/
+          rm -f seal-go/.gitignore seal-go/build.sh
+          cp -R seal/LICENSE lib seal-go/
+          for platform in linux_amd64 linux_arm64 darwin_amd64 darwin_arm64; do
+            test -f "seal-go/lib/$platform/libseal_ffi.a" || { echo "no lib for $platform"; exit 1; }
+          done
+          cd seal-go
+          git config user.name "seal release"
+          git config user.email "release@seal.zone"
+          git add -A
+          git commit -m "seal.zone/go $version (from sealzone/seal@${GITHUB_SHA::12})"
+          git tag "$version"
+      - if: env.PUBLISH == 'true'
+        working-directory: seal-go
+        run: git push origin HEAD "v${{ needs.check.outputs.version }}"

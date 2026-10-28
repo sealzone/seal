@@ -1,0 +1,3 @@
+# The house style: wide lines, short constructs kept on one line. `cargo fmt --all --check` in CI.
+max_width = 120
+use_small_heuristics = "Max"

@@ -1,0 +1,32 @@
+[package]
+name = "seal-authz"
+description = "Who may do what inside the enclave: identity proofs, proof contexts, the tenant-state cache, and the seal/session/extend/signal decisions."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+# Runs inside Seal's own images; never published.
+publish = false
+
+[dependencies]
+seal-proto.workspace = true
+seal-crypto.workspace = true
+seal-verify.workspace = true
+seal-net.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+hex.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+seal-tlog = { workspace = true, features = ["dev"] }
+seal-net = { workspace = true, features = ["sim"] }
+p256.workspace = true
+rsa.workspace = true
+sha2.workspace = true
+x509-cert.workspace = true
+rustls.workspace = true
+tokio-rustls.workspace = true

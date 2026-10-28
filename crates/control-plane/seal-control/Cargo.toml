@@ -1,0 +1,54 @@
+[package]
+name = "sealzone-control"
+description = "Seal's control service: stores and serves signed documents. Untrusted by design: it cannot forge or roll back anything the enclave accepts."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+
+[lib]
+# Published as `sealzone-control`; code imports `seal_control`.
+name = "seal_control"
+
+[features]
+# Local runs: trust extra roots for the log and guardians, and reach them over plain HTTP on
+# loopback. Never in production builds.
+sim = ["seal-net/sim", "seal-attest/sim"]
+
+[dependencies]
+seal-proto.workspace = true
+seal-net.workspace = true
+url.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+axum.workspace = true
+hyper.workspace = true
+# Server only (the binary): verification of what it stores, inbound TLS, the write token.
+seal-crypto.workspace = true
+seal-tlog.workspace = true
+seal-verify.workspace = true
+# Server only: checks an enclave's attested boot reads.
+seal-attest.workspace = true
+# Server only: control tokens are raw Ed25519 over the bytes received, not a Seal signature.
+ed25519-dalek.workspace = true
+zeroize.workspace = true
+async-trait.workspace = true
+rustls.workspace = true
+tokio-rustls.workspace = true
+sha2.workspace = true
+subtle.workspace = true
+hyper-util.workspace = true
+http-body-util.workspace = true
+
+[dev-dependencies]
+seal-tlog = { workspace = true, features = ["dev"] }
+seal-net = { workspace = true, features = ["sim"] }
+base64.workspace = true
+
+[[bin]]
+name = "seal-control"
+path = "src/main.rs"

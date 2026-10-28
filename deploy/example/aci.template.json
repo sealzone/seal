@@ -1,0 +1,51 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "name": {"type": "string", "defaultValue": "seal-enclave"},
+    "location": {"type": "string", "defaultValue": "eastus"},
+    "tenantPin": {"type": "string", "defaultValue": "placeholder", "metadata": {"description": "SEAL_TENANT: <tenant>@<root id>"}},
+    "identity": {"type": "string", "defaultValue": "", "metadata": {"description": "Resource id of the group's user-assigned managed identity"}},
+    "registryServer": {"type": "string", "defaultValue": "sealexample.azurecr.io"},
+    "registryUser": {"type": "string", "defaultValue": "sealexample"},
+    "registryPassword": {"type": "securestring", "defaultValue": ""}
+  },
+  "resources": [
+    {
+      "type": "Microsoft.ContainerInstance/containerGroups",
+      "apiVersion": "2023-05-01",
+      "name": "[parameters('name')]",
+      "location": "[parameters('location')]",
+      "tags": {"seal": "1"},
+      "identity": {
+        "type": "UserAssigned",
+        "userAssignedIdentities": {"[parameters('identity')]": {}}
+      },
+      "properties": {
+        "sku": "Confidential",
+        "confidentialComputeProperties": {"ccePolicy": ""},
+        "osType": "Linux",
+        "restartPolicy": "Always",
+        "imageRegistryCredentials": [
+          {"server": "[parameters('registryServer')]", "username": "[parameters('registryUser')]", "password": "[parameters('registryPassword')]"}
+        ],
+        "ipAddress": {
+          "type": "Public",
+          "dnsNameLabel": "[parameters('name')]",
+          "ports": [{"protocol": "TCP", "port": 8443}]
+        },
+        "containers": [
+          {
+            "name": "seal-enclave",
+            "properties": {
+              "image": "sealexample.azurecr.io/enclave@sha256:6b872135476028dba6075a89086b47c87fbe74a3893e8a14b091e1b97cd1bffe",
+              "environmentVariables": [{"name": "SEAL_TENANT", "value": "[parameters('tenantPin')]"}],
+              "ports": [{"protocol": "TCP", "port": 8443}],
+              "resources": {"requests": {"cpu": 1, "memoryInGB": 2}}
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

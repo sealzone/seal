@@ -1,0 +1,8 @@
+[package]
+name = "seal-adapter-clickhouse"
+description = "ClickHouse native protocol (specified, not built): Hello password rewrite over TLS, then relay"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+# Runs inside Seal's own images; never published.
+publish = false

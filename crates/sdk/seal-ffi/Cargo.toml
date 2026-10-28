@@ -1,0 +1,26 @@
+[package]
+name = "seal-ffi"
+description = "A C ABI over the Rust SDK (`seal.h`), for the Go SDK (`seal.zone/go`)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "seal_ffi"
+# `staticlib` for cgo; `rlib` for the tests.
+crate-type = ["staticlib", "rlib"]
+
+[features]
+sim = ["seal-client/sim"]
+# AWS workload identity (`seal_identity_aws`). A large tree.
+aws = ["seal-client/aws"]
+
+[dependencies]
+seal-proto.workspace = true
+seal-client.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+url.workspace = true
+zeroize.workspace = true

@@ -1,0 +1,26 @@
+[package]
+name = "seal-adapter"
+description = "The contract between the enclave core and upstream protocol adapters: sessions, credential resolution, upstream connections."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+# Runs inside Seal's own images; never published.
+publish = false
+
+[features]
+# Test doubles (`testing`) for the adapter crates' and the enclave's tests: only ever enabled
+# through a dev-dependency, never in an image.
+testing = ["seal-net/testing"]
+
+[dependencies]
+seal-proto.workspace = true
+seal-net.workspace = true
+seal-integrity.workspace = true
+async-trait.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true

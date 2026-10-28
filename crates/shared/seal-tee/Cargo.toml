@@ -1,0 +1,35 @@
+[package]
+name = "seal-tee"
+description = "Being a TEE: evidence about this process (Azure SNP ACI, AWS Nitro, GCP Confidential Space, sim) and trusted time. Enclaves and guardians only, never the SDK."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+# Runs inside Seal's own images; never published.
+publish = false
+
+[features]
+# Simulator attestor and system clock. Never in production builds.
+sim = ["seal-attest/sim"]
+
+[dependencies]
+seal-proto.workspace = true
+seal-crypto.workspace = true
+seal-attest.workspace = true
+seal-net.workspace = true
+serde.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+serde_json.workspace = true
+sev.workspace = true
+ed25519-dalek.workspace = true
+rand.workspace = true
+# Azure: the security context files (base64).
+base64.workspace = true
+
+[dev-dependencies]
+async-trait.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
+proptest.workspace = true
+hex.workspace = true

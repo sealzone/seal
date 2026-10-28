@@ -1,0 +1,39 @@
+[package]
+name = "seal-registrar"
+description = "Seal's tenant registrar: signs and logs root version 1 of a new tenant, and nothing else."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+homepage.workspace = true
+# Runs only in Seal's own deployment; never published.
+publish = false
+
+[features]
+# Staging next to the dev log and control plane: reach them over plain HTTP on loopback, or
+# over TLS with a test CA (SEAL_REGISTRAR_EXTRA_ROOTS).
+# Never in production builds.
+sim = ["seal-net/sim", "dep:hyper", "dep:hyper-util", "dep:http-body-util"]
+
+[dependencies]
+seal-proto.workspace = true
+seal-crypto.workspace = true
+seal-net.workspace = true
+async-trait.workspace = true
+axum.workspace = true
+# Sim builds only: plain HTTP to the dev log and control plane on loopback.
+hyper = { workspace = true, optional = true }
+hyper-util = { workspace = true, optional = true }
+http-body-util = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true
+subtle.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+url.workspace = true
+hex.workspace = true
+
+[dev-dependencies]
+seal-tlog = { workspace = true, features = ["dev"] }
+seal-verify.workspace = true

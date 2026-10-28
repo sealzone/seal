@@ -1,0 +1,26 @@
+[package]
+name = "sealzone-verify"
+description = "Pure verification of releases and tenant bundles. One implementation shared by the guardian, enclave, SDK and CLI."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+
+[lib]
+# Published as `sealzone-verify`; code imports `seal_verify`.
+name = "seal_verify"
+
+[dependencies]
+seal-proto.workspace = true
+seal-crypto.workspace = true
+seal-tlog.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+# `Trust::from_json`.
+serde_json.workspace = true
+
+[dev-dependencies]
+seal-tlog = { workspace = true, features = ["dev"] }
+p256.workspace = true
+sha2.workspace = true

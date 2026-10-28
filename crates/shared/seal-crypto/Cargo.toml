@@ -1,0 +1,37 @@
+[package]
+name = "sealzone-crypto"
+description = "Pure Seal cryptography: key hierarchy, blob AEAD, HPKE, session tokens, signatures. No IO."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+
+[lib]
+# Published as `sealzone-crypto`; code imports `seal_crypto`.
+name = "seal_crypto"
+
+[dependencies]
+seal-proto.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+zeroize.workspace = true
+rand.workspace = true
+sha2.workspace = true
+serde_json.workspace = true
+hkdf.workspace = true
+aes-gcm.workspace = true
+ed25519-dalek.workspace = true
+x25519-dalek.workspace = true
+hpke.workspace = true
+hmac.workspace = true
+p256.workspace = true
+rsa.workspace = true
+x509-cert.workspace = true
+der.workspace = true
+spki.workspace = true
+
+[dev-dependencies]
+rustls.workspace = true
+proptest.workspace = true
+hex.workspace = true

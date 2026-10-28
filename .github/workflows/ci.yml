@@ -1,0 +1,51 @@
+# Checks every push and pull request: formatting (rustfmt.toml), clippy with warnings denied,
+# the workspace tests, and the supply-chain checks (scripts/check-deps.sh, docs/DEPS.md).
+# The toolchain is the one rust-toolchain.toml pins; rustup installs it on the first cargo call.
+# The end-to-end tests (scripts/e2e.sh) run in the release workflow's check job.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint:
+    name: fmt and clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo fmt --all --check
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  test:
+    name: tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      # Docker is on the runner, so the Postgres and Redis adapter tests run against real
+      # servers instead of skipping.
+      - run: cargo test --workspace --locked
+        env:
+          SEAL_REQUIRE_DOCKER: "1"
+
+  deps:
+    name: dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with: { tool: cargo-deny@0.20.2 }
+      - run: scripts/check-deps.sh

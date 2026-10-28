@@ -1,0 +1,32 @@
+[build-system]
+requires = ["maturin>=1.5,<2"]
+build-backend = "maturin"
+
+[project]
+# `pip install sealzone`, `import seal`.
+name = "sealzone"
+description = "Seal: use secrets without holding them."
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.9"
+dynamic = ["version"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Rust",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Typing :: Typed",
+]
+
+[project.urls]
+Homepage = "https://seal.zone"
+
+[tool.maturin]
+# One abi3 wheel per platform (pyo3 `abi3-py39`): CPython 3.9 and later.
+python-source = "python"
+module-name = "seal._seal"
+bindings = "pyo3"
+include = [{ path = "python/seal/py.typed", format = ["sdist", "wheel"] }]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

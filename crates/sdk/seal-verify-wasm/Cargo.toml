@@ -1,0 +1,31 @@
+[package]
+name = "sealzone-verify-wasm"
+description = "seal-verify in the browser: the web UI's verifier, built to WebAssembly and packaged for npm as @sealzone/verify."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+homepage.workspace = true
+# Published to npm (`build.sh`), not crates.io.
+publish = false
+
+[lib]
+name = "seal_verify_wasm"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+seal-proto.workspace = true
+seal-crypto.workspace = true
+seal-tlog.workspace = true
+seal-verify.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+# Only in the WebAssembly build, so no other build (and never a TEE image) sees them.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen.workspace = true
+getrandom = { workspace = true, features = ["wasm_js"] }
+
+[dev-dependencies]
+seal-tlog = { workspace = true, features = ["dev"] }
+p256.workspace = true
+sha2.workspace = true

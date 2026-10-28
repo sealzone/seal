@@ -1,0 +1,40 @@
+[package]
+name = "sealzone-net"
+description = "Outbound network with baked trust anchors. The only way to get a stream a secret may be sent on."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+
+[lib]
+# Published as `sealzone-net`; code imports `seal_net`.
+name = "seal_net"
+
+[features]
+# INSECURE, for tests and local development only: never enable it in anything that handles real
+# secrets. With it, TLS trusts extra roots given at run time (the simulator's test CA).
+sim = []
+# `UpstreamStream::from_test_stream` for adapter unit tests.
+testing = []
+
+[dependencies]
+seal-proto.workspace = true
+async-trait.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+rustls.workspace = true
+tokio-rustls.workspace = true
+webpki-roots.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+http-body-util.workspace = true
+# SPKI pin hashes.
+sha2.workspace = true
+# Reads the leaf's DNS SANs for the trailing-dot exception.
+x509-cert.workspace = true
+
+[dev-dependencies]
+# Test PKI: certificates built with x509-cert's builder, signed with P-256.
+p256.workspace = true

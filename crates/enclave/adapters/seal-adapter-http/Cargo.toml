@@ -1,0 +1,25 @@
+[package]
+name = "seal-adapter-http"
+description = "HTTP/1.1 and SSE: header injection per policy, path/method policy, response scrubbing"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+# Runs inside Seal's own images; never published.
+publish = false
+
+[dependencies]
+seal-proto.workspace = true
+seal-adapter.workspace = true
+async-trait.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+bytes.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+http-body-util.workspace = true
+serde_json.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+seal-adapter = { workspace = true, features = ["testing"] }

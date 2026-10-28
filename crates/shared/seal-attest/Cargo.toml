@@ -1,0 +1,38 @@
+[package]
+name = "sealzone-attest"
+description = "Checks TEE evidence (Azure SNP ACI, AWS Nitro, GCP Confidential Space, sim). Pure: used by the SDK, guardians and enclaves."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+
+[lib]
+# Published as `sealzone-attest`; code imports `seal_attest`.
+name = "seal_attest"
+
+[features]
+# INSECURE, for tests and local development only: never enable it in anything that handles real
+# secrets. With it, simulator evidence verifies; it is signed by a public development key
+# and proves nothing.
+sim = ["dep:ed25519-dalek"]
+
+[dependencies]
+seal-proto.workspace = true
+seal-crypto.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+ciborium.workspace = true
+base64.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+p384.workspace = true
+rsa.workspace = true
+x509-cert.workspace = true
+der.workspace = true
+spki.workspace = true
+coset.workspace = true
+ed25519-dalek = { workspace = true, optional = true }
+
+[dev-dependencies]
+hex.workspace = true

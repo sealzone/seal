@@ -1,0 +1,137 @@
+[workspace]
+resolver = "2"
+# Grouped by role; see docs/ARCHITECTURE.md "Layout".
+members = [
+    "crates/shared/*",
+    "crates/enclave/seal-*",
+    "crates/enclave/adapters/*",
+    "crates/guardian/*",
+    "crates/control-plane/*",
+    "crates/sdk/*",
+    "crates/sim/*",
+]
+# The Go SDK's module (`seal.zone/go`) over `seal-ffi`; not a crate.
+exclude = ["crates/sdk/seal-go"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.92"
+license = "Apache-2.0"
+homepage = "https://seal.zone"
+repository = "https://github.com/sealzone/seal"
+
+[workspace.dependencies]
+# internal
+seal-proto = { path = "crates/shared/seal-proto", version = "0.1.0", package = "sealzone-proto" }
+seal-crypto = { path = "crates/shared/seal-crypto", version = "0.1.0", package = "sealzone-crypto" }
+seal-attest = { path = "crates/shared/seal-attest", version = "0.1.0", package = "sealzone-attest" }
+seal-tee = { path = "crates/shared/seal-tee", version = "0.1.0" }
+seal-tlog = { path = "crates/shared/seal-tlog", version = "0.1.0", package = "sealzone-tlog" }
+seal-net = { path = "crates/shared/seal-net", version = "0.1.0", package = "sealzone-net" }
+seal-verify = { path = "crates/shared/seal-verify", version = "0.1.0", package = "sealzone-verify" }
+seal-authz = { path = "crates/enclave/seal-authz", version = "0.1.0" }
+seal-integrity = { path = "crates/enclave/seal-integrity", version = "0.1.0" }
+seal-cloud = { path = "crates/enclave/seal-cloud", version = "0.1.0" }
+seal-guardian = { path = "crates/guardian/seal-guardian", version = "0.1.0" }
+seal-control = { path = "crates/control-plane/seal-control", version = "0.1.0", package = "sealzone-control" }
+seal-adapter = { path = "crates/enclave/adapters/seal-adapter", version = "0.1.0" }
+seal-adapter-http = { path = "crates/enclave/adapters/seal-adapter-http", version = "0.1.0" }
+seal-adapter-pg = { path = "crates/enclave/adapters/seal-adapter-pg", version = "0.1.0" }
+seal-adapter-redis = { path = "crates/enclave/adapters/seal-adapter-redis", version = "0.1.0" }
+seal-adapter-clickhouse = { path = "crates/enclave/adapters/seal-adapter-clickhouse", version = "0.1.0" }
+seal-client = { path = "crates/sdk/seal-client", version = "0.1.0", package = "sealzone" }
+seal-sim = { path = "crates/sim/seal-sim", version = "0.1.0" }
+# external. Every crate takes versions from here. Read docs/DEPS.md before adding or upgrading.
+async-trait = "0.1"
+base64 = "0.22"
+bytes = "1"
+ciborium = "0.2"
+hex = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+# `full` without `parking_lot`: its process-wide wait-queue table, copied by fork() mid-update,
+# deadlocks a forked child's own runtime (Python prefork servers). See DEPS.md.
+tokio = { version = "1", features = ["fs", "io-util", "io-std", "macros", "net", "process", "rt", "rt-multi-thread", "signal", "sync", "time"] }
+tracing = "0.1"
+url = "2"
+zeroize = { version = "1", features = ["derive"] }
+rand = "0.10"
+subtle = "2.6"
+
+# crypto: one RustCrypto / dalek generation (rand_core 0.10, sha2 0.11)
+sha2 = "0.11"
+hkdf = "0.13"
+hmac = "0.13"
+aes-gcm = "0.11"
+ed25519-dalek = { version = "3", features = ["rand_core", "zeroize"] }
+x25519-dalek = { version = "3", features = ["static_secrets", "zeroize"] }
+p256 = { version = "0.14", features = ["ecdsa", "pkcs8"] }
+p384 = { version = "0.14", features = ["ecdsa"] }
+hpke = { version = "0.15", default-features = false, features = ["alloc", "x25519", "aes"] }
+# RS256 JWTs, AMD ARK/ASK RSA-PSS; RSA-OAEP decryption in the guardian's Key Vault source only.
+# A release candidate, pinned exactly: see DEPS.md "Known exceptions" before bumping it.
+rsa = { version = "=0.10.0-rc.19", default-features = false, features = ["std", "encoding"] }
+# AES-KWP (RFC 5649): Key Vault's Secure Key Release wraps released keys with it.
+aes-kw = { version = "0.3", default-features = false, features = ["zeroize"] }
+x509-cert = { version = "0.3", default-features = false, features = ["std", "pem", "builder"] }
+der = "0.8"
+spki = "0.8"
+coset = "0.4"
+
+# TEE devices
+sev = { version = "8", default-features = false, features = ["snp"] }
+
+# network
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+webpki-roots = "1"
+hyper = { version = "1", features = ["http1", "client", "server"] }
+hyper-util = { version = "0.1", features = ["tokio", "http1", "client", "client-legacy", "server"] }
+http-body-util = "0.1"
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio"] }
+postgres-protocol = "0.6"
+
+# SDK only, behind seal-client's `aws` feature
+aws-sigv4 = { version = "1", default-features = false, features = ["sign-http", "http1"] }
+aws-config = "1"
+
+# CLI and bindings
+clap = { version = "4", features = ["derive", "env", "wrap_help"] }
+clap_complete = "4"
+anstyle = "1"
+# The CLI's console login in the OS keychain (macOS Keychain, the Secret Service over zbus,
+# Windows Credential Manager).
+keyring = "4"
+rpassword = "7"
+anyhow = "1"
+jiff = "0.2"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+pyo3 = { version = "0.30", features = ["abi3-py39"] }
+# The Node.js SDK (seal-node, `@sealzone/sdk`): N-API 8 (Node 12.22+ / 14.17+), napi's own
+# tokio runtime for promises and threadsafe functions.
+napi = { version = "3", features = ["napi8", "async"] }
+napi-derive = "3"
+napi-build = "2"
+# The browser verifier (seal-verify-wasm, wasm32 only). `wasm-bindgen-cli` must be this exact
+# version (build.sh checks).
+wasm-bindgen = "=0.2.129"
+getrandom = "0.4"
+
+# tests
+proptest = "1"
+
+[profile.release]
+lto = true
+codegen-units = 1
+
+# Sim attestors measure their own binary (SHA-384 of the file, ~150 MB in a dev build); an
+# unoptimized sha2 takes seconds per boot for that.
+[profile.dev.package.sha2]
+opt-level = 3
+# RSA key generation (the guardian's ephemeral Key Vault key, in tests) takes minutes unoptimized.
+[profile.dev.package.crypto-bigint]
+opt-level = 3
+[profile.dev.package.crypto-primes]
+opt-level = 3

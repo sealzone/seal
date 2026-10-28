@@ -1,0 +1,3 @@
+# What build.sh writes: the static library and the header it was built with. The published
+# seal-go repository carries prebuilt ones.
+/lib/

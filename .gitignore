@@ -1,0 +1,7 @@
+/target
+**/__pycache__
+*.pyc
+.venv
+.claude/worktrees/
+/vendor
+/deploy/local/

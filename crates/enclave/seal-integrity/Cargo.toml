@@ -1,0 +1,11 @@
+[package]
+name = "seal-integrity"
+description = "App Integrity in the enclave: what adapters observe per request, pluggable detectors and evidence checks, and the verdict adapters obey."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+# Runs inside Seal's own images; never published.
+publish = false
+
+[dependencies]
+seal-proto.workspace = true

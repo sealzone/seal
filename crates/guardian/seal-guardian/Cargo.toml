@@ -1,0 +1,50 @@
+[package]
+name = "seal-guardian"
+description = "The key guardian: the only holder of the platform master key. Releases derived keys to enclave images that pass M-of-N, log and time-lock checks."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+# Runs inside Seal's own images; never published.
+publish = false
+
+[features]
+sim = ["seal-tee/sim", "seal-attest/sim", "seal-net/sim"]
+
+[dependencies]
+seal-proto.workspace = true
+seal-crypto.workspace = true
+seal-tlog.workspace = true
+seal-verify.workspace = true
+seal-attest.workspace = true
+seal-tee.workspace = true
+seal-net.workspace = true
+url.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+http-body-util.workspace = true
+# Cloud KMS JSON carries bytes as standard base64.
+base64.workspace = true
+# Key Vault: RSA-OAEP (the ephemeral key, the wrapped root), AES-KWP (the released key), the
+# release JWS's certificate (webpki through rustls, the SPKI through x509-cert).
+rsa.workspace = true
+aes-kw.workspace = true
+sha2.workspace = true
+rustls.workspace = true
+x509-cert.workspace = true
+
+[dev-dependencies]
+# The dev log produces real release evidence and tenant bundles for the fixtures.
+seal-tlog = { workspace = true, features = ["dev"] }
+# Extra roots: the test TLS proxy's CA.
+seal-net = { workspace = true, features = ["sim"] }
+rustls.workspace = true
+tokio-rustls.workspace = true
+hex.workspace = true
+# The fake Key Vault's JWS certificate authority.
+p256.workspace = true

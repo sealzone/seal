@@ -1,0 +1,34 @@
+[package]
+name = "sealzone-tlog"
+description = "Witnessed transparency log: pure verification (inclusion + witness quorum + public-since time), plus a dev log/witness server."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+
+[lib]
+# Published as `sealzone-tlog`; code imports `seal_tlog`.
+name = "seal_tlog"
+
+[[bin]]
+# The dev log over HTTP (`seal_tlog::dev`).
+name = "seal-tlog-dev"
+required-features = ["dev"]
+
+[features]
+dev = ["dep:tokio", "dep:axum"]
+
+[dependencies]
+seal-proto.workspace = true
+seal-crypto.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+sha2.workspace = true
+tokio = { workspace = true, optional = true }
+axum = { workspace = true, optional = true }
+
+[dev-dependencies]
+proptest.workspace = true
+hex.workspace = true
+serde_json.workspace = true

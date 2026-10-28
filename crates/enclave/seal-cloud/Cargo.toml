@@ -1,0 +1,33 @@
+[package]
+name = "seal-cloud"
+description = "The cloud an enclave replica runs on: its TEE, clock, network, tenant pin and deployment identity. The only enclave crate that names a cloud."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+# Runs inside Seal's own images; never published.
+publish = false
+
+[features]
+sim = ["seal-tee/sim", "seal-attest/sim"]
+
+[dependencies]
+seal-proto.workspace = true
+seal-net.workspace = true
+seal-tee.workspace = true
+seal-attest.workspace = true
+seal-authz.workspace = true
+async-trait.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# Azure: IMDS over plain HTTP, and the token's unverified claims.
+hyper.workspace = true
+hyper-util.workspace = true
+http-body-util.workspace = true
+url.workspace = true
+base64.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }

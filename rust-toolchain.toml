@@ -1,0 +1,5 @@
+# Pinned so enclave and guardian images build bit-for-bit reproducibly: the measurement is
+# the binary. Bump deliberately, with a new release.
+[toolchain]
+channel = "1.99.0"
+components = ["clippy", "rustfmt"]

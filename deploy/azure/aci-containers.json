@@ -1,0 +1,869 @@
+[
+  {
+    "allow_elevated": true,
+    "allow_stdio_access": true,
+    "capabilities": {
+      "ambient": [],
+      "bounding": [
+        "CAP_AUDIT_CONTROL",
+        "CAP_AUDIT_READ",
+        "CAP_AUDIT_WRITE",
+        "CAP_BLOCK_SUSPEND",
+        "CAP_BPF",
+        "CAP_CHECKPOINT_RESTORE",
+        "CAP_CHOWN",
+        "CAP_DAC_OVERRIDE",
+        "CAP_DAC_READ_SEARCH",
+        "CAP_FOWNER",
+        "CAP_FSETID",
+        "CAP_IPC_LOCK",
+        "CAP_IPC_OWNER",
+        "CAP_KILL",
+        "CAP_LEASE",
+        "CAP_LINUX_IMMUTABLE",
+        "CAP_MAC_ADMIN",
+        "CAP_MAC_OVERRIDE",
+        "CAP_MKNOD",
+        "CAP_NET_ADMIN",
+        "CAP_NET_BIND_SERVICE",
+        "CAP_NET_BROADCAST",
+        "CAP_NET_RAW",
+        "CAP_PERFMON",
+        "CAP_SETFCAP",
+        "CAP_SETGID",
+        "CAP_SETPCAP",
+        "CAP_SETUID",
+        "CAP_SYSLOG",
+        "CAP_SYS_ADMIN",
+        "CAP_SYS_BOOT",
+        "CAP_SYS_CHROOT",
+        "CAP_SYS_MODULE",
+        "CAP_SYS_NICE",
+        "CAP_SYS_PACCT",
+        "CAP_SYS_PTRACE",
+        "CAP_SYS_RAWIO",
+        "CAP_SYS_RESOURCE",
+        "CAP_SYS_TIME",
+        "CAP_SYS_TTY_CONFIG",
+        "CAP_WAKE_ALARM"
+      ],
+      "effective": [
+        "CAP_AUDIT_CONTROL",
+        "CAP_AUDIT_READ",
+        "CAP_AUDIT_WRITE",
+        "CAP_BLOCK_SUSPEND",
+        "CAP_BPF",
+        "CAP_CHECKPOINT_RESTORE",
+        "CAP_CHOWN",
+        "CAP_DAC_OVERRIDE",
+        "CAP_DAC_READ_SEARCH",
+        "CAP_FOWNER",
+        "CAP_FSETID",
+        "CAP_IPC_LOCK",
+        "CAP_IPC_OWNER",
+        "CAP_KILL",
+        "CAP_LEASE",
+        "CAP_LINUX_IMMUTABLE",
+        "CAP_MAC_ADMIN",
+        "CAP_MAC_OVERRIDE",
+        "CAP_MKNOD",
+        "CAP_NET_ADMIN",
+        "CAP_NET_BIND_SERVICE",
+        "CAP_NET_BROADCAST",
+        "CAP_NET_RAW",
+        "CAP_PERFMON",
+        "CAP_SETFCAP",
+        "CAP_SETGID",
+        "CAP_SETPCAP",
+        "CAP_SETUID",
+        "CAP_SYSLOG",
+        "CAP_SYS_ADMIN",
+        "CAP_SYS_BOOT",
+        "CAP_SYS_CHROOT",
+        "CAP_SYS_MODULE",
+        "CAP_SYS_NICE",
+        "CAP_SYS_PACCT",
+        "CAP_SYS_PTRACE",
+        "CAP_SYS_RAWIO",
+        "CAP_SYS_RESOURCE",
+        "CAP_SYS_TIME",
+        "CAP_SYS_TTY_CONFIG",
+        "CAP_WAKE_ALARM"
+      ],
+      "inheritable": [
+        "CAP_AUDIT_CONTROL",
+        "CAP_AUDIT_READ",
+        "CAP_AUDIT_WRITE",
+        "CAP_BLOCK_SUSPEND",
+        "CAP_BPF",
+        "CAP_CHECKPOINT_RESTORE",
+        "CAP_CHOWN",
+        "CAP_DAC_OVERRIDE",
+        "CAP_DAC_READ_SEARCH",
+        "CAP_FOWNER",
+        "CAP_FSETID",
+        "CAP_IPC_LOCK",
+        "CAP_IPC_OWNER",
+        "CAP_KILL",
+        "CAP_LEASE",
+        "CAP_LINUX_IMMUTABLE",
+        "CAP_MAC_ADMIN",
+        "CAP_MAC_OVERRIDE",
+        "CAP_MKNOD",
+        "CAP_NET_ADMIN",
+        "CAP_NET_BIND_SERVICE",
+        "CAP_NET_BROADCAST",
+        "CAP_NET_RAW",
+        "CAP_PERFMON",
+        "CAP_SETFCAP",
+        "CAP_SETGID",
+        "CAP_SETPCAP",
+        "CAP_SETUID",
+        "CAP_SYSLOG",
+        "CAP_SYS_ADMIN",
+        "CAP_SYS_BOOT",
+        "CAP_SYS_CHROOT",
+        "CAP_SYS_MODULE",
+        "CAP_SYS_NICE",
+        "CAP_SYS_PACCT",
+        "CAP_SYS_PTRACE",
+        "CAP_SYS_RAWIO",
+        "CAP_SYS_RESOURCE",
+        "CAP_SYS_TIME",
+        "CAP_SYS_TTY_CONFIG",
+        "CAP_WAKE_ALARM"
+      ],
+      "permitted": [
+        "CAP_AUDIT_CONTROL",
+        "CAP_AUDIT_READ",
+        "CAP_AUDIT_WRITE",
+        "CAP_BLOCK_SUSPEND",
+        "CAP_BPF",
+        "CAP_CHECKPOINT_RESTORE",
+        "CAP_CHOWN",
+        "CAP_DAC_OVERRIDE",
+        "CAP_DAC_READ_SEARCH",
+        "CAP_FOWNER",
+        "CAP_FSETID",
+        "CAP_IPC_LOCK",
+        "CAP_IPC_OWNER",
+        "CAP_KILL",
+        "CAP_LEASE",
+        "CAP_LINUX_IMMUTABLE",
+        "CAP_MAC_ADMIN",
+        "CAP_MAC_OVERRIDE",
+        "CAP_MKNOD",
+        "CAP_NET_ADMIN",
+        "CAP_NET_BIND_SERVICE",
+        "CAP_NET_BROADCAST",
+        "CAP_NET_RAW",
+        "CAP_PERFMON",
+        "CAP_SETFCAP",
+        "CAP_SETGID",
+        "CAP_SETPCAP",
+        "CAP_SETUID",
+        "CAP_SYSLOG",
+        "CAP_SYS_ADMIN",
+        "CAP_SYS_BOOT",
+        "CAP_SYS_CHROOT",
+        "CAP_SYS_MODULE",
+        "CAP_SYS_NICE",
+        "CAP_SYS_PACCT",
+        "CAP_SYS_PTRACE",
+        "CAP_SYS_RAWIO",
+        "CAP_SYS_RESOURCE",
+        "CAP_SYS_TIME",
+        "CAP_SYS_TTY_CONFIG",
+        "CAP_WAKE_ALARM"
+      ]
+    },
+    "command": [
+      "bash",
+      "/copy_resolv_conf.sh"
+    ],
+    "env_rules": [
+      {
+        "pattern": "IDENTITY_API_VERSION=.+",
+        "required": false,
+        "strategy": "re2"
+      },
+      {
+        "pattern": "IDENTITY_HEADER=.+",
+        "required": false,
+        "strategy": "re2"
+      },
+      {
+        "pattern": "IDENTITY_SERVER_THUMBPRINT=.+",
+        "required": false,
+        "strategy": "re2"
+      },
+      {
+        "pattern": "HOSTNAME=.+",
+        "required": false,
+        "strategy": "re2"
+      },
+      {
+        "pattern": "TERM=xterm",
+        "required": false,
+        "strategy": "string"
+      },
+      {
+        "pattern": "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "required": false,
+        "strategy": "string"
+      },
+      {
+        "pattern": "((?i)FABRIC)_.+=.+",
+        "required": false,
+        "strategy": "re2"
+      },
+      {
+        "pattern": "Fabric_Id=.+",
+        "required": false,
+        "strategy": "re2"
+      },
+      {
+        "pattern": "Fabric_ServiceName=.+",
+        "required": false,
+        "strategy": "re2"
+      },
+      {
+        "pattern": "Fabric_ApplicationName=.+",
+        "required": false,
+        "strategy": "re2"
+      },
+      {
+        "pattern": "Fabric_CodePackageName=.+",
+        "required": false,
+        "strategy": "re2"
+      },
+      {
+        "pattern": "Fabric_ServiceDnsName=.+",
+        "required": false,
+        "strategy": "re2"
+      },
+      {
+        "pattern": "SOURCE_RESOLV_CONF_LOCATION=/etc/resolv.conf",
+        "required": false,
+        "strategy": "string"
+      },
+      {
+        "pattern": "DESTINATION_RESOLV_CONF_LOCATION=/mount/resolvconf/resolv.conf",
+        "required": false,
+        "strategy": "string"
+      },
+      {
+        "pattern": "azurecontainerinstance_restarted_by=.+",
+        "required": false,
+        "strategy": "re2"
+      },
+      {
+        "pattern": "APP_IDENTITY_ENDPOINT=.*",
+        "required": false,
+        "strategy": "re2"
+      },
+      {
+        "pattern": "IDENTITY_ENDPOINT=.*",
+        "required": false,
+        "strategy": "re2"
+      },
+      {
+        "pattern": "MSI_ENDPOINT=.*",
+        "required": false,
+        "strategy": "re2"
+      },
+      {
+        "pattern": "MSI_SECRET=.*",
+        "required": false,
+        "strategy": "re2"
+      },
+      {
+        "pattern": "IMDS_ENDPOINT=.*",
+        "required": false,
+        "strategy": "re2"
+      }
+    ],
+    "exec_processes": [],
+    "id": "mcr.microsoft.com/aci/atlas-mount-resolv-conf:master_20210902.2",
+    "layers": [
+      "606fd6baf5eb1a71fd286aea29672a06bfe55f0007ded92ee73142a37590ed19",
+      "97adfda6943f3af972b9bf4fa684f533f10c023d913d195048fef03f9c3c60fd",
+      "296e5baa5b9ded863ca0170e05cd9ecf4136f86c830a9da906184ab147415c7b",
+      "a6a6918c07c85e29e48d4a87c1194781251d5185f682c26f20d6ee4e955a239f",
+      "285cb680a55d09f548d4baa804a663764788619824565685b32b8097cbed3d26"
+    ],
+    "mounts": [
+      {
+        "destination": "/mount/resolvconf",
+        "options": [
+          "rbind",
+          "rshared",
+          "rw"
+        ],
+        "source": "sandbox:///tmp/atlas/resolvconf/.+",
+        "type": "bind"
+      }
+    ],
+    "name": "atlas-mount-resolv-conf",
+    "no_new_privileges": false,
+    "seccomp_profile_sha256": "",
+    "signals": [],
+    "user": {
+      "group_idnames": [
+        {
+          "pattern": "",
+          "strategy": "any"
+        }
+      ],
+      "umask": "0022",
+      "user_idname": {
+        "pattern": "",
+        "strategy": "any"
+      }
+    },
+    "working_dir": "/"
+  },
+  {
+    "allow_elevated": true,
+    "allow_stdio_access": true,
+    "capabilities": {
+      "ambient": [],
+      "bounding": [
+        "CAP_AUDIT_CONTROL",
+        "CAP_AUDIT_READ",
+        "CAP_AUDIT_WRITE",
+        "CAP_BLOCK_SUSPEND",
+        "CAP_BPF",
+        "CAP_CHECKPOINT_RESTORE",
+        "CAP_CHOWN",
+        "CAP_DAC_OVERRIDE",
+        "CAP_DAC_READ_SEARCH",
+        "CAP_FOWNER",
+        "CAP_FSETID",
+        "CAP_IPC_LOCK",
+        "CAP_IPC_OWNER",
+        "CAP_KILL",
+        "CAP_LEASE",
+        "CAP_LINUX_IMMUTABLE",
+        "CAP_MAC_ADMIN",
+        "CAP_MAC_OVERRIDE",
+        "CAP_MKNOD",
+        "CAP_NET_ADMIN",
+        "CAP_NET_BIND_SERVICE",
+        "CAP_NET_BROADCAST",
+        "CAP_NET_RAW",
+        "CAP_PERFMON",
+        "CAP_SETFCAP",
+        "CAP_SETGID",
+        "CAP_SETPCAP",
+        "CAP_SETUID",
+        "CAP_SYSLOG",
+        "CAP_SYS_ADMIN",
+        "CAP_SYS_BOOT",
+        "CAP_SYS_CHROOT",
+        "CAP_SYS_MODULE",
+        "CAP_SYS_NICE",
+        "CAP_SYS_PACCT",
+        "CAP_SYS_PTRACE",
+        "CAP_SYS_RAWIO",
+        "CAP_SYS_RESOURCE",
+        "CAP_SYS_TIME",
+        "CAP_SYS_TTY_CONFIG",
+        "CAP_WAKE_ALARM"
+      ],
+      "effective": [
+        "CAP_AUDIT_CONTROL",
+        "CAP_AUDIT_READ",
+        "CAP_AUDIT_WRITE",
+        "CAP_BLOCK_SUSPEND",
+        "CAP_BPF",
+        "CAP_CHECKPOINT_RESTORE",
+        "CAP_CHOWN",
+        "CAP_DAC_OVERRIDE",
+        "CAP_DAC_READ_SEARCH",
+        "CAP_FOWNER",
+        "CAP_FSETID",
+        "CAP_IPC_LOCK",
+        "CAP_IPC_OWNER",
+        "CAP_KILL",
+        "CAP_LEASE",
+        "CAP_LINUX_IMMUTABLE",
+        "CAP_MAC_ADMIN",
+        "CAP_MAC_OVERRIDE",
+        "CAP_MKNOD",
+        "CAP_NET_ADMIN",
+        "CAP_NET_BIND_SERVICE",
+        "CAP_NET_BROADCAST",
+        "CAP_NET_RAW",
+        "CAP_PERFMON",
+        "CAP_SETFCAP",
+        "CAP_SETGID",
+        "CAP_SETPCAP",
+        "CAP_SETUID",
+        "CAP_SYSLOG",
+        "CAP_SYS_ADMIN",
+        "CAP_SYS_BOOT",
+        "CAP_SYS_CHROOT",
+        "CAP_SYS_MODULE",
+        "CAP_SYS_NICE",
+        "CAP_SYS_PACCT",
+        "CAP_SYS_PTRACE",
+        "CAP_SYS_RAWIO",
+        "CAP_SYS_RESOURCE",
+        "CAP_SYS_TIME",
+        "CAP_SYS_TTY_CONFIG",
+        "CAP_WAKE_ALARM"
+      ],
+      "inheritable": [
+        "CAP_AUDIT_CONTROL",
+        "CAP_AUDIT_READ",
+        "CAP_AUDIT_WRITE",
+        "CAP_BLOCK_SUSPEND",
+        "CAP_BPF",
+        "CAP_CHECKPOINT_RESTORE",
+        "CAP_CHOWN",
+        "CAP_DAC_OVERRIDE",
+        "CAP_DAC_READ_SEARCH",
+        "CAP_FOWNER",
+        "CAP_FSETID",
+        "CAP_IPC_LOCK",
+        "CAP_IPC_OWNER",
+        "CAP_KILL",
+        "CAP_LEASE",
+        "CAP_LINUX_IMMUTABLE",
+        "CAP_MAC_ADMIN",
+        "CAP_MAC_OVERRIDE",
+        "CAP_MKNOD",
+        "CAP_NET_ADMIN",
+        "CAP_NET_BIND_SERVICE",
+        "CAP_NET_BROADCAST",
+        "CAP_NET_RAW",
+        "CAP_PERFMON",
+        "CAP_SETFCAP",
+        "CAP_SETGID",
+        "CAP_SETPCAP",
+        "CAP_SETUID",
+        "CAP_SYSLOG",
+        "CAP_SYS_ADMIN",
+        "CAP_SYS_BOOT",
+        "CAP_SYS_CHROOT",
+        "CAP_SYS_MODULE",
+        "CAP_SYS_NICE",
+        "CAP_SYS_PACCT",
+        "CAP_SYS_PTRACE",
+        "CAP_SYS_RAWIO",
+        "CAP_SYS_RESOURCE",
+        "CAP_SYS_TIME",
+        "CAP_SYS_TTY_CONFIG",
+        "CAP_WAKE_ALARM"
+      ],
+      "permitted": [
+        "CAP_AUDIT_CONTROL",
+        "CAP_AUDIT_READ",
+        "CAP_AUDIT_WRITE",
+        "CAP_BLOCK_SUSPEND",
+        "CAP_BPF",
+        "CAP_CHECKPOINT_RESTORE",
+        "CAP_CHOWN",
+        "CAP_DAC_OVERRIDE",
+        "CAP_DAC_READ_SEARCH",
+        "CAP_FOWNER",
+        "CAP_FSETID",
+        "CAP_IPC_LOCK",
+        "CAP_IPC_OWNER",
+        "CAP_KILL",
+        "CAP_LEASE",
+        "CAP_LINUX_IMMUTABLE",
+        "CAP_MAC_ADMIN",
+        "CAP_MAC_OVERRIDE",
+        "CAP_MKNOD",
+        "CAP_NET_ADMIN",
+        "CAP_NET_BIND_SERVICE",
+        "CAP_NET_BROADCAST",
+        "CAP_NET_RAW",
+        "CAP_PERFMON",
+        "CAP_SETFCAP",
+        "CAP_SETGID",
+        "CAP_SETPCAP",
+        "CAP_SETUID",
+        "CAP_SYSLOG",
+        "CAP_SYS_ADMIN",
+        "CAP_SYS_BOOT",
+        "CAP_SYS_CHROOT",
+        "CAP_SYS_MODULE",
+        "CAP_SYS_NICE",
+        "CAP_SYS_PACCT",
+        "CAP_SYS_PTRACE",
+        "CAP_SYS_RAWIO",
+        "CAP_SYS_RESOURCE",
+        "CAP_SYS_TIME",
+        "CAP_SYS_TTY_CONFIG",
+        "CAP_WAKE_ALARM"
+      ]
+    },
+    "command": [
+      "/bin/sh",
+      "-c",
+      "until ./msiAtlasAdapter; do echo $? restarting; done"
+    ],
+    "env_rules": [
+      {
+        "pattern": "IDENTITY_API_VERSION=.+",
+        "required": false,
+        "strategy": "re2"
+      },
+      {
+        "pattern": "IDENTITY_HEADER=.+",
+        "required": false,
+        "strategy": "re2"
+      },
+      {
+        "pattern": "IDENTITY_SERVER_THUMBPRINT=.+",
+        "required": false,
+        "strategy": "re2"
+      },
+      {
+        "pattern": "ACI_MI_CLIENT_ID_.+=.+",
+        "required": false,
+        "strategy": "re2"
+      },
+      {
+        "pattern": "ACI_MI_RES_ID_.+=.+",
+        "required": false,
+        "strategy": "re2"
+      },
+      {
+        "pattern": "HOSTNAME=.+",
+        "required": false,
+        "strategy": "re2"
+      },
+      {
+        "pattern": "TERM=xterm",
+        "required": false,
+        "strategy": "string"
+      },
+      {
+        "pattern": "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "required": false,
+        "strategy": "string"
+      },
+      {
+        "pattern": "((?i)FABRIC)_.+=.+",
+        "required": false,
+        "strategy": "re2"
+      },
+      {
+        "pattern": "Fabric_Id+=.+",
+        "required": false,
+        "strategy": "re2"
+      },
+      {
+        "pattern": "Fabric_ServiceName=.+",
+        "required": false,
+        "strategy": "re2"
+      },
+      {
+        "pattern": "Fabric_ApplicationName=.+",
+        "required": false,
+        "strategy": "re2"
+      },
+      {
+        "pattern": "Fabric_CodePackageName=.+",
+        "required": false,
+        "strategy": "re2"
+      },
+      {
+        "pattern": "Fabric_ServiceDnsName=.+",
+        "required": false,
+        "strategy": "re2"
+      },
+      {
+        "pattern": "ACI_MI_DEFAULT=.+",
+        "required": false,
+        "strategy": "re2"
+      },
+      {
+        "pattern": "TokenProxyIpAddressEnvKeyName=(ContainerToHostAddress|Fabric_NodeIPOrFQDN)",
+        "required": false,
+        "strategy": "re2"
+      },
+      {
+        "pattern": "ContainerToHostAddress=169.254.128.1",
+        "required": false,
+        "strategy": "string"
+      },
+      {
+        "pattern": "Fabric_NodeIPOrFQDN=[\\d]{1,3}.[\\d]{1,3}.[\\d]{1.3}.[\\d]{1,3}",
+        "required": false,
+        "strategy": "re2"
+      },
+      {
+        "pattern": "Fabric_NetworkingMode=.+",
+        "required": false,
+        "strategy": "re2"
+      },
+      {
+        "pattern": "azurecontainerinstance_restarted_by=.+",
+        "required": false,
+        "strategy": "re2"
+      },
+      {
+        "pattern": "APP_IDENTITY_ENDPOINT=.*",
+        "required": false,
+        "strategy": "re2"
+      },
+      {
+        "pattern": "IDENTITY_ENDPOINT=.*",
+        "required": false,
+        "strategy": "re2"
+      },
+      {
+        "pattern": "MSI_ENDPOINT=.*",
+        "required": false,
+        "strategy": "re2"
+      },
+      {
+        "pattern": "MSI_SECRET=.*",
+        "required": false,
+        "strategy": "re2"
+      },
+      {
+        "pattern": "IMDS_ENDPOINT=.*",
+        "required": false,
+        "strategy": "re2"
+      }
+    ],
+    "exec_processes": [],
+    "id": "mcr.microsoft.com/aci/msi-atlas-adapter:master_20201203.1",
+    "layers": [
+      "606fd6baf5eb1a71fd286aea29672a06bfe55f0007ded92ee73142a37590ed19",
+      "90ad2f5b2c425a7c458f9f5d21cf064c215f14e406800968f644d2ab0b4d04df",
+      "1c4b6365a7b938387dfd822862ca41ae5490b5490e4c26eb4b5da96c640960cf"
+    ],
+    "mounts": [],
+    "name": "msi-atlas-adapter",
+    "no_new_privileges": false,
+    "seccomp_profile_sha256": "",
+    "signals": [],
+    "user": {
+      "group_idnames": [
+        {
+          "pattern": "",
+          "strategy": "any"
+        }
+      ],
+      "umask": "0022",
+      "user_idname": {
+        "pattern": "",
+        "strategy": "any"
+      }
+    },
+    "working_dir": "/root/"
+  },
+  {
+    "allow_elevated": false,
+    "allow_stdio_access": true,
+    "capabilities": {
+      "ambient": [],
+      "bounding": [
+        "CAP_AUDIT_WRITE",
+        "CAP_CHOWN",
+        "CAP_DAC_OVERRIDE",
+        "CAP_FOWNER",
+        "CAP_FSETID",
+        "CAP_KILL",
+        "CAP_MKNOD",
+        "CAP_NET_BIND_SERVICE",
+        "CAP_NET_RAW",
+        "CAP_SETFCAP",
+        "CAP_SETGID",
+        "CAP_SETPCAP",
+        "CAP_SETUID",
+        "CAP_SYS_CHROOT"
+      ],
+      "effective": [
+        "CAP_AUDIT_WRITE",
+        "CAP_CHOWN",
+        "CAP_DAC_OVERRIDE",
+        "CAP_FOWNER",
+        "CAP_FSETID",
+        "CAP_KILL",
+        "CAP_MKNOD",
+        "CAP_NET_BIND_SERVICE",
+        "CAP_NET_RAW",
+        "CAP_SETFCAP",
+        "CAP_SETGID",
+        "CAP_SETPCAP",
+        "CAP_SETUID",
+        "CAP_SYS_CHROOT"
+      ],
+      "inheritable": [],
+      "permitted": [
+        "CAP_AUDIT_WRITE",
+        "CAP_CHOWN",
+        "CAP_DAC_OVERRIDE",
+        "CAP_FOWNER",
+        "CAP_FSETID",
+        "CAP_KILL",
+        "CAP_MKNOD",
+        "CAP_NET_BIND_SERVICE",
+        "CAP_NET_RAW",
+        "CAP_SETFCAP",
+        "CAP_SETGID",
+        "CAP_SETPCAP",
+        "CAP_SETUID",
+        "CAP_SYS_CHROOT"
+      ]
+    },
+    "command": [
+      "tail",
+      "-f",
+      "/dev/null"
+    ],
+    "env_rules": [
+      {
+        "pattern": "IDENTITY_API_VERSION=.+",
+        "required": false,
+        "strategy": "re2"
+      },
+      {
+        "pattern": "IDENTITY_HEADER=.+",
+        "required": false,
+        "strategy": "re2"
+      },
+      {
+        "pattern": "IDENTITY_SERVER_THUMBPRINT=.+",
+        "required": false,
+        "strategy": "re2"
+      },
+      {
+        "pattern": "HOSTNAME=.+",
+        "required": false,
+        "strategy": "re2"
+      },
+      {
+        "pattern": "TERM=xterm",
+        "required": false,
+        "strategy": "string"
+      },
+      {
+        "pattern": "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "required": false,
+        "strategy": "string"
+      },
+      {
+        "pattern": "((?i)FABRIC)_.+=.+",
+        "required": false,
+        "strategy": "re2"
+      },
+      {
+        "pattern": "Fabric_Id=.+",
+        "required": false,
+        "strategy": "re2"
+      },
+      {
+        "pattern": "Fabric_ServiceName=.+",
+        "required": false,
+        "strategy": "re2"
+      },
+      {
+        "pattern": "Fabric_ApplicationName=.+",
+        "required": false,
+        "strategy": "re2"
+      },
+      {
+        "pattern": "Fabric_CodePackageName=.+",
+        "required": false,
+        "strategy": "re2"
+      },
+      {
+        "pattern": "Fabric_ServiceDnsName=.+",
+        "required": false,
+        "strategy": "re2"
+      },
+      {
+        "pattern": "PORT=9999",
+        "required": false,
+        "strategy": "string"
+      },
+      {
+        "pattern": "azurecontainerinstance_restarted_by=.+",
+        "required": false,
+        "strategy": "re2"
+      },
+      {
+        "pattern": "eula_file=EULA-Container.txt",
+        "required": false,
+        "strategy": "string"
+      },
+      {
+        "pattern": "APP_IDENTITY_ENDPOINT=.*",
+        "required": false,
+        "strategy": "re2"
+      },
+      {
+        "pattern": "IDENTITY_ENDPOINT=.*",
+        "required": false,
+        "strategy": "re2"
+      },
+      {
+        "pattern": "MSI_ENDPOINT=.*",
+        "required": false,
+        "strategy": "re2"
+      },
+      {
+        "pattern": "MSI_SECRET=.*",
+        "required": false,
+        "strategy": "re2"
+      },
+      {
+        "pattern": "IMDS_ENDPOINT=.*",
+        "required": false,
+        "strategy": "re2"
+      }
+    ],
+    "exec_processes": [
+      {
+        "command": [
+          "curl",
+          "localhost:9999/interfaces/eth0"
+        ],
+        "signals": []
+      },
+      {
+        "command": [
+          "./netstatsv2",
+          "eth0"
+        ],
+        "signals": []
+      }
+    ],
+    "id": "mcr.microsoft.com/aci/atlas-netstats:master_20210330.2",
+    "layers": [
+      "5c5d1ae1aff5e1f36d5300de46592efe4ccb7889e60a4b82bbaf003c2248f2a7",
+      "b4d393af4df7d90b42399344510d97a8949b43df5ae1933d33f87f8b91581248",
+      "b67419c212bb501c0c15669570a2186a2496c3cacc676461af5b7852684dcf52",
+      "e4a9934a2decba73bf92613e52d13b11bbdd0930bc6d9dddcaba688c6d9e1e20",
+      "9dca0b190c30e2a132932c86441bc0b9ca52ab06cf11eed9852bda057e8bd6d1"
+    ],
+    "mounts": [],
+    "name": "atlas-netstats",
+    "no_new_privileges": false,
+    "seccomp_profile_sha256": "",
+    "signals": [],
+    "user": {
+      "group_idnames": [
+        {
+          "pattern": "",
+          "strategy": "any"
+        }
+      ],
+      "umask": "0022",
+      "user_idname": {
+        "pattern": "",
+        "strategy": "any"
+      }
+    },
+    "working_dir": "/root/"
+  }
+]

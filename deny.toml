@@ -1,0 +1,71 @@
+# cargo deny check — supply-chain policy. Rationale for every choice: docs/DEPS.md.
+
+[graph]
+all-features = true
+
+[advisories]
+# Every advisory fails the build unless it is listed here with the reason it does not apply.
+ignore = [
+    # rsa: Marvin timing side channel on private-key operations. Seal verifies with rsa, and
+    # only the guardian's Key Vault source decrypts (blinded RSA-OAEP), a few times per boot;
+    # DEPS.md "Known exceptions" says why that is not an oracle.
+    { id = "RUSTSEC-2023-0071", reason = "decryption only in the guardian's Key Vault source, a few per boot (DEPS.md)" },
+    # zvariant, zvariant_derive, zbus_names: unmaintained as standalone crates since zbus 6
+    # merged them. Pulled only by the CLI's keyring (the Secret Service over zbus 5), to keep
+    # the console login on Linux; never in a TEE or an SDK.
+    { id = "RUSTSEC-2026-0370", reason = "zbus 5 via the CLI's keyring only, until secret-service moves to zbus 6 (DEPS.md)" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus 5 via the CLI's keyring only, until secret-service moves to zbus 6 (DEPS.md)" },
+    { id = "RUSTSEC-2026-0372", reason = "zbus 5 via the CLI's keyring only, until secret-service moves to zbus 6 (DEPS.md)" },
+]
+
+[licenses]
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+]
+confidence-threshold = 0.9
+exceptions = [
+    # Pulled by sev -> dirs -> dirs-sys. File-level copyleft on an unmodified crate.
+    { allow = ["MPL-2.0"], crate = "option-ext" },
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# Known duplicates, each with an end date in DEPS.md. Anything else that duplicates warns.
+skip-tree = [
+    { crate = "aws-config", reason = "SDK `aws` feature only" },
+    { crate = "aws-sigv4", reason = "SDK `aws` feature only" },
+    { crate = "syn@2", reason = "build-time proc macros only" },
+]
+# Dependencies Seal does not take; DEPS.md says why.
+deny = [
+    { name = "openssl", reason = "native TLS/crypto; Seal uses rustls and RustCrypto" },
+    { name = "openssl-sys", reason = "native TLS/crypto; Seal uses rustls and RustCrypto" },
+    { name = "native-tls", reason = "native TLS; Seal uses rustls" },
+    { name = "reqwest", reason = "hyper-util with Seal's pinned rustls config is enough" },
+    { name = "jsonwebtoken", reason = "pulls a second crypto generation; JWS verification is hand-rolled per issuer" },
+    { name = "x509-parser", reason = "use x509-cert (same ecosystem as the crypto)" },
+    { name = "webauthn-rs", reason = "heavy, OpenSSL; ES256 assertions are checked with p256" },
+    { name = "azure_identity", reason = "one IMDS GET does not need an SDK" },
+    { name = "aws-nitro-enclaves-cose", reason = "OpenSSL; use coset" },
+    { name = "serde_cbor", reason = "unmaintained; use ciborium" },
+    # aws-lc-rs needs a C/cmake build that complicates reproducible TEE images. It appears
+    # only when the SDK's `aws` feature is on, which also switches rustls' aws-lc backend on
+    # through feature unification; scripts/check-deps.sh proves no TEE crate ever gets it.
+    { name = "aws-lc-rs", wrappers = ["aws-smithy-http-client", "rustls", "rustls-webpki"], reason = "SDK `aws` feature only; never in a TEE (scripts/check-deps.sh)" },
+    { name = "aws-lc-sys", wrappers = ["aws-lc-rs"], reason = "SDK `aws` feature only" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

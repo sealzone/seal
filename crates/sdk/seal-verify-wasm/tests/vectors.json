@@ -1,0 +1,4203 @@
+{
+  "classify": [
+    {
+      "change": "widening",
+      "kinds": [
+        "producer_added"
+      ],
+      "new": {
+        "apps": {},
+        "deployments": [],
+        "freshness_keys": [],
+        "integrity": {
+          "actions": {},
+          "artifacts": {},
+          "cleared": [],
+          "sources": {}
+        },
+        "issued_at": 1900000000,
+        "pending_window_secs": 3600,
+        "platforms": [
+          "sim"
+        ],
+        "producers": [
+          {
+            "key_id": "0101010101010101010101010101010101010101010101010101010101010101",
+            "kind": "app_key",
+            "public_key": "0101010101010101010101010101010101010101010101010101010101010101"
+          },
+          {
+            "key_id": "0202020202020202020202020202020202020202020202020202020202020202",
+            "kind": "app_key",
+            "public_key": "0202020202020202020202020202020202020202020202020202020202020202"
+          }
+        ],
+        "root_version": 1,
+        "telemetry_readers": [],
+        "tenant": "acme",
+        "tenant_key_versions": {
+          "current": 1,
+          "oldest_accepted": 1
+        },
+        "version": 2
+      },
+      "old": {
+        "apps": {},
+        "deployments": [],
+        "freshness_keys": [],
+        "integrity": {
+          "actions": {},
+          "artifacts": {},
+          "cleared": [],
+          "sources": {}
+        },
+        "issued_at": 1900000000,
+        "pending_window_secs": 3600,
+        "platforms": [
+          "sim"
+        ],
+        "producers": [
+          {
+            "key_id": "0101010101010101010101010101010101010101010101010101010101010101",
+            "kind": "app_key",
+            "public_key": "0101010101010101010101010101010101010101010101010101010101010101"
+          }
+        ],
+        "root_version": 1,
+        "telemetry_readers": [],
+        "tenant": "acme",
+        "tenant_key_versions": {
+          "current": 1,
+          "oldest_accepted": 1
+        },
+        "version": 1
+      }
+    },
+    {
+      "change": "narrowing",
+      "kinds": [
+        "producer_removed"
+      ],
+      "new": {
+        "apps": {},
+        "deployments": [],
+        "freshness_keys": [],
+        "integrity": {
+          "actions": {},
+          "artifacts": {},
+          "cleared": [],
+          "sources": {}
+        },
+        "issued_at": 1900000000,
+        "pending_window_secs": 3600,
+        "platforms": [
+          "sim"
+        ],
+        "producers": [
+          {
+            "key_id": "0101010101010101010101010101010101010101010101010101010101010101",
+            "kind": "app_key",
+            "public_key": "0101010101010101010101010101010101010101010101010101010101010101"
+          }
+        ],
+        "root_version": 1,
+        "telemetry_readers": [],
+        "tenant": "acme",
+        "tenant_key_versions": {
+          "current": 1,
+          "oldest_accepted": 1
+        },
+        "version": 3
+      },
+      "old": {
+        "apps": {},
+        "deployments": [],
+        "freshness_keys": [],
+        "integrity": {
+          "actions": {},
+          "artifacts": {},
+          "cleared": [],
+          "sources": {}
+        },
+        "issued_at": 1900000000,
+        "pending_window_secs": 3600,
+        "platforms": [
+          "sim"
+        ],
+        "producers": [
+          {
+            "key_id": "0101010101010101010101010101010101010101010101010101010101010101",
+            "kind": "app_key",
+            "public_key": "0101010101010101010101010101010101010101010101010101010101010101"
+          },
+          {
+            "key_id": "0202020202020202020202020202020202020202020202020202020202020202",
+            "kind": "app_key",
+            "public_key": "0202020202020202020202020202020202020202020202020202020202020202"
+          }
+        ],
+        "root_version": 1,
+        "telemetry_readers": [],
+        "tenant": "acme",
+        "tenant_key_versions": {
+          "current": 1,
+          "oldest_accepted": 1
+        },
+        "version": 2
+      }
+    },
+    {
+      "change": "widening",
+      "kinds": [
+        "deployment_added"
+      ],
+      "new": {
+        "apps": {},
+        "deployments": [
+          {
+            "audience": "api://seal-hosted",
+            "entra_tenant": "8c1b1f9e-5f1c-4a0e-9d6a-3c2b1a0f9e8d",
+            "hosted": "sessions",
+            "kind": "azure",
+            "object_id": "0f9e8d7c-6b5a-4f3e-8d2c-1b0a9f8e7d6c"
+          }
+        ],
+        "freshness_keys": [],
+        "integrity": {
+          "actions": {},
+          "artifacts": {},
+          "cleared": [],
+          "sources": {}
+        },
+        "issued_at": 1900000000,
+        "pending_window_secs": 3600,
+        "platforms": [
+          "sim"
+        ],
+        "producers": [
+          {
+            "key_id": "0101010101010101010101010101010101010101010101010101010101010101",
+            "kind": "app_key",
+            "public_key": "0101010101010101010101010101010101010101010101010101010101010101"
+          }
+        ],
+        "root_version": 1,
+        "telemetry_readers": [],
+        "tenant": "acme",
+        "tenant_key_versions": {
+          "current": 1,
+          "oldest_accepted": 1
+        },
+        "version": 2
+      },
+      "old": {
+        "apps": {},
+        "deployments": [],
+        "freshness_keys": [],
+        "integrity": {
+          "actions": {},
+          "artifacts": {},
+          "cleared": [],
+          "sources": {}
+        },
+        "issued_at": 1900000000,
+        "pending_window_secs": 3600,
+        "platforms": [
+          "sim"
+        ],
+        "producers": [
+          {
+            "key_id": "0101010101010101010101010101010101010101010101010101010101010101",
+            "kind": "app_key",
+            "public_key": "0101010101010101010101010101010101010101010101010101010101010101"
+          }
+        ],
+        "root_version": 1,
+        "telemetry_readers": [],
+        "tenant": "acme",
+        "tenant_key_versions": {
+          "current": 1,
+          "oldest_accepted": 1
+        },
+        "version": 1
+      }
+    }
+  ],
+  "classify_roots": [
+    {
+      "change": "widening",
+      "kinds": [
+        "admin_key_added"
+      ],
+      "new": {
+        "admin_keys": [
+          {
+            "kind": "ed25519",
+            "public_key": "43046bfe4092b3e94994eada15dcc20d8aaa07b658fd3954eb8e0efb8bdca5de"
+          },
+          {
+            "kind": "web_authn_es256",
+            "rp_id": "seal.zone",
+            "sec1": "BDrThhqVYhOSUWu1k-8FWD7S5YZvXLYmCjAXI3_Ym5Cv0JYcfjcHWmeRo5xh9WKVsCttJlZ7YV5gqkHuHI6DOI0"
+          }
+        ],
+        "cosign_releases": false,
+        "tenant": "acme",
+        "threshold": 1,
+        "version": 2
+      },
+      "old": {
+        "admin_keys": [
+          {
+            "kind": "ed25519",
+            "public_key": "43046bfe4092b3e94994eada15dcc20d8aaa07b658fd3954eb8e0efb8bdca5de"
+          }
+        ],
+        "cosign_releases": false,
+        "tenant": "acme",
+        "threshold": 1,
+        "version": 1
+      }
+    }
+  ],
+  "documents": {
+    "documents": {
+      "checkpoint": {
+        "checkpoint": {
+          "origin": "dev.log.seal.zone/v1",
+          "policy": {
+            "min_service_key_version": {},
+            "min_tcb": {}
+          },
+          "root_hash": "5TFN8FpthTbWe-IF_RdgGP6vqedpw5EAcZffcqQsetY",
+          "size": 4
+        },
+        "cosignatures": [
+          {
+            "signature": {
+              "alg": {
+                "alg": "ed25519",
+                "sig": "cavuxza4A7D9OyI3T_9ngnVFzXV2zVOLEv9uGomvA_hA5XT44iPamX4ISaUb7nR9uizLOEqEMOXRzIgRfrhlCg"
+              },
+              "signer": "000e62ba0c6ce93da66eca96821f963dd440ac086073f7bbe6ef91ef90c9d3f6"
+            },
+            "timestamp": 1900007300
+          },
+          {
+            "signature": {
+              "alg": {
+                "alg": "ed25519",
+                "sig": "5jSIGDsynDr_Y_cwNZgwYBPR-hNdldK0gp6ZzJRGaUQVBM6mnyMaOEgp7SQ-inIK5So3OuahAlPilbt20OuYCQ"
+              },
+              "signer": "d8270188647d1a2453e4b07d468a1fef57eec30ecb34cf54639437e416ddbde5"
+            },
+            "timestamp": 1900007300
+          },
+          {
+            "signature": {
+              "alg": {
+                "alg": "ed25519",
+                "sig": "CZfzQqLeslVyUSzyzvrdCdv9wsczQIWgG0v1lEXvuxHtU80Hd_SDJKsVDMojcXQYa8trAIwsBpeMSJ9UkuI-Bg"
+              },
+              "signer": "4845ecc67e207f28233c9c2ba96eaae6b588d8aa402893a80f9d6ce199c86a50"
+            },
+            "timestamp": 1900007300
+          }
+        ],
+        "log_signature": {
+          "alg": {
+            "alg": "ed25519",
+            "sig": "lZ2rw-ElKkz0HdN6s15_OExQrAp9YlFnlogf0VUXrZ6EDeWCx_sTBHIio5g7AckptIeiFgYwPQrmYDsAiwDuBg"
+          },
+          "signer": "9aaa744aaee7d4d7ab5043d1f87cec6032b01c14b0b851c765b253e0816f830c"
+        }
+      },
+      "roots": [
+        {
+          "proof": {
+            "audit_path": [],
+            "checkpoint": {
+              "checkpoint": {
+                "origin": "dev.log.seal.zone/v1",
+                "policy": {
+                  "min_service_key_version": {},
+                  "min_tcb": {}
+                },
+                "root_hash": "SJNBJt4Y1x5Y6DLecFKWo0RJqop5H95ctQrFqbM8Ki8",
+                "size": 1
+              },
+              "cosignatures": [
+                {
+                  "signature": {
+                    "alg": {
+                      "alg": "ed25519",
+                      "sig": "4aPcZzjFkEYJAu0bB_gXFjYipSeRpRrYzao3v13vJEu2ce0L5vmP0YzQNUwgDZx0f7Bp-YeXztLTEkWHE-qMBQ"
+                    },
+                    "signer": "000e62ba0c6ce93da66eca96821f963dd440ac086073f7bbe6ef91ef90c9d3f6"
+                  },
+                  "timestamp": 1899999990
+                },
+                {
+                  "signature": {
+                    "alg": {
+                      "alg": "ed25519",
+                      "sig": "wOSjoq2aC1YFszkuDn4JfoP8EmRBO7AVIdeFcno8OM6p-orb_WLt6MWqLZldfKE0Bm5mcfFfZS6ar03dsB1dAA"
+                    },
+                    "signer": "d8270188647d1a2453e4b07d468a1fef57eec30ecb34cf54639437e416ddbde5"
+                  },
+                  "timestamp": 1899999990
+                },
+                {
+                  "signature": {
+                    "alg": {
+                      "alg": "ed25519",
+                      "sig": "YYWetAJdBPST8irAnulQsQN-s2DHAWWyEe0A47kHo6BvnrZMikX_HWnkn2B16wEoYJNjMt1Q1z4jKZdrPJuICg"
+                    },
+                    "signer": "4845ecc67e207f28233c9c2ba96eaae6b588d8aa402893a80f9d6ce199c86a50"
+                  },
+                  "timestamp": 1899999990
+                }
+              ],
+              "log_signature": {
+                "alg": {
+                  "alg": "ed25519",
+                  "sig": "z8xK0PJwXybSJT-z4aHg-61yIAaTiKPO6BSp9_5b5lC9DkQCpfvM5-Bk5kFoljHUUelcDJjsHJ-pSJ5b8VYJDQ"
+                },
+                "signer": "9aaa744aaee7d4d7ab5043d1f87cec6032b01c14b0b851c765b253e0816f830c"
+              }
+            },
+            "leaf_index": 0
+          },
+          "root": {
+            "body": {
+              "admin_keys": [
+                {
+                  "kind": "ed25519",
+                  "public_key": "43046bfe4092b3e94994eada15dcc20d8aaa07b658fd3954eb8e0efb8bdca5de"
+                }
+              ],
+              "cosign_releases": false,
+              "tenant": "acme",
+              "threshold": 1,
+              "version": 1
+            },
+            "signatures": [
+              {
+                "alg": {
+                  "alg": "ed25519",
+                  "sig": "hlmWgyQgCK8io2qSfXu4YSxOLTX7olIP_0_ThPTz___2RMYNz_-B6uxfKA5nCn1jYCTxw25Dtt-bOUBRY1PaAw"
+                },
+                "signer": "d7e1e084be213b01e506852af8198b9980b43e03749c67d82dcd0903f4001c77"
+              }
+            ]
+          }
+        }
+      ],
+      "states": [
+        {
+          "proof": {
+            "audit_path": [
+              [
+                72,
+                147,
+                65,
+                38,
+                222,
+                24,
+                215,
+                30,
+                88,
+                232,
+                50,
+                222,
+                112,
+                82,
+                150,
+                163,
+                68,
+                73,
+                170,
+                138,
+                121,
+                31,
+                222,
+                92,
+                181,
+                10,
+                197,
+                169,
+                179,
+                60,
+                42,
+                47
+              ]
+            ],
+            "checkpoint": {
+              "checkpoint": {
+                "origin": "dev.log.seal.zone/v1",
+                "policy": {
+                  "min_service_key_version": {},
+                  "min_tcb": {}
+                },
+                "root_hash": "H9Hl9xtxDyOSS_n2fbEGyclQDQ1Z1DRYB0vOcLdHdNA",
+                "size": 2
+              },
+              "cosignatures": [
+                {
+                  "signature": {
+                    "alg": {
+                      "alg": "ed25519",
+                      "sig": "knpFptt2YS0ht7nBqFvgtdKL-A7S8lnz0GsMbCUAs3ZyUi7mRPGDGSvcb0HNc7ZPGpm7zfR4KajnxEmfpJxzBA"
+                    },
+                    "signer": "000e62ba0c6ce93da66eca96821f963dd440ac086073f7bbe6ef91ef90c9d3f6"
+                  },
+                  "timestamp": 1900000000
+                },
+                {
+                  "signature": {
+                    "alg": {
+                      "alg": "ed25519",
+                      "sig": "ILmLAiOv3kaIK3tVJ7-jCvlqB2mL1Uz8aMIBs-TdGgiY2pvTmV0L8XZi0Nyi9y3WSUZ9Er-XTeJBdozFTpJgDw"
+                    },
+                    "signer": "d8270188647d1a2453e4b07d468a1fef57eec30ecb34cf54639437e416ddbde5"
+                  },
+                  "timestamp": 1900000000
+                },
+                {
+                  "signature": {
+                    "alg": {
+                      "alg": "ed25519",
+                      "sig": "ulI-lISOkLpXOL1j_pbP9l5Shp_zBSrQoAKD1G_BB9WFe4NRAVFPx_Ydn861mU_w6yDJTErwN-n-NMTPJS-rBQ"
+                    },
+                    "signer": "4845ecc67e207f28233c9c2ba96eaae6b588d8aa402893a80f9d6ce199c86a50"
+                  },
+                  "timestamp": 1900000000
+                }
+              ],
+              "log_signature": {
+                "alg": {
+                  "alg": "ed25519",
+                  "sig": "Pp98Rp39VtsUYd5ar73OkwnalAlTgyvQdzSpjj7iOHjsjxsbvRRPS9uDhmzaRACV9PWYb9BQY1sOSlECa4rbBg"
+                },
+                "signer": "9aaa744aaee7d4d7ab5043d1f87cec6032b01c14b0b851c765b253e0816f830c"
+              }
+            },
+            "leaf_index": 1
+          },
+          "state": {
+            "body": {
+              "apps": {},
+              "deployments": [],
+              "freshness_keys": [],
+              "integrity": {
+                "actions": {},
+                "artifacts": {},
+                "cleared": [],
+                "sources": {}
+              },
+              "issued_at": 1900000000,
+              "pending_window_secs": 3600,
+              "platforms": [
+                "sim"
+              ],
+              "producers": [
+                {
+                  "key_id": "0101010101010101010101010101010101010101010101010101010101010101",
+                  "kind": "app_key",
+                  "public_key": "0101010101010101010101010101010101010101010101010101010101010101"
+                }
+              ],
+              "root_version": 1,
+              "telemetry_readers": [],
+              "tenant": "acme",
+              "tenant_key_versions": {
+                "current": 1,
+                "oldest_accepted": 1
+              },
+              "version": 1
+            },
+            "signatures": [
+              {
+                "alg": {
+                  "alg": "ed25519",
+                  "sig": "9DcFio6VdHEw0lN_5PxdJpyQ0nzEBnFUUD8P9tQfasyVD3gFNKKp1Z7zPlLJTQPpWzlyQStn5QWlOGBk4XbgDQ"
+                },
+                "signer": "1f5fe64ec2f8c901be3aad94a41d70c12d2f3a8f43755f902e665c96f41c87e3"
+              }
+            ]
+          }
+        },
+        {
+          "proof": {
+            "audit_path": [
+              [
+                31,
+                209,
+                229,
+                247,
+                27,
+                113,
+                15,
+                35,
+                146,
+                75,
+                249,
+                246,
+                125,
+                177,
+                6,
+                201,
+                201,
+                80,
+                13,
+                13,
+                89,
+                212,
+                52,
+                88,
+                7,
+                75,
+                206,
+                112,
+                183,
+                71,
+                116,
+                208
+              ]
+            ],
+            "checkpoint": {
+              "checkpoint": {
+                "origin": "dev.log.seal.zone/v1",
+                "policy": {
+                  "min_service_key_version": {},
+                  "min_tcb": {}
+                },
+                "root_hash": "LJPAspHTRcxyYzT6eMHEDWnmzkLOV1oHv3BRkesXK1k",
+                "size": 3
+              },
+              "cosignatures": [
+                {
+                  "signature": {
+                    "alg": {
+                      "alg": "ed25519",
+                      "sig": "hCsaEG6iv5rLzEgitmcjSpaE1dJE6mbOHkSsCmFes3K03VulsM4kg66o-SEWGy70s4kD5luHYV6SLolyXcNHBQ"
+                    },
+                    "signer": "000e62ba0c6ce93da66eca96821f963dd440ac086073f7bbe6ef91ef90c9d3f6"
+                  },
+                  "timestamp": 1900000100
+                },
+                {
+                  "signature": {
+                    "alg": {
+                      "alg": "ed25519",
+                      "sig": "ECmdBGwBULwnjsc3UNJYvoZYN8yYbjOUupVl9_IrehQLCxTVxLrHl_XMU91OR8jui20zN18uRsoklq-BUUYSDA"
+                    },
+                    "signer": "d8270188647d1a2453e4b07d468a1fef57eec30ecb34cf54639437e416ddbde5"
+                  },
+                  "timestamp": 1900000100
+                },
+                {
+                  "signature": {
+                    "alg": {
+                      "alg": "ed25519",
+                      "sig": "MFYU4-Zp5-Kt7Jh3a4in0rPvRjNAGaQDwzUnQ9lnXaos8cXJgmXHCe2x9USSa9wtke-g99s63X_E1Y88hMf4DA"
+                    },
+                    "signer": "4845ecc67e207f28233c9c2ba96eaae6b588d8aa402893a80f9d6ce199c86a50"
+                  },
+                  "timestamp": 1900000100
+                }
+              ],
+              "log_signature": {
+                "alg": {
+                  "alg": "ed25519",
+                  "sig": "E9zBDpouC2ZGzcTQcMIJbExa6GQa1Lt96mZl2Z68CMJwVfY5oV_vNlfEgAkb57OPRXENZnkP1K3gE5ak0S-nAQ"
+                },
+                "signer": "9aaa744aaee7d4d7ab5043d1f87cec6032b01c14b0b851c765b253e0816f830c"
+              }
+            },
+            "leaf_index": 2
+          },
+          "state": {
+            "body": {
+              "apps": {},
+              "deployments": [],
+              "freshness_keys": [],
+              "integrity": {
+                "actions": {},
+                "artifacts": {},
+                "cleared": [],
+                "sources": {}
+              },
+              "issued_at": 1900000000,
+              "pending_window_secs": 3600,
+              "platforms": [
+                "sim"
+              ],
+              "producers": [
+                {
+                  "key_id": "0101010101010101010101010101010101010101010101010101010101010101",
+                  "kind": "app_key",
+                  "public_key": "0101010101010101010101010101010101010101010101010101010101010101"
+                },
+                {
+                  "key_id": "0202020202020202020202020202020202020202020202020202020202020202",
+                  "kind": "app_key",
+                  "public_key": "0202020202020202020202020202020202020202020202020202020202020202"
+                }
+              ],
+              "root_version": 1,
+              "telemetry_readers": [],
+              "tenant": "acme",
+              "tenant_key_versions": {
+                "current": 1,
+                "oldest_accepted": 1
+              },
+              "version": 2
+            },
+            "signatures": [
+              {
+                "alg": {
+                  "alg": "ed25519",
+                  "sig": "RxfiCiN-XlkG7fIGIQQlUpc-8yuxJQTu25coYMLh8Hw1EwYapPL_x69z0JdhNk-T8YIK3ISt-E9mINQoaEBHDQ"
+                },
+                "signer": "1f5fe64ec2f8c901be3aad94a41d70c12d2f3a8f43755f902e665c96f41c87e3"
+              }
+            ]
+          }
+        },
+        {
+          "proof": {
+            "audit_path": [
+              [
+                193,
+                132,
+                192,
+                3,
+                155,
+                172,
+                89,
+                53,
+                138,
+                40,
+                180,
+                132,
+                85,
+                175,
+                244,
+                78,
+                154,
+                44,
+                177,
+                210,
+                95,
+                102,
+                95,
+                193,
+                113,
+                15,
+                8,
+                164,
+                76,
+                187,
+                74,
+                246
+              ],
+              [
+                31,
+                209,
+                229,
+                247,
+                27,
+                113,
+                15,
+                35,
+                146,
+                75,
+                249,
+                246,
+                125,
+                177,
+                6,
+                201,
+                201,
+                80,
+                13,
+                13,
+                89,
+                212,
+                52,
+                88,
+                7,
+                75,
+                206,
+                112,
+                183,
+                71,
+                116,
+                208
+              ]
+            ],
+            "checkpoint": {
+              "checkpoint": {
+                "origin": "dev.log.seal.zone/v1",
+                "policy": {
+                  "min_service_key_version": {},
+                  "min_tcb": {}
+                },
+                "root_hash": "5TFN8FpthTbWe-IF_RdgGP6vqedpw5EAcZffcqQsetY",
+                "size": 4
+              },
+              "cosignatures": [
+                {
+                  "signature": {
+                    "alg": {
+                      "alg": "ed25519",
+                      "sig": "2pyjfrEqyvk5U9IsaLvTKwOQtBdYntzm9b0UAlS6bvDZHXlFNlEqIJd9qCs7tXRs-FmRvvhg5TzKyeSEdX_zCw"
+                    },
+                    "signer": "000e62ba0c6ce93da66eca96821f963dd440ac086073f7bbe6ef91ef90c9d3f6"
+                  },
+                  "timestamp": 1900000300
+                },
+                {
+                  "signature": {
+                    "alg": {
+                      "alg": "ed25519",
+                      "sig": "mizfctITFk16mfHy_6QzI_qAMoYydoEYdSgkrWNDRo5mGNjfbUPpXJ2fpltqUOHj2wSKDf08PWhaeCixykqrBQ"
+                    },
+                    "signer": "d8270188647d1a2453e4b07d468a1fef57eec30ecb34cf54639437e416ddbde5"
+                  },
+                  "timestamp": 1900000300
+                },
+                {
+                  "signature": {
+                    "alg": {
+                      "alg": "ed25519",
+                      "sig": "S-M1HQ9MZIAU_E8aIJjfC_TObi_Xop9yTzF6VLigyd_I8BtDefS7NK1T9-_8oLc9zjr-Qxe0EBT-N8W1Q-b7Cg"
+                    },
+                    "signer": "4845ecc67e207f28233c9c2ba96eaae6b588d8aa402893a80f9d6ce199c86a50"
+                  },
+                  "timestamp": 1900000300
+                }
+              ],
+              "log_signature": {
+                "alg": {
+                  "alg": "ed25519",
+                  "sig": "lZ2rw-ElKkz0HdN6s15_OExQrAp9YlFnlogf0VUXrZ6EDeWCx_sTBHIio5g7AckptIeiFgYwPQrmYDsAiwDuBg"
+                },
+                "signer": "9aaa744aaee7d4d7ab5043d1f87cec6032b01c14b0b851c765b253e0816f830c"
+              }
+            },
+            "leaf_index": 3
+          },
+          "state": {
+            "body": {
+              "apps": {},
+              "deployments": [],
+              "freshness_keys": [],
+              "integrity": {
+                "actions": {},
+                "artifacts": {},
+                "cleared": [],
+                "sources": {}
+              },
+              "issued_at": 1900000000,
+              "pending_window_secs": 3600,
+              "platforms": [
+                "sim"
+              ],
+              "producers": [
+                {
+                  "key_id": "0101010101010101010101010101010101010101010101010101010101010101",
+                  "kind": "app_key",
+                  "public_key": "0101010101010101010101010101010101010101010101010101010101010101"
+                }
+              ],
+              "root_version": 1,
+              "telemetry_readers": [],
+              "tenant": "acme",
+              "tenant_key_versions": {
+                "current": 1,
+                "oldest_accepted": 1
+              },
+              "version": 3
+            },
+            "signatures": [
+              {
+                "alg": {
+                  "alg": "ed25519",
+                  "sig": "SJn7jR0fKMV3prtxlBQ0xawezL7HyRxRy0kEyqGqtTs7qPuRgZt3gcP09cbSUYvHy7gVyeg7YJ5M1PLBGmBKCg"
+                },
+                "signer": "1f5fe64ec2f8c901be3aad94a41d70c12d2f3a8f43755f902e665c96f41c87e3"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "public_since": [
+      1900000000,
+      1900000100,
+      1900000300
+    ]
+  },
+  "signing": {
+    "admin_key": {
+      "kind": "web_authn_es256",
+      "rp_id": "seal.zone",
+      "sec1": "BDrThhqVYhOSUWu1k-8FWD7S5YZvXLYmCjAXI3_Ym5Cv0JYcfjcHWmeRo5xh9WKVsCttJlZ7YV5gqkHuHI6DOI0"
+    },
+    "admin_key_id": "72015c5ffe7e0d7972af8d6062250de8f2c2ffc43feb14efff5dbd0689dece30",
+    "assertion": {
+      "authenticator_data": "Qv2LMbe38o8lrbp-oCHDDz2fzqNvr9oHlFPd7vf6f5EFAAAABw",
+      "client_data_json": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiUDlnZGdCMm0wWFhFNDhNRmN1ZmFFNmlOd1R5dUkzTU9sMkhydFBjeW9nZyIsIm9yaWdpbiI6Imh0dHBzOi8vY29uc29sZS5zZWFsLnpvbmUifQ",
+      "signature": "MEUCIQD9ISxapo7M0kD_ZQ_VFCcu4JVZhHBo3dgy7foQOoa3mwIgTXNyVQbV3vzf9VbIGxTWm0x_saBT9iz_mSS56EKlDMM"
+    },
+    "digest": "3fd81d801da6d175c4e3c30572e7da13a88dc13cae23730e9761ebb4f732a208",
+    "document": {
+      "apps": {},
+      "deployments": [],
+      "freshness_keys": [],
+      "integrity": {
+        "actions": {},
+        "artifacts": {},
+        "cleared": [],
+        "sources": {}
+      },
+      "issued_at": 1900000000,
+      "pending_window_secs": 3600,
+      "platforms": [
+        "sim"
+      ],
+      "producers": [
+        {
+          "key_id": "0101010101010101010101010101010101010101010101010101010101010101",
+          "kind": "app_key",
+          "public_key": "0101010101010101010101010101010101010101010101010101010101010101"
+        },
+        {
+          "key_id": "0303030303030303030303030303030303030303030303030303030303030303",
+          "kind": "app_key",
+          "public_key": "0303030303030303030303030303030303030303030303030303030303030303"
+        }
+      ],
+      "root_version": 1,
+      "telemetry_readers": [],
+      "tenant": "acme",
+      "tenant_key_versions": {
+        "current": 1,
+        "oldest_accepted": 1
+      },
+      "version": 4
+    },
+    "label": "seal/tenant-state/v1",
+    "root": {
+      "admin_keys": [
+        {
+          "kind": "ed25519",
+          "public_key": "43046bfe4092b3e94994eada15dcc20d8aaa07b658fd3954eb8e0efb8bdca5de"
+        },
+        {
+          "kind": "web_authn_es256",
+          "rp_id": "seal.zone",
+          "sec1": "BDrThhqVYhOSUWu1k-8FWD7S5YZvXLYmCjAXI3_Ym5Cv0JYcfjcHWmeRo5xh9WKVsCttJlZ7YV5gqkHuHI6DOI0"
+        }
+      ],
+      "cosign_releases": false,
+      "tenant": "acme",
+      "threshold": 1,
+      "version": 1
+    },
+    "root_id": "c749d4775093a1ac6d6b2d3c85e731aa3787b9385624e6d68940b898860d825a",
+    "root_v1": {
+      "admin_keys": [
+        {
+          "kind": "ed25519",
+          "public_key": "43046bfe4092b3e94994eada15dcc20d8aaa07b658fd3954eb8e0efb8bdca5de"
+        }
+      ],
+      "cosign_releases": false,
+      "tenant": "acme",
+      "threshold": 1,
+      "version": 1
+    },
+    "signature": {
+      "alg": {
+        "alg": "web_authn_es256",
+        "authenticator_data": "Qv2LMbe38o8lrbp-oCHDDz2fzqNvr9oHlFPd7vf6f5EFAAAABw",
+        "client_data_json": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiUDlnZGdCMm0wWFhFNDhNRmN1ZmFFNmlOd1R5dUkzTU9sMkhydFBjeW9nZyIsIm9yaWdpbiI6Imh0dHBzOi8vY29uc29sZS5zZWFsLnpvbmUifQ",
+        "sig": "MEUCIQD9ISxapo7M0kD_ZQ_VFCcu4JVZhHBo3dgy7foQOoa3mwIgTXNyVQbV3vzf9VbIGxTWm0x_saBT9iz_mSS56EKlDMM"
+      },
+      "signer": "72015c5ffe7e0d7972af8d6062250de8f2c2ffc43feb14efff5dbd0689dece30"
+    },
+    "signed": {
+      "body": {
+        "apps": {},
+        "deployments": [],
+        "freshness_keys": [],
+        "integrity": {
+          "actions": {},
+          "artifacts": {},
+          "cleared": [],
+          "sources": {}
+        },
+        "issued_at": 1900000000,
+        "pending_window_secs": 3600,
+        "platforms": [
+          "sim"
+        ],
+        "producers": [
+          {
+            "key_id": "0101010101010101010101010101010101010101010101010101010101010101",
+            "kind": "app_key",
+            "public_key": "0101010101010101010101010101010101010101010101010101010101010101"
+          },
+          {
+            "key_id": "0303030303030303030303030303030303030303030303030303030303030303",
+            "kind": "app_key",
+            "public_key": "0303030303030303030303030303030303030303030303030303030303030303"
+          }
+        ],
+        "root_version": 1,
+        "telemetry_readers": [],
+        "tenant": "acme",
+        "tenant_key_versions": {
+          "current": 1,
+          "oldest_accepted": 1
+        },
+        "version": 4
+      },
+      "signatures": [
+        {
+          "alg": {
+            "alg": "ed25519",
+            "sig": "Tpkww9P2-joaaiOvWuynN29BEx0OJJee9xpXQ61r117ffzvcBeXm-IgUCL1qEX2VdpXlbBy3W6ejcU6zbHDHAA"
+          },
+          "signer": "1f5fe64ec2f8c901be3aad94a41d70c12d2f3a8f43755f902e665c96f41c87e3"
+        },
+        {
+          "alg": {
+            "alg": "web_authn_es256",
+            "authenticator_data": "Qv2LMbe38o8lrbp-oCHDDz2fzqNvr9oHlFPd7vf6f5EFAAAABw",
+            "client_data_json": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiUDlnZGdCMm0wWFhFNDhNRmN1ZmFFNmlOd1R5dUkzTU9sMkhydFBjeW9nZyIsIm9yaWdpbiI6Imh0dHBzOi8vY29uc29sZS5zZWFsLnpvbmUifQ",
+            "sig": "MEUCIQD9ISxapo7M0kD_ZQ_VFCcu4JVZhHBo3dgy7foQOoa3mwIgTXNyVQbV3vzf9VbIGxTWm0x_saBT9iz_mSS56EKlDMM"
+          },
+          "signer": "72015c5ffe7e0d7972af8d6062250de8f2c2ffc43feb14efff5dbd0689dece30"
+        },
+        {
+          "alg": {
+            "alg": "ed25519",
+            "sig": "Q-NSCLFBQutMYgzuWpegTEGsdZmYqJ_WdtR7fYFKc_VkGQCVaf41GxkJeoO6y6nR2LgoQpV2mJBvSMAgmrOuDA"
+          },
+          "signer": "7cb8c4eeba865f0b93ff7b745b8d092eeecf67035c396563fb4bba1cb69dbc83"
+        }
+      ]
+    },
+    "signers": [
+      "1f5fe64ec2f8c901be3aad94a41d70c12d2f3a8f43755f902e665c96f41c87e3",
+      "72015c5ffe7e0d7972af8d6062250de8f2c2ffc43feb14efff5dbd0689dece30"
+    ]
+  },
+  "telemetry": {
+    "batches": [
+      {
+        "body": {
+          "count": 1,
+          "entries": {
+            "entries": [
+              {
+                "at": 1900000000,
+                "event": {
+                  "kind": "dropped",
+                  "other": 0,
+                  "requests": 1
+                },
+                "identity": null,
+                "tenant": "acme"
+              }
+            ],
+            "kind": "clear"
+          },
+          "first_entry": 0,
+          "from": 1900000000,
+          "last": false,
+          "sequence": 0,
+          "stream": "AQEBAQEBAQEBAQEBAQEBAQ",
+          "tenant": "acme",
+          "to": 1900000000
+        },
+        "signatures": [
+          {
+            "alg": {
+              "alg": "ed25519",
+              "sig": "_v_oWWYUlJHem8VC55hlo8X3ZSgkO_G0YAGMQ__RvKYfB_WdAxqvTXRHd31r4uxxUMYWfR1CnMtrEhd3_voVAg"
+            },
+            "signer": "eeec86207f875ff654d070a8179f86becb1fda1395b3312be417542c99c6ba53"
+          }
+        ]
+      },
+      {
+        "body": {
+          "count": 1,
+          "entries": {
+            "entries": [
+              {
+                "at": 1900000000,
+                "event": {
+                  "kind": "dropped",
+                  "other": 0,
+                  "requests": 1
+                },
+                "identity": null,
+                "tenant": "acme"
+              }
+            ],
+            "kind": "clear"
+          },
+          "first_entry": 4,
+          "from": 1900000000,
+          "last": false,
+          "sequence": 2,
+          "stream": "AQEBAQEBAQEBAQEBAQEBAQ",
+          "tenant": "acme",
+          "to": 1900000000
+        },
+        "signatures": [
+          {
+            "alg": {
+              "alg": "ed25519",
+              "sig": "hBVfMH5opmvkvO1stMhMCM3e9a3yDR_sV_FHbPPVBE-8epWVEV0tCQJOejXRyd1x_cG7IYO-ZUquy9V48yDeCQ"
+            },
+            "signer": "eeec86207f875ff654d070a8179f86becb1fda1395b3312be417542c99c6ba53"
+          }
+        ]
+      },
+      {
+        "body": {
+          "count": 2,
+          "entries": {
+            "ciphertext": "yMrwP5y6JBW-42QHMQ_N78vgzKEyU3ia4tIWrQ_nO6qALIG2E8WCWHG7vQNmg5XLqCLY_Rqat7akrjYCF_GGmwpMVe48-gW_VRsMRSiBIIoPWLLHOPaWGLZC5zUxdMOV7MWAM2DmOZJ7IbSmXo6CPEEtdyhnbVlltBPqAqQNpKhXDHhc5X0oh08Napyq4q3xL2pKVYXc6J_u",
+            "kind": "sealed",
+            "nonce": "SQ_yi51b5TkBZx4G",
+            "readers": [
+              {
+                "enc": "2LPr2SqJ3ygeGB0PV4rxKY46uDEFyr_lGYyPXnrpOQk",
+                "reader": "7b0d47d93427f8311160781c7c733fd89f88970aef490d8aa0ee19a4cb8a1b14",
+                "wrapped_key": "uDE2aM1vU9d9tNEZHpnNBryK2l2YIC-U6IURznE9VBJg93i2G9ucnyNbG4mISVIY"
+              }
+            ]
+          },
+          "first_entry": 0,
+          "from": 1900000000,
+          "last": true,
+          "sequence": 0,
+          "stream": "AgICAgICAgICAgICAgICAg",
+          "tenant": "acme",
+          "to": 1900000000
+        },
+        "signatures": [
+          {
+            "alg": {
+              "alg": "ed25519",
+              "sig": "qc8fnyraPbB2k3ObIVqnkoNIjwf8jm62S8CA-jbQ9P_AUc4Q5j9LQucC6eSsnd5iqz1X41BZjzzESThHdNxgBQ"
+            },
+            "signer": "eeec86207f875ff654d070a8179f86becb1fda1395b3312be417542c99c6ba53"
+          }
+        ]
+      },
+      {
+        "body": {
+          "count": 1,
+          "entries": {
+            "entries": [
+              {
+                "at": 1900000000,
+                "event": {
+                  "kind": "dropped",
+                  "other": 0,
+                  "requests": 1
+                },
+                "identity": null,
+                "tenant": "acme"
+              }
+            ],
+            "kind": "clear"
+          },
+          "first_entry": 0,
+          "from": 1900000000,
+          "last": true,
+          "sequence": 0,
+          "stream": "AwMDAwMDAwMDAwMDAwMDAw",
+          "tenant": "acme",
+          "to": 1900000000
+        },
+        "signatures": [
+          {
+            "alg": {
+              "alg": "ed25519",
+              "sig": "3P2z1s2KZfSmueDNwFT9kREputewMEDwnFo40ByDHeZwPxajvGJvdrgJA6bdiIWxuaFA47X_y6FDURvAQ7U2DQ"
+            },
+            "signer": "6c8f8607dbe87077a62a2990ce07d94aaf749df76f87b98eb786a6d10f030765"
+          }
+        ]
+      }
+    ],
+    "certificate_findings": [
+      "certificate_ignored"
+    ],
+    "certificates": [
+      {
+        "body": {
+          "ingest_public_key": "0202020202020202020202020202020202020202020202020202020202020202",
+          "platform": "sim",
+          "root_id": "c749d4775093a1ac6d6b2d3c85e731aa3787b9385624e6d68940b898860d825a",
+          "service_key_version": 1,
+          "telemetry_public_keys": [
+            [
+              1,
+              "5e212c0980e4b39fc09721134aa02109374edfd260c0d3d03cb501c8d65457a9"
+            ]
+          ],
+          "tenant": "acme",
+          "tls_spki_sha256": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE"
+        },
+        "signatures": [
+          {
+            "alg": {
+              "alg": "ed25519",
+              "sig": "4oAjm3uND1-HeEKGfoniMYRUEttb6NwW0Y3sHg50p_HoKOeEzU7sqMLSjNPvwzAzCToVuunUyAU0IsYQosW5Dg"
+            },
+            "signer": "9fa6cc6aa6f261034de0216459c23641e0a189775d6ea6f00b33ebe6a8a66998"
+          }
+        ]
+      },
+      {
+        "body": {
+          "ingest_public_key": "0202020202020202020202020202020202020202020202020202020202020202",
+          "platform": "sim",
+          "root_id": "c749d4775093a1ac6d6b2d3c85e731aa3787b9385624e6d68940b898860d825a",
+          "service_key_version": 1,
+          "telemetry_public_keys": [
+            [
+              1,
+              "5e212c0980e4b39fc09721134aa02109374edfd260c0d3d03cb501c8d65457a9"
+            ]
+          ],
+          "tenant": "other",
+          "tls_spki_sha256": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE"
+        },
+        "signatures": [
+          {
+            "alg": {
+              "alg": "ed25519",
+              "sig": "oA6J2VEBS3QHmImPKX6h2B8jSyAMuBlljcqs6IM0fEmE-EkCCuTF8Fdk6O4rV7KzRneMNnUmHVnSar3omjavAg"
+            },
+            "signer": "9fa6cc6aa6f261034de0216459c23641e0a189775d6ea6f00b33ebe6a8a66998"
+          }
+        ]
+      }
+    ],
+    "entries": 4,
+    "findings": [
+      "missing_batches",
+      "no_last",
+      "not_certified",
+      "receipt_not_held"
+    ],
+    "keys": [
+      "5e212c0980e4b39fc09721134aa02109374edfd260c0d3d03cb501c8d65457a9"
+    ],
+    "reader_public_key": "7b0d47d93427f8311160781c7c733fd89f88970aef490d8aa0ee19a4cb8a1b14",
+    "reader_seed": "3333333333333333333333333333333333333333333333333333333333333333",
+    "receipts": [
+      {
+        "entry": 0,
+        "stream": "AQEBAQEBAQEBAQEBAQEBAQ"
+      },
+      {
+        "entry": 2,
+        "stream": "AQEBAQEBAQEBAQEBAQEBAQ"
+      }
+    ],
+    "root_id": "c749d4775093a1ac6d6b2d3c85e731aa3787b9385624e6d68940b898860d825a",
+    "sealed_without_reader": 1
+  },
+  "tenant": "acme",
+  "tenant_cases": [
+    {
+      "bundle": {
+        "checkpoint": {
+          "checkpoint": {
+            "origin": "dev.log.seal.zone/v1",
+            "policy": {
+              "min_service_key_version": {},
+              "min_tcb": {}
+            },
+            "root_hash": "LJPAspHTRcxyYzT6eMHEDWnmzkLOV1oHv3BRkesXK1k",
+            "size": 3
+          },
+          "cosignatures": [
+            {
+              "signature": {
+                "alg": {
+                  "alg": "ed25519",
+                  "sig": "6KD1Rpxzvu2T8HxGrhBE80JpR68gEQ_cQFpa3Ew_X9Osh-6eEgsHuyOrcaRu4g0xffTBll2pb_T7Htcg5MCmBw"
+                },
+                "signer": "000e62ba0c6ce93da66eca96821f963dd440ac086073f7bbe6ef91ef90c9d3f6"
+              },
+              "timestamp": 1900000200
+            },
+            {
+              "signature": {
+                "alg": {
+                  "alg": "ed25519",
+                  "sig": "jH3yPYxVkyAgg-JzbtjkfsFYmB0Beef1Ltsi88TU-LYYwIct0-Npx8Mmk4yFuezC9NtXERQ9B2SjT0HTgHuYDQ"
+                },
+                "signer": "d8270188647d1a2453e4b07d468a1fef57eec30ecb34cf54639437e416ddbde5"
+              },
+              "timestamp": 1900000200
+            },
+            {
+              "signature": {
+                "alg": {
+                  "alg": "ed25519",
+                  "sig": "dL_BzIVnxRCixnX5lNaQXfkxPlWaNKNIi8zew57Yv_JAaFGH8u5yZJ_6OATQipzsHC-kDVC4SkTb21k-PHqXBg"
+                },
+                "signer": "4845ecc67e207f28233c9c2ba96eaae6b588d8aa402893a80f9d6ce199c86a50"
+              },
+              "timestamp": 1900000200
+            }
+          ],
+          "log_signature": {
+            "alg": {
+              "alg": "ed25519",
+              "sig": "E9zBDpouC2ZGzcTQcMIJbExa6GQa1Lt96mZl2Z68CMJwVfY5oV_vNlfEgAkb57OPRXENZnkP1K3gE5ak0S-nAQ"
+            },
+            "signer": "9aaa744aaee7d4d7ab5043d1f87cec6032b01c14b0b851c765b253e0816f830c"
+          }
+        },
+        "ended_sessions": [],
+        "freshness": [
+          {
+            "body": {
+              "digest": "NZwM7BGfRxwwumymj_qoUuMELHE086VZFu3zFVlSVoc",
+              "signed_at": 1900000200,
+              "tenant": "acme",
+              "version": 2
+            },
+            "signatures": [
+              {
+                "alg": {
+                  "alg": "ed25519",
+                  "sig": "JkM15Qlz6rFKqX5VuDdMaJ3tlSU7pjoNTueH6ZQo77tlDwVr__2plmNJIF2mtOWZVXgDLJRKoD7t6UPOd2qXAg"
+                },
+                "signer": "9aaa744aaee7d4d7ab5043d1f87cec6032b01c14b0b851c765b253e0816f830c"
+              }
+            ]
+          }
+        ],
+        "root_chain": [
+          {
+            "proof": {
+              "audit_path": [],
+              "checkpoint": {
+                "checkpoint": {
+                  "origin": "dev.log.seal.zone/v1",
+                  "policy": {
+                    "min_service_key_version": {},
+                    "min_tcb": {}
+                  },
+                  "root_hash": "SJNBJt4Y1x5Y6DLecFKWo0RJqop5H95ctQrFqbM8Ki8",
+                  "size": 1
+                },
+                "cosignatures": [
+                  {
+                    "signature": {
+                      "alg": {
+                        "alg": "ed25519",
+                        "sig": "4aPcZzjFkEYJAu0bB_gXFjYipSeRpRrYzao3v13vJEu2ce0L5vmP0YzQNUwgDZx0f7Bp-YeXztLTEkWHE-qMBQ"
+                      },
+                      "signer": "000e62ba0c6ce93da66eca96821f963dd440ac086073f7bbe6ef91ef90c9d3f6"
+                    },
+                    "timestamp": 1899999990
+                  },
+                  {
+                    "signature": {
+                      "alg": {
+                        "alg": "ed25519",
+                        "sig": "wOSjoq2aC1YFszkuDn4JfoP8EmRBO7AVIdeFcno8OM6p-orb_WLt6MWqLZldfKE0Bm5mcfFfZS6ar03dsB1dAA"
+                      },
+                      "signer": "d8270188647d1a2453e4b07d468a1fef57eec30ecb34cf54639437e416ddbde5"
+                    },
+                    "timestamp": 1899999990
+                  },
+                  {
+                    "signature": {
+                      "alg": {
+                        "alg": "ed25519",
+                        "sig": "YYWetAJdBPST8irAnulQsQN-s2DHAWWyEe0A47kHo6BvnrZMikX_HWnkn2B16wEoYJNjMt1Q1z4jKZdrPJuICg"
+                      },
+                      "signer": "4845ecc67e207f28233c9c2ba96eaae6b588d8aa402893a80f9d6ce199c86a50"
+                    },
+                    "timestamp": 1899999990
+                  }
+                ],
+                "log_signature": {
+                  "alg": {
+                    "alg": "ed25519",
+                    "sig": "z8xK0PJwXybSJT-z4aHg-61yIAaTiKPO6BSp9_5b5lC9DkQCpfvM5-Bk5kFoljHUUelcDJjsHJ-pSJ5b8VYJDQ"
+                  },
+                  "signer": "9aaa744aaee7d4d7ab5043d1f87cec6032b01c14b0b851c765b253e0816f830c"
+                }
+              },
+              "leaf_index": 0
+            },
+            "root": {
+              "body": {
+                "admin_keys": [
+                  {
+                    "kind": "ed25519",
+                    "public_key": "43046bfe4092b3e94994eada15dcc20d8aaa07b658fd3954eb8e0efb8bdca5de"
+                  }
+                ],
+                "cosign_releases": false,
+                "tenant": "acme",
+                "threshold": 1,
+                "version": 1
+              },
+              "signatures": [
+                {
+                  "alg": {
+                    "alg": "ed25519",
+                    "sig": "hlmWgyQgCK8io2qSfXu4YSxOLTX7olIP_0_ThPTz___2RMYNz_-B6uxfKA5nCn1jYCTxw25Dtt-bOUBRY1PaAw"
+                  },
+                  "signer": "d7e1e084be213b01e506852af8198b9980b43e03749c67d82dcd0903f4001c77"
+                }
+              ]
+            }
+          }
+        ],
+        "signals": [],
+        "state": {
+          "body": {
+            "apps": {},
+            "deployments": [],
+            "freshness_keys": [],
+            "integrity": {
+              "actions": {},
+              "artifacts": {},
+              "cleared": [],
+              "sources": {}
+            },
+            "issued_at": 1900000000,
+            "pending_window_secs": 3600,
+            "platforms": [
+              "sim"
+            ],
+            "producers": [
+              {
+                "key_id": "0101010101010101010101010101010101010101010101010101010101010101",
+                "kind": "app_key",
+                "public_key": "0101010101010101010101010101010101010101010101010101010101010101"
+              },
+              {
+                "key_id": "0202020202020202020202020202020202020202020202020202020202020202",
+                "kind": "app_key",
+                "public_key": "0202020202020202020202020202020202020202020202020202020202020202"
+              }
+            ],
+            "root_version": 1,
+            "telemetry_readers": [],
+            "tenant": "acme",
+            "tenant_key_versions": {
+              "current": 1,
+              "oldest_accepted": 1
+            },
+            "version": 2
+          },
+          "signatures": [
+            {
+              "alg": {
+                "alg": "ed25519",
+                "sig": "RxfiCiN-XlkG7fIGIQQlUpc-8yuxJQTu25coYMLh8Hw1EwYapPL_x69z0JdhNk-T8YIK3ISt-E9mINQoaEBHDQ"
+              },
+              "signer": "1f5fe64ec2f8c901be3aad94a41d70c12d2f3a8f43755f902e665c96f41c87e3"
+            }
+          ]
+        },
+        "states": [
+          {
+            "proof": {
+              "audit_path": [
+                [
+                  72,
+                  147,
+                  65,
+                  38,
+                  222,
+                  24,
+                  215,
+                  30,
+                  88,
+                  232,
+                  50,
+                  222,
+                  112,
+                  82,
+                  150,
+                  163,
+                  68,
+                  73,
+                  170,
+                  138,
+                  121,
+                  31,
+                  222,
+                  92,
+                  181,
+                  10,
+                  197,
+                  169,
+                  179,
+                  60,
+                  42,
+                  47
+                ]
+              ],
+              "checkpoint": {
+                "checkpoint": {
+                  "origin": "dev.log.seal.zone/v1",
+                  "policy": {
+                    "min_service_key_version": {},
+                    "min_tcb": {}
+                  },
+                  "root_hash": "H9Hl9xtxDyOSS_n2fbEGyclQDQ1Z1DRYB0vOcLdHdNA",
+                  "size": 2
+                },
+                "cosignatures": [
+                  {
+                    "signature": {
+                      "alg": {
+                        "alg": "ed25519",
+                        "sig": "knpFptt2YS0ht7nBqFvgtdKL-A7S8lnz0GsMbCUAs3ZyUi7mRPGDGSvcb0HNc7ZPGpm7zfR4KajnxEmfpJxzBA"
+                      },
+                      "signer": "000e62ba0c6ce93da66eca96821f963dd440ac086073f7bbe6ef91ef90c9d3f6"
+                    },
+                    "timestamp": 1900000000
+                  },
+                  {
+                    "signature": {
+                      "alg": {
+                        "alg": "ed25519",
+                        "sig": "ILmLAiOv3kaIK3tVJ7-jCvlqB2mL1Uz8aMIBs-TdGgiY2pvTmV0L8XZi0Nyi9y3WSUZ9Er-XTeJBdozFTpJgDw"
+                      },
+                      "signer": "d8270188647d1a2453e4b07d468a1fef57eec30ecb34cf54639437e416ddbde5"
+                    },
+                    "timestamp": 1900000000
+                  },
+                  {
+                    "signature": {
+                      "alg": {
+                        "alg": "ed25519",
+                        "sig": "ulI-lISOkLpXOL1j_pbP9l5Shp_zBSrQoAKD1G_BB9WFe4NRAVFPx_Ydn861mU_w6yDJTErwN-n-NMTPJS-rBQ"
+                      },
+                      "signer": "4845ecc67e207f28233c9c2ba96eaae6b588d8aa402893a80f9d6ce199c86a50"
+                    },
+                    "timestamp": 1900000000
+                  }
+                ],
+                "log_signature": {
+                  "alg": {
+                    "alg": "ed25519",
+                    "sig": "Pp98Rp39VtsUYd5ar73OkwnalAlTgyvQdzSpjj7iOHjsjxsbvRRPS9uDhmzaRACV9PWYb9BQY1sOSlECa4rbBg"
+                  },
+                  "signer": "9aaa744aaee7d4d7ab5043d1f87cec6032b01c14b0b851c765b253e0816f830c"
+                }
+              },
+              "leaf_index": 1
+            },
+            "state": {
+              "body": {
+                "apps": {},
+                "deployments": [],
+                "freshness_keys": [],
+                "integrity": {
+                  "actions": {},
+                  "artifacts": {},
+                  "cleared": [],
+                  "sources": {}
+                },
+                "issued_at": 1900000000,
+                "pending_window_secs": 3600,
+                "platforms": [
+                  "sim"
+                ],
+                "producers": [
+                  {
+                    "key_id": "0101010101010101010101010101010101010101010101010101010101010101",
+                    "kind": "app_key",
+                    "public_key": "0101010101010101010101010101010101010101010101010101010101010101"
+                  }
+                ],
+                "root_version": 1,
+                "telemetry_readers": [],
+                "tenant": "acme",
+                "tenant_key_versions": {
+                  "current": 1,
+                  "oldest_accepted": 1
+                },
+                "version": 1
+              },
+              "signatures": [
+                {
+                  "alg": {
+                    "alg": "ed25519",
+                    "sig": "9DcFio6VdHEw0lN_5PxdJpyQ0nzEBnFUUD8P9tQfasyVD3gFNKKp1Z7zPlLJTQPpWzlyQStn5QWlOGBk4XbgDQ"
+                  },
+                  "signer": "1f5fe64ec2f8c901be3aad94a41d70c12d2f3a8f43755f902e665c96f41c87e3"
+                }
+              ]
+            }
+          },
+          {
+            "proof": {
+              "audit_path": [
+                [
+                  31,
+                  209,
+                  229,
+                  247,
+                  27,
+                  113,
+                  15,
+                  35,
+                  146,
+                  75,
+                  249,
+                  246,
+                  125,
+                  177,
+                  6,
+                  201,
+                  201,
+                  80,
+                  13,
+                  13,
+                  89,
+                  212,
+                  52,
+                  88,
+                  7,
+                  75,
+                  206,
+                  112,
+                  183,
+                  71,
+                  116,
+                  208
+                ]
+              ],
+              "checkpoint": {
+                "checkpoint": {
+                  "origin": "dev.log.seal.zone/v1",
+                  "policy": {
+                    "min_service_key_version": {},
+                    "min_tcb": {}
+                  },
+                  "root_hash": "LJPAspHTRcxyYzT6eMHEDWnmzkLOV1oHv3BRkesXK1k",
+                  "size": 3
+                },
+                "cosignatures": [
+                  {
+                    "signature": {
+                      "alg": {
+                        "alg": "ed25519",
+                        "sig": "hCsaEG6iv5rLzEgitmcjSpaE1dJE6mbOHkSsCmFes3K03VulsM4kg66o-SEWGy70s4kD5luHYV6SLolyXcNHBQ"
+                      },
+                      "signer": "000e62ba0c6ce93da66eca96821f963dd440ac086073f7bbe6ef91ef90c9d3f6"
+                    },
+                    "timestamp": 1900000100
+                  },
+                  {
+                    "signature": {
+                      "alg": {
+                        "alg": "ed25519",
+                        "sig": "ECmdBGwBULwnjsc3UNJYvoZYN8yYbjOUupVl9_IrehQLCxTVxLrHl_XMU91OR8jui20zN18uRsoklq-BUUYSDA"
+                      },
+                      "signer": "d8270188647d1a2453e4b07d468a1fef57eec30ecb34cf54639437e416ddbde5"
+                    },
+                    "timestamp": 1900000100
+                  },
+                  {
+                    "signature": {
+                      "alg": {
+                        "alg": "ed25519",
+                        "sig": "MFYU4-Zp5-Kt7Jh3a4in0rPvRjNAGaQDwzUnQ9lnXaos8cXJgmXHCe2x9USSa9wtke-g99s63X_E1Y88hMf4DA"
+                      },
+                      "signer": "4845ecc67e207f28233c9c2ba96eaae6b588d8aa402893a80f9d6ce199c86a50"
+                    },
+                    "timestamp": 1900000100
+                  }
+                ],
+                "log_signature": {
+                  "alg": {
+                    "alg": "ed25519",
+                    "sig": "E9zBDpouC2ZGzcTQcMIJbExa6GQa1Lt96mZl2Z68CMJwVfY5oV_vNlfEgAkb57OPRXENZnkP1K3gE5ak0S-nAQ"
+                  },
+                  "signer": "9aaa744aaee7d4d7ab5043d1f87cec6032b01c14b0b851c765b253e0816f830c"
+                }
+              },
+              "leaf_index": 2
+            },
+            "state": {
+              "body": {
+                "apps": {},
+                "deployments": [],
+                "freshness_keys": [],
+                "integrity": {
+                  "actions": {},
+                  "artifacts": {},
+                  "cleared": [],
+                  "sources": {}
+                },
+                "issued_at": 1900000000,
+                "pending_window_secs": 3600,
+                "platforms": [
+                  "sim"
+                ],
+                "producers": [
+                  {
+                    "key_id": "0101010101010101010101010101010101010101010101010101010101010101",
+                    "kind": "app_key",
+                    "public_key": "0101010101010101010101010101010101010101010101010101010101010101"
+                  },
+                  {
+                    "key_id": "0202020202020202020202020202020202020202020202020202020202020202",
+                    "kind": "app_key",
+                    "public_key": "0202020202020202020202020202020202020202020202020202020202020202"
+                  }
+                ],
+                "root_version": 1,
+                "telemetry_readers": [],
+                "tenant": "acme",
+                "tenant_key_versions": {
+                  "current": 1,
+                  "oldest_accepted": 1
+                },
+                "version": 2
+              },
+              "signatures": [
+                {
+                  "alg": {
+                    "alg": "ed25519",
+                    "sig": "RxfiCiN-XlkG7fIGIQQlUpc-8yuxJQTu25coYMLh8Hw1EwYapPL_x69z0JdhNk-T8YIK3ISt-E9mINQoaEBHDQ"
+                  },
+                  "signer": "1f5fe64ec2f8c901be3aad94a41d70c12d2f3a8f43755f902e665c96f41c87e3"
+                }
+              ]
+            }
+          }
+        ],
+        "wrap_keys": []
+      },
+      "in_force": 1,
+      "latest": 2,
+      "name": "a widening state waits the window",
+      "now": 1900000200,
+      "pending": [
+        {
+          "change": "widening",
+          "effective_at": 1900003700,
+          "version": 2
+        }
+      ]
+    },
+    {
+      "bundle": {
+        "checkpoint": {
+          "checkpoint": {
+            "origin": "dev.log.seal.zone/v1",
+            "policy": {
+              "min_service_key_version": {},
+              "min_tcb": {}
+            },
+            "root_hash": "LJPAspHTRcxyYzT6eMHEDWnmzkLOV1oHv3BRkesXK1k",
+            "size": 3
+          },
+          "cosignatures": [
+            {
+              "signature": {
+                "alg": {
+                  "alg": "ed25519",
+                  "sig": "Q5528JNlXjdmfkbojqvJodplVFJ5uQuBLMgz23vUivEcowYkvTqjYM6B-CjZmPcsM5UUQ59MoMJTqS62FFWqDw"
+                },
+                "signer": "000e62ba0c6ce93da66eca96821f963dd440ac086073f7bbe6ef91ef90c9d3f6"
+              },
+              "timestamp": 1900003700
+            },
+            {
+              "signature": {
+                "alg": {
+                  "alg": "ed25519",
+                  "sig": "0d0Hh2jX1WTJkZ5LCc8CqpYGrEaCvHFwdQlNLB4Cy13tHt5mKByBZVfYjLjlFB5PYK2odOtkhARGyLsA_nm2Cg"
+                },
+                "signer": "d8270188647d1a2453e4b07d468a1fef57eec30ecb34cf54639437e416ddbde5"
+              },
+              "timestamp": 1900003700
+            },
+            {
+              "signature": {
+                "alg": {
+                  "alg": "ed25519",
+                  "sig": "C29guOUnpSL3ZAPDSgrkn8e4_244RD2bE6Ow0xdnCBEsmErJFT70tUZ0bTKmP9T-uNRaPJkUXAU2BzoYBbmkAw"
+                },
+                "signer": "4845ecc67e207f28233c9c2ba96eaae6b588d8aa402893a80f9d6ce199c86a50"
+              },
+              "timestamp": 1900003700
+            }
+          ],
+          "log_signature": {
+            "alg": {
+              "alg": "ed25519",
+              "sig": "E9zBDpouC2ZGzcTQcMIJbExa6GQa1Lt96mZl2Z68CMJwVfY5oV_vNlfEgAkb57OPRXENZnkP1K3gE5ak0S-nAQ"
+            },
+            "signer": "9aaa744aaee7d4d7ab5043d1f87cec6032b01c14b0b851c765b253e0816f830c"
+          }
+        },
+        "ended_sessions": [],
+        "freshness": [
+          {
+            "body": {
+              "digest": "NZwM7BGfRxwwumymj_qoUuMELHE086VZFu3zFVlSVoc",
+              "signed_at": 1900003700,
+              "tenant": "acme",
+              "version": 2
+            },
+            "signatures": [
+              {
+                "alg": {
+                  "alg": "ed25519",
+                  "sig": "uo3veMR-DgnvNnCxPYTn545PtD5YOsZ_c08nieEcPlQCXWvQ5T2zKRT9v4UxDhkOo6FSN0GpisW6MDkvmAhDBA"
+                },
+                "signer": "9aaa744aaee7d4d7ab5043d1f87cec6032b01c14b0b851c765b253e0816f830c"
+              }
+            ]
+          }
+        ],
+        "root_chain": [
+          {
+            "proof": {
+              "audit_path": [],
+              "checkpoint": {
+                "checkpoint": {
+                  "origin": "dev.log.seal.zone/v1",
+                  "policy": {
+                    "min_service_key_version": {},
+                    "min_tcb": {}
+                  },
+                  "root_hash": "SJNBJt4Y1x5Y6DLecFKWo0RJqop5H95ctQrFqbM8Ki8",
+                  "size": 1
+                },
+                "cosignatures": [
+                  {
+                    "signature": {
+                      "alg": {
+                        "alg": "ed25519",
+                        "sig": "4aPcZzjFkEYJAu0bB_gXFjYipSeRpRrYzao3v13vJEu2ce0L5vmP0YzQNUwgDZx0f7Bp-YeXztLTEkWHE-qMBQ"
+                      },
+                      "signer": "000e62ba0c6ce93da66eca96821f963dd440ac086073f7bbe6ef91ef90c9d3f6"
+                    },
+                    "timestamp": 1899999990
+                  },
+                  {
+                    "signature": {
+                      "alg": {
+                        "alg": "ed25519",
+                        "sig": "wOSjoq2aC1YFszkuDn4JfoP8EmRBO7AVIdeFcno8OM6p-orb_WLt6MWqLZldfKE0Bm5mcfFfZS6ar03dsB1dAA"
+                      },
+                      "signer": "d8270188647d1a2453e4b07d468a1fef57eec30ecb34cf54639437e416ddbde5"
+                    },
+                    "timestamp": 1899999990
+                  },
+                  {
+                    "signature": {
+                      "alg": {
+                        "alg": "ed25519",
+                        "sig": "YYWetAJdBPST8irAnulQsQN-s2DHAWWyEe0A47kHo6BvnrZMikX_HWnkn2B16wEoYJNjMt1Q1z4jKZdrPJuICg"
+                      },
+                      "signer": "4845ecc67e207f28233c9c2ba96eaae6b588d8aa402893a80f9d6ce199c86a50"
+                    },
+                    "timestamp": 1899999990
+                  }
+                ],
+                "log_signature": {
+                  "alg": {
+                    "alg": "ed25519",
+                    "sig": "z8xK0PJwXybSJT-z4aHg-61yIAaTiKPO6BSp9_5b5lC9DkQCpfvM5-Bk5kFoljHUUelcDJjsHJ-pSJ5b8VYJDQ"
+                  },
+                  "signer": "9aaa744aaee7d4d7ab5043d1f87cec6032b01c14b0b851c765b253e0816f830c"
+                }
+              },
+              "leaf_index": 0
+            },
+            "root": {
+              "body": {
+                "admin_keys": [
+                  {
+                    "kind": "ed25519",
+                    "public_key": "43046bfe4092b3e94994eada15dcc20d8aaa07b658fd3954eb8e0efb8bdca5de"
+                  }
+                ],
+                "cosign_releases": false,
+                "tenant": "acme",
+                "threshold": 1,
+                "version": 1
+              },
+              "signatures": [
+                {
+                  "alg": {
+                    "alg": "ed25519",
+                    "sig": "hlmWgyQgCK8io2qSfXu4YSxOLTX7olIP_0_ThPTz___2RMYNz_-B6uxfKA5nCn1jYCTxw25Dtt-bOUBRY1PaAw"
+                  },
+                  "signer": "d7e1e084be213b01e506852af8198b9980b43e03749c67d82dcd0903f4001c77"
+                }
+              ]
+            }
+          }
+        ],
+        "signals": [],
+        "state": {
+          "body": {
+            "apps": {},
+            "deployments": [],
+            "freshness_keys": [],
+            "integrity": {
+              "actions": {},
+              "artifacts": {},
+              "cleared": [],
+              "sources": {}
+            },
+            "issued_at": 1900000000,
+            "pending_window_secs": 3600,
+            "platforms": [
+              "sim"
+            ],
+            "producers": [
+              {
+                "key_id": "0101010101010101010101010101010101010101010101010101010101010101",
+                "kind": "app_key",
+                "public_key": "0101010101010101010101010101010101010101010101010101010101010101"
+              },
+              {
+                "key_id": "0202020202020202020202020202020202020202020202020202020202020202",
+                "kind": "app_key",
+                "public_key": "0202020202020202020202020202020202020202020202020202020202020202"
+              }
+            ],
+            "root_version": 1,
+            "telemetry_readers": [],
+            "tenant": "acme",
+            "tenant_key_versions": {
+              "current": 1,
+              "oldest_accepted": 1
+            },
+            "version": 2
+          },
+          "signatures": [
+            {
+              "alg": {
+                "alg": "ed25519",
+                "sig": "RxfiCiN-XlkG7fIGIQQlUpc-8yuxJQTu25coYMLh8Hw1EwYapPL_x69z0JdhNk-T8YIK3ISt-E9mINQoaEBHDQ"
+              },
+              "signer": "1f5fe64ec2f8c901be3aad94a41d70c12d2f3a8f43755f902e665c96f41c87e3"
+            }
+          ]
+        },
+        "states": [
+          {
+            "proof": {
+              "audit_path": [
+                [
+                  72,
+                  147,
+                  65,
+                  38,
+                  222,
+                  24,
+                  215,
+                  30,
+                  88,
+                  232,
+                  50,
+                  222,
+                  112,
+                  82,
+                  150,
+                  163,
+                  68,
+                  73,
+                  170,
+                  138,
+                  121,
+                  31,
+                  222,
+                  92,
+                  181,
+                  10,
+                  197,
+                  169,
+                  179,
+                  60,
+                  42,
+                  47
+                ]
+              ],
+              "checkpoint": {
+                "checkpoint": {
+                  "origin": "dev.log.seal.zone/v1",
+                  "policy": {
+                    "min_service_key_version": {},
+                    "min_tcb": {}
+                  },
+                  "root_hash": "H9Hl9xtxDyOSS_n2fbEGyclQDQ1Z1DRYB0vOcLdHdNA",
+                  "size": 2
+                },
+                "cosignatures": [
+                  {
+                    "signature": {
+                      "alg": {
+                        "alg": "ed25519",
+                        "sig": "knpFptt2YS0ht7nBqFvgtdKL-A7S8lnz0GsMbCUAs3ZyUi7mRPGDGSvcb0HNc7ZPGpm7zfR4KajnxEmfpJxzBA"
+                      },
+                      "signer": "000e62ba0c6ce93da66eca96821f963dd440ac086073f7bbe6ef91ef90c9d3f6"
+                    },
+                    "timestamp": 1900000000
+                  },
+                  {
+                    "signature": {
+                      "alg": {
+                        "alg": "ed25519",
+                        "sig": "ILmLAiOv3kaIK3tVJ7-jCvlqB2mL1Uz8aMIBs-TdGgiY2pvTmV0L8XZi0Nyi9y3WSUZ9Er-XTeJBdozFTpJgDw"
+                      },
+                      "signer": "d8270188647d1a2453e4b07d468a1fef57eec30ecb34cf54639437e416ddbde5"
+                    },
+                    "timestamp": 1900000000
+                  },
+                  {
+                    "signature": {
+                      "alg": {
+                        "alg": "ed25519",
+                        "sig": "ulI-lISOkLpXOL1j_pbP9l5Shp_zBSrQoAKD1G_BB9WFe4NRAVFPx_Ydn861mU_w6yDJTErwN-n-NMTPJS-rBQ"
+                      },
+                      "signer": "4845ecc67e207f28233c9c2ba96eaae6b588d8aa402893a80f9d6ce199c86a50"
+                    },
+                    "timestamp": 1900000000
+                  }
+                ],
+                "log_signature": {
+                  "alg": {
+                    "alg": "ed25519",
+                    "sig": "Pp98Rp39VtsUYd5ar73OkwnalAlTgyvQdzSpjj7iOHjsjxsbvRRPS9uDhmzaRACV9PWYb9BQY1sOSlECa4rbBg"
+                  },
+                  "signer": "9aaa744aaee7d4d7ab5043d1f87cec6032b01c14b0b851c765b253e0816f830c"
+                }
+              },
+              "leaf_index": 1
+            },
+            "state": {
+              "body": {
+                "apps": {},
+                "deployments": [],
+                "freshness_keys": [],
+                "integrity": {
+                  "actions": {},
+                  "artifacts": {},
+                  "cleared": [],
+                  "sources": {}
+                },
+                "issued_at": 1900000000,
+                "pending_window_secs": 3600,
+                "platforms": [
+                  "sim"
+                ],
+                "producers": [
+                  {
+                    "key_id": "0101010101010101010101010101010101010101010101010101010101010101",
+                    "kind": "app_key",
+                    "public_key": "0101010101010101010101010101010101010101010101010101010101010101"
+                  }
+                ],
+                "root_version": 1,
+                "telemetry_readers": [],
+                "tenant": "acme",
+                "tenant_key_versions": {
+                  "current": 1,
+                  "oldest_accepted": 1
+                },
+                "version": 1
+              },
+              "signatures": [
+                {
+                  "alg": {
+                    "alg": "ed25519",
+                    "sig": "9DcFio6VdHEw0lN_5PxdJpyQ0nzEBnFUUD8P9tQfasyVD3gFNKKp1Z7zPlLJTQPpWzlyQStn5QWlOGBk4XbgDQ"
+                  },
+                  "signer": "1f5fe64ec2f8c901be3aad94a41d70c12d2f3a8f43755f902e665c96f41c87e3"
+                }
+              ]
+            }
+          },
+          {
+            "proof": {
+              "audit_path": [
+                [
+                  31,
+                  209,
+                  229,
+                  247,
+                  27,
+                  113,
+                  15,
+                  35,
+                  146,
+                  75,
+                  249,
+                  246,
+                  125,
+                  177,
+                  6,
+                  201,
+                  201,
+                  80,
+                  13,
+                  13,
+                  89,
+                  212,
+                  52,
+                  88,
+                  7,
+                  75,
+                  206,
+                  112,
+                  183,
+                  71,
+                  116,
+                  208
+                ]
+              ],
+              "checkpoint": {
+                "checkpoint": {
+                  "origin": "dev.log.seal.zone/v1",
+                  "policy": {
+                    "min_service_key_version": {},
+                    "min_tcb": {}
+                  },
+                  "root_hash": "LJPAspHTRcxyYzT6eMHEDWnmzkLOV1oHv3BRkesXK1k",
+                  "size": 3
+                },
+                "cosignatures": [
+                  {
+                    "signature": {
+                      "alg": {
+                        "alg": "ed25519",
+                        "sig": "hCsaEG6iv5rLzEgitmcjSpaE1dJE6mbOHkSsCmFes3K03VulsM4kg66o-SEWGy70s4kD5luHYV6SLolyXcNHBQ"
+                      },
+                      "signer": "000e62ba0c6ce93da66eca96821f963dd440ac086073f7bbe6ef91ef90c9d3f6"
+                    },
+                    "timestamp": 1900000100
+                  },
+                  {
+                    "signature": {
+                      "alg": {
+                        "alg": "ed25519",
+                        "sig": "ECmdBGwBULwnjsc3UNJYvoZYN8yYbjOUupVl9_IrehQLCxTVxLrHl_XMU91OR8jui20zN18uRsoklq-BUUYSDA"
+                      },
+                      "signer": "d8270188647d1a2453e4b07d468a1fef57eec30ecb34cf54639437e416ddbde5"
+                    },
+                    "timestamp": 1900000100
+                  },
+                  {
+                    "signature": {
+                      "alg": {
+                        "alg": "ed25519",
+                        "sig": "MFYU4-Zp5-Kt7Jh3a4in0rPvRjNAGaQDwzUnQ9lnXaos8cXJgmXHCe2x9USSa9wtke-g99s63X_E1Y88hMf4DA"
+                      },
+                      "signer": "4845ecc67e207f28233c9c2ba96eaae6b588d8aa402893a80f9d6ce199c86a50"
+                    },
+                    "timestamp": 1900000100
+                  }
+                ],
+                "log_signature": {
+                  "alg": {
+                    "alg": "ed25519",
+                    "sig": "E9zBDpouC2ZGzcTQcMIJbExa6GQa1Lt96mZl2Z68CMJwVfY5oV_vNlfEgAkb57OPRXENZnkP1K3gE5ak0S-nAQ"
+                  },
+                  "signer": "9aaa744aaee7d4d7ab5043d1f87cec6032b01c14b0b851c765b253e0816f830c"
+                }
+              },
+              "leaf_index": 2
+            },
+            "state": {
+              "body": {
+                "apps": {},
+                "deployments": [],
+                "freshness_keys": [],
+                "integrity": {
+                  "actions": {},
+                  "artifacts": {},
+                  "cleared": [],
+                  "sources": {}
+                },
+                "issued_at": 1900000000,
+                "pending_window_secs": 3600,
+                "platforms": [
+                  "sim"
+                ],
+                "producers": [
+                  {
+                    "key_id": "0101010101010101010101010101010101010101010101010101010101010101",
+                    "kind": "app_key",
+                    "public_key": "0101010101010101010101010101010101010101010101010101010101010101"
+                  },
+                  {
+                    "key_id": "0202020202020202020202020202020202020202020202020202020202020202",
+                    "kind": "app_key",
+                    "public_key": "0202020202020202020202020202020202020202020202020202020202020202"
+                  }
+                ],
+                "root_version": 1,
+                "telemetry_readers": [],
+                "tenant": "acme",
+                "tenant_key_versions": {
+                  "current": 1,
+                  "oldest_accepted": 1
+                },
+                "version": 2
+              },
+              "signatures": [
+                {
+                  "alg": {
+                    "alg": "ed25519",
+                    "sig": "RxfiCiN-XlkG7fIGIQQlUpc-8yuxJQTu25coYMLh8Hw1EwYapPL_x69z0JdhNk-T8YIK3ISt-E9mINQoaEBHDQ"
+                  },
+                  "signer": "1f5fe64ec2f8c901be3aad94a41d70c12d2f3a8f43755f902e665c96f41c87e3"
+                }
+              ]
+            }
+          }
+        ],
+        "wrap_keys": []
+      },
+      "in_force": 2,
+      "latest": 2,
+      "name": "once public for the window it is in force",
+      "now": 1900003700,
+      "pending": []
+    },
+    {
+      "bundle": {
+        "checkpoint": {
+          "checkpoint": {
+            "origin": "dev.log.seal.zone/v1",
+            "policy": {
+              "min_service_key_version": {},
+              "min_tcb": {}
+            },
+            "root_hash": "5TFN8FpthTbWe-IF_RdgGP6vqedpw5EAcZffcqQsetY",
+            "size": 4
+          },
+          "cosignatures": [
+            {
+              "signature": {
+                "alg": {
+                  "alg": "ed25519",
+                  "sig": "cavuxza4A7D9OyI3T_9ngnVFzXV2zVOLEv9uGomvA_hA5XT44iPamX4ISaUb7nR9uizLOEqEMOXRzIgRfrhlCg"
+                },
+                "signer": "000e62ba0c6ce93da66eca96821f963dd440ac086073f7bbe6ef91ef90c9d3f6"
+              },
+              "timestamp": 1900007300
+            },
+            {
+              "signature": {
+                "alg": {
+                  "alg": "ed25519",
+                  "sig": "5jSIGDsynDr_Y_cwNZgwYBPR-hNdldK0gp6ZzJRGaUQVBM6mnyMaOEgp7SQ-inIK5So3OuahAlPilbt20OuYCQ"
+                },
+                "signer": "d8270188647d1a2453e4b07d468a1fef57eec30ecb34cf54639437e416ddbde5"
+              },
+              "timestamp": 1900007300
+            },
+            {
+              "signature": {
+                "alg": {
+                  "alg": "ed25519",
+                  "sig": "CZfzQqLeslVyUSzyzvrdCdv9wsczQIWgG0v1lEXvuxHtU80Hd_SDJKsVDMojcXQYa8trAIwsBpeMSJ9UkuI-Bg"
+                },
+                "signer": "4845ecc67e207f28233c9c2ba96eaae6b588d8aa402893a80f9d6ce199c86a50"
+              },
+              "timestamp": 1900007300
+            }
+          ],
+          "log_signature": {
+            "alg": {
+              "alg": "ed25519",
+              "sig": "lZ2rw-ElKkz0HdN6s15_OExQrAp9YlFnlogf0VUXrZ6EDeWCx_sTBHIio5g7AckptIeiFgYwPQrmYDsAiwDuBg"
+            },
+            "signer": "9aaa744aaee7d4d7ab5043d1f87cec6032b01c14b0b851c765b253e0816f830c"
+          }
+        },
+        "ended_sessions": [],
+        "freshness": [
+          {
+            "body": {
+              "digest": "gD_cOennF-0EPlGSua_-8NvIVTpenFeQBuiy49R_Jgk",
+              "signed_at": 1900007300,
+              "tenant": "acme",
+              "version": 3
+            },
+            "signatures": [
+              {
+                "alg": {
+                  "alg": "ed25519",
+                  "sig": "SdrAVa9Q3bjlFPRxxK6Wz1dQIA2HX7iLBq_9Y_Bd6NDBDzU54ihmUyxBQ9BzuBH9qzZ1DRIntjRSbbmyRDtuBg"
+                },
+                "signer": "9aaa744aaee7d4d7ab5043d1f87cec6032b01c14b0b851c765b253e0816f830c"
+              }
+            ]
+          }
+        ],
+        "root_chain": [
+          {
+            "proof": {
+              "audit_path": [],
+              "checkpoint": {
+                "checkpoint": {
+                  "origin": "dev.log.seal.zone/v1",
+                  "policy": {
+                    "min_service_key_version": {},
+                    "min_tcb": {}
+                  },
+                  "root_hash": "SJNBJt4Y1x5Y6DLecFKWo0RJqop5H95ctQrFqbM8Ki8",
+                  "size": 1
+                },
+                "cosignatures": [
+                  {
+                    "signature": {
+                      "alg": {
+                        "alg": "ed25519",
+                        "sig": "4aPcZzjFkEYJAu0bB_gXFjYipSeRpRrYzao3v13vJEu2ce0L5vmP0YzQNUwgDZx0f7Bp-YeXztLTEkWHE-qMBQ"
+                      },
+                      "signer": "000e62ba0c6ce93da66eca96821f963dd440ac086073f7bbe6ef91ef90c9d3f6"
+                    },
+                    "timestamp": 1899999990
+                  },
+                  {
+                    "signature": {
+                      "alg": {
+                        "alg": "ed25519",
+                        "sig": "wOSjoq2aC1YFszkuDn4JfoP8EmRBO7AVIdeFcno8OM6p-orb_WLt6MWqLZldfKE0Bm5mcfFfZS6ar03dsB1dAA"
+                      },
+                      "signer": "d8270188647d1a2453e4b07d468a1fef57eec30ecb34cf54639437e416ddbde5"
+                    },
+                    "timestamp": 1899999990
+                  },
+                  {
+                    "signature": {
+                      "alg": {
+                        "alg": "ed25519",
+                        "sig": "YYWetAJdBPST8irAnulQsQN-s2DHAWWyEe0A47kHo6BvnrZMikX_HWnkn2B16wEoYJNjMt1Q1z4jKZdrPJuICg"
+                      },
+                      "signer": "4845ecc67e207f28233c9c2ba96eaae6b588d8aa402893a80f9d6ce199c86a50"
+                    },
+                    "timestamp": 1899999990
+                  }
+                ],
+                "log_signature": {
+                  "alg": {
+                    "alg": "ed25519",
+                    "sig": "z8xK0PJwXybSJT-z4aHg-61yIAaTiKPO6BSp9_5b5lC9DkQCpfvM5-Bk5kFoljHUUelcDJjsHJ-pSJ5b8VYJDQ"
+                  },
+                  "signer": "9aaa744aaee7d4d7ab5043d1f87cec6032b01c14b0b851c765b253e0816f830c"
+                }
+              },
+              "leaf_index": 0
+            },
+            "root": {
+              "body": {
+                "admin_keys": [
+                  {
+                    "kind": "ed25519",
+                    "public_key": "43046bfe4092b3e94994eada15dcc20d8aaa07b658fd3954eb8e0efb8bdca5de"
+                  }
+                ],
+                "cosign_releases": false,
+                "tenant": "acme",
+                "threshold": 1,
+                "version": 1
+              },
+              "signatures": [
+                {
+                  "alg": {
+                    "alg": "ed25519",
+                    "sig": "hlmWgyQgCK8io2qSfXu4YSxOLTX7olIP_0_ThPTz___2RMYNz_-B6uxfKA5nCn1jYCTxw25Dtt-bOUBRY1PaAw"
+                  },
+                  "signer": "d7e1e084be213b01e506852af8198b9980b43e03749c67d82dcd0903f4001c77"
+                }
+              ]
+            }
+          }
+        ],
+        "signals": [],
+        "state": {
+          "body": {
+            "apps": {},
+            "deployments": [],
+            "freshness_keys": [],
+            "integrity": {
+              "actions": {},
+              "artifacts": {},
+              "cleared": [],
+              "sources": {}
+            },
+            "issued_at": 1900000000,
+            "pending_window_secs": 3600,
+            "platforms": [
+              "sim"
+            ],
+            "producers": [
+              {
+                "key_id": "0101010101010101010101010101010101010101010101010101010101010101",
+                "kind": "app_key",
+                "public_key": "0101010101010101010101010101010101010101010101010101010101010101"
+              }
+            ],
+            "root_version": 1,
+            "telemetry_readers": [],
+            "tenant": "acme",
+            "tenant_key_versions": {
+              "current": 1,
+              "oldest_accepted": 1
+            },
+            "version": 3
+          },
+          "signatures": [
+            {
+              "alg": {
+                "alg": "ed25519",
+                "sig": "SJn7jR0fKMV3prtxlBQ0xawezL7HyRxRy0kEyqGqtTs7qPuRgZt3gcP09cbSUYvHy7gVyeg7YJ5M1PLBGmBKCg"
+              },
+              "signer": "1f5fe64ec2f8c901be3aad94a41d70c12d2f3a8f43755f902e665c96f41c87e3"
+            }
+          ]
+        },
+        "states": [
+          {
+            "proof": {
+              "audit_path": [
+                [
+                  72,
+                  147,
+                  65,
+                  38,
+                  222,
+                  24,
+                  215,
+                  30,
+                  88,
+                  232,
+                  50,
+                  222,
+                  112,
+                  82,
+                  150,
+                  163,
+                  68,
+                  73,
+                  170,
+                  138,
+                  121,
+                  31,
+                  222,
+                  92,
+                  181,
+                  10,
+                  197,
+                  169,
+                  179,
+                  60,
+                  42,
+                  47
+                ]
+              ],
+              "checkpoint": {
+                "checkpoint": {
+                  "origin": "dev.log.seal.zone/v1",
+                  "policy": {
+                    "min_service_key_version": {},
+                    "min_tcb": {}
+                  },
+                  "root_hash": "H9Hl9xtxDyOSS_n2fbEGyclQDQ1Z1DRYB0vOcLdHdNA",
+                  "size": 2
+                },
+                "cosignatures": [
+                  {
+                    "signature": {
+                      "alg": {
+                        "alg": "ed25519",
+                        "sig": "knpFptt2YS0ht7nBqFvgtdKL-A7S8lnz0GsMbCUAs3ZyUi7mRPGDGSvcb0HNc7ZPGpm7zfR4KajnxEmfpJxzBA"
+                      },
+                      "signer": "000e62ba0c6ce93da66eca96821f963dd440ac086073f7bbe6ef91ef90c9d3f6"
+                    },
+                    "timestamp": 1900000000
+                  },
+                  {
+                    "signature": {
+                      "alg": {
+                        "alg": "ed25519",
+                        "sig": "ILmLAiOv3kaIK3tVJ7-jCvlqB2mL1Uz8aMIBs-TdGgiY2pvTmV0L8XZi0Nyi9y3WSUZ9Er-XTeJBdozFTpJgDw"
+                      },
+                      "signer": "d8270188647d1a2453e4b07d468a1fef57eec30ecb34cf54639437e416ddbde5"
+                    },
+                    "timestamp": 1900000000
+                  },
+                  {
+                    "signature": {
+                      "alg": {
+                        "alg": "ed25519",
+                        "sig": "ulI-lISOkLpXOL1j_pbP9l5Shp_zBSrQoAKD1G_BB9WFe4NRAVFPx_Ydn861mU_w6yDJTErwN-n-NMTPJS-rBQ"
+                      },
+                      "signer": "4845ecc67e207f28233c9c2ba96eaae6b588d8aa402893a80f9d6ce199c86a50"
+                    },
+                    "timestamp": 1900000000
+                  }
+                ],
+                "log_signature": {
+                  "alg": {
+                    "alg": "ed25519",
+                    "sig": "Pp98Rp39VtsUYd5ar73OkwnalAlTgyvQdzSpjj7iOHjsjxsbvRRPS9uDhmzaRACV9PWYb9BQY1sOSlECa4rbBg"
+                  },
+                  "signer": "9aaa744aaee7d4d7ab5043d1f87cec6032b01c14b0b851c765b253e0816f830c"
+                }
+              },
+              "leaf_index": 1
+            },
+            "state": {
+              "body": {
+                "apps": {},
+                "deployments": [],
+                "freshness_keys": [],
+                "integrity": {
+                  "actions": {},
+                  "artifacts": {},
+                  "cleared": [],
+                  "sources": {}
+                },
+                "issued_at": 1900000000,
+                "pending_window_secs": 3600,
+                "platforms": [
+                  "sim"
+                ],
+                "producers": [
+                  {
+                    "key_id": "0101010101010101010101010101010101010101010101010101010101010101",
+                    "kind": "app_key",
+                    "public_key": "0101010101010101010101010101010101010101010101010101010101010101"
+                  }
+                ],
+                "root_version": 1,
+                "telemetry_readers": [],
+                "tenant": "acme",
+                "tenant_key_versions": {
+                  "current": 1,
+                  "oldest_accepted": 1
+                },
+                "version": 1
+              },
+              "signatures": [
+                {
+                  "alg": {
+                    "alg": "ed25519",
+                    "sig": "9DcFio6VdHEw0lN_5PxdJpyQ0nzEBnFUUD8P9tQfasyVD3gFNKKp1Z7zPlLJTQPpWzlyQStn5QWlOGBk4XbgDQ"
+                  },
+                  "signer": "1f5fe64ec2f8c901be3aad94a41d70c12d2f3a8f43755f902e665c96f41c87e3"
+                }
+              ]
+            }
+          },
+          {
+            "proof": {
+              "audit_path": [
+                [
+                  31,
+                  209,
+                  229,
+                  247,
+                  27,
+                  113,
+                  15,
+                  35,
+                  146,
+                  75,
+                  249,
+                  246,
+                  125,
+                  177,
+                  6,
+                  201,
+                  201,
+                  80,
+                  13,
+                  13,
+                  89,
+                  212,
+                  52,
+                  88,
+                  7,
+                  75,
+                  206,
+                  112,
+                  183,
+                  71,
+                  116,
+                  208
+                ]
+              ],
+              "checkpoint": {
+                "checkpoint": {
+                  "origin": "dev.log.seal.zone/v1",
+                  "policy": {
+                    "min_service_key_version": {},
+                    "min_tcb": {}
+                  },
+                  "root_hash": "LJPAspHTRcxyYzT6eMHEDWnmzkLOV1oHv3BRkesXK1k",
+                  "size": 3
+                },
+                "cosignatures": [
+                  {
+                    "signature": {
+                      "alg": {
+                        "alg": "ed25519",
+                        "sig": "hCsaEG6iv5rLzEgitmcjSpaE1dJE6mbOHkSsCmFes3K03VulsM4kg66o-SEWGy70s4kD5luHYV6SLolyXcNHBQ"
+                      },
+                      "signer": "000e62ba0c6ce93da66eca96821f963dd440ac086073f7bbe6ef91ef90c9d3f6"
+                    },
+                    "timestamp": 1900000100
+                  },
+                  {
+                    "signature": {
+                      "alg": {
+                        "alg": "ed25519",
+                        "sig": "ECmdBGwBULwnjsc3UNJYvoZYN8yYbjOUupVl9_IrehQLCxTVxLrHl_XMU91OR8jui20zN18uRsoklq-BUUYSDA"
+                      },
+                      "signer": "d8270188647d1a2453e4b07d468a1fef57eec30ecb34cf54639437e416ddbde5"
+                    },
+                    "timestamp": 1900000100
+                  },
+                  {
+                    "signature": {
+                      "alg": {
+                        "alg": "ed25519",
+                        "sig": "MFYU4-Zp5-Kt7Jh3a4in0rPvRjNAGaQDwzUnQ9lnXaos8cXJgmXHCe2x9USSa9wtke-g99s63X_E1Y88hMf4DA"
+                      },
+                      "signer": "4845ecc67e207f28233c9c2ba96eaae6b588d8aa402893a80f9d6ce199c86a50"
+                    },
+                    "timestamp": 1900000100
+                  }
+                ],
+                "log_signature": {
+                  "alg": {
+                    "alg": "ed25519",
+                    "sig": "E9zBDpouC2ZGzcTQcMIJbExa6GQa1Lt96mZl2Z68CMJwVfY5oV_vNlfEgAkb57OPRXENZnkP1K3gE5ak0S-nAQ"
+                  },
+                  "signer": "9aaa744aaee7d4d7ab5043d1f87cec6032b01c14b0b851c765b253e0816f830c"
+                }
+              },
+              "leaf_index": 2
+            },
+            "state": {
+              "body": {
+                "apps": {},
+                "deployments": [],
+                "freshness_keys": [],
+                "integrity": {
+                  "actions": {},
+                  "artifacts": {},
+                  "cleared": [],
+                  "sources": {}
+                },
+                "issued_at": 1900000000,
+                "pending_window_secs": 3600,
+                "platforms": [
+                  "sim"
+                ],
+                "producers": [
+                  {
+                    "key_id": "0101010101010101010101010101010101010101010101010101010101010101",
+                    "kind": "app_key",
+                    "public_key": "0101010101010101010101010101010101010101010101010101010101010101"
+                  },
+                  {
+                    "key_id": "0202020202020202020202020202020202020202020202020202020202020202",
+                    "kind": "app_key",
+                    "public_key": "0202020202020202020202020202020202020202020202020202020202020202"
+                  }
+                ],
+                "root_version": 1,
+                "telemetry_readers": [],
+                "tenant": "acme",
+                "tenant_key_versions": {
+                  "current": 1,
+                  "oldest_accepted": 1
+                },
+                "version": 2
+              },
+              "signatures": [
+                {
+                  "alg": {
+                    "alg": "ed25519",
+                    "sig": "RxfiCiN-XlkG7fIGIQQlUpc-8yuxJQTu25coYMLh8Hw1EwYapPL_x69z0JdhNk-T8YIK3ISt-E9mINQoaEBHDQ"
+                  },
+                  "signer": "1f5fe64ec2f8c901be3aad94a41d70c12d2f3a8f43755f902e665c96f41c87e3"
+                }
+              ]
+            }
+          },
+          {
+            "proof": {
+              "audit_path": [
+                [
+                  193,
+                  132,
+                  192,
+                  3,
+                  155,
+                  172,
+                  89,
+                  53,
+                  138,
+                  40,
+                  180,
+                  132,
+                  85,
+                  175,
+                  244,
+                  78,
+                  154,
+                  44,
+                  177,
+                  210,
+                  95,
+                  102,
+                  95,
+                  193,
+                  113,
+                  15,
+                  8,
+                  164,
+                  76,
+                  187,
+                  74,
+                  246
+                ],
+                [
+                  31,
+                  209,
+                  229,
+                  247,
+                  27,
+                  113,
+                  15,
+                  35,
+                  146,
+                  75,
+                  249,
+                  246,
+                  125,
+                  177,
+                  6,
+                  201,
+                  201,
+                  80,
+                  13,
+                  13,
+                  89,
+                  212,
+                  52,
+                  88,
+                  7,
+                  75,
+                  206,
+                  112,
+                  183,
+                  71,
+                  116,
+                  208
+                ]
+              ],
+              "checkpoint": {
+                "checkpoint": {
+                  "origin": "dev.log.seal.zone/v1",
+                  "policy": {
+                    "min_service_key_version": {},
+                    "min_tcb": {}
+                  },
+                  "root_hash": "5TFN8FpthTbWe-IF_RdgGP6vqedpw5EAcZffcqQsetY",
+                  "size": 4
+                },
+                "cosignatures": [
+                  {
+                    "signature": {
+                      "alg": {
+                        "alg": "ed25519",
+                        "sig": "2pyjfrEqyvk5U9IsaLvTKwOQtBdYntzm9b0UAlS6bvDZHXlFNlEqIJd9qCs7tXRs-FmRvvhg5TzKyeSEdX_zCw"
+                      },
+                      "signer": "000e62ba0c6ce93da66eca96821f963dd440ac086073f7bbe6ef91ef90c9d3f6"
+                    },
+                    "timestamp": 1900000300
+                  },
+                  {
+                    "signature": {
+                      "alg": {
+                        "alg": "ed25519",
+                        "sig": "mizfctITFk16mfHy_6QzI_qAMoYydoEYdSgkrWNDRo5mGNjfbUPpXJ2fpltqUOHj2wSKDf08PWhaeCixykqrBQ"
+                      },
+                      "signer": "d8270188647d1a2453e4b07d468a1fef57eec30ecb34cf54639437e416ddbde5"
+                    },
+                    "timestamp": 1900000300
+                  },
+                  {
+                    "signature": {
+                      "alg": {
+                        "alg": "ed25519",
+                        "sig": "S-M1HQ9MZIAU_E8aIJjfC_TObi_Xop9yTzF6VLigyd_I8BtDefS7NK1T9-_8oLc9zjr-Qxe0EBT-N8W1Q-b7Cg"
+                      },
+                      "signer": "4845ecc67e207f28233c9c2ba96eaae6b588d8aa402893a80f9d6ce199c86a50"
+                    },
+                    "timestamp": 1900000300
+                  }
+                ],
+                "log_signature": {
+                  "alg": {
+                    "alg": "ed25519",
+                    "sig": "lZ2rw-ElKkz0HdN6s15_OExQrAp9YlFnlogf0VUXrZ6EDeWCx_sTBHIio5g7AckptIeiFgYwPQrmYDsAiwDuBg"
+                  },
+                  "signer": "9aaa744aaee7d4d7ab5043d1f87cec6032b01c14b0b851c765b253e0816f830c"
+                }
+              },
+              "leaf_index": 3
+            },
+            "state": {
+              "body": {
+                "apps": {},
+                "deployments": [],
+                "freshness_keys": [],
+                "integrity": {
+                  "actions": {},
+                  "artifacts": {},
+                  "cleared": [],
+                  "sources": {}
+                },
+                "issued_at": 1900000000,
+                "pending_window_secs": 3600,
+                "platforms": [
+                  "sim"
+                ],
+                "producers": [
+                  {
+                    "key_id": "0101010101010101010101010101010101010101010101010101010101010101",
+                    "kind": "app_key",
+                    "public_key": "0101010101010101010101010101010101010101010101010101010101010101"
+                  }
+                ],
+                "root_version": 1,
+                "telemetry_readers": [],
+                "tenant": "acme",
+                "tenant_key_versions": {
+                  "current": 1,
+                  "oldest_accepted": 1
+                },
+                "version": 3
+              },
+              "signatures": [
+                {
+                  "alg": {
+                    "alg": "ed25519",
+                    "sig": "SJn7jR0fKMV3prtxlBQ0xawezL7HyRxRy0kEyqGqtTs7qPuRgZt3gcP09cbSUYvHy7gVyeg7YJ5M1PLBGmBKCg"
+                  },
+                  "signer": "1f5fe64ec2f8c901be3aad94a41d70c12d2f3a8f43755f902e665c96f41c87e3"
+                }
+              ]
+            }
+          }
+        ],
+        "wrap_keys": []
+      },
+      "in_force": 3,
+      "latest": 3,
+      "name": "a newer state built on the one in force cancels it",
+      "now": 1900007300,
+      "pending": []
+    },
+    {
+      "bundle": {
+        "anchors": [
+          {
+            "body": {
+              "at": 1900007300,
+              "digest": "gD_cOennF-0EPlGSua_-8NvIVTpenFeQBuiy49R_Jgk",
+              "platform": "sim",
+              "root_id": "c749d4775093a1ac6d6b2d3c85e731aa3787b9385624e6d68940b898860d825a",
+              "since": 1900000300,
+              "tenant": "acme",
+              "version": 3
+            },
+            "signatures": [
+              {
+                "alg": {
+                  "alg": "ed25519",
+                  "sig": "dtGm5781Pzt_BbcfqssWJThn0AO-k5B8sbrmXHW7_KqcaEvpJ9QxCma-y7Dvnr9xaep93noKx6lpcEXBeRLQAQ"
+                },
+                "signer": "9fa6cc6aa6f261034de0216459c23641e0a189775d6ea6f00b33ebe6a8a66998"
+              }
+            ]
+          }
+        ],
+        "checkpoint": {
+          "checkpoint": {
+            "origin": "dev.log.seal.zone/v1",
+            "policy": {
+              "min_service_key_version": {},
+              "min_tcb": {}
+            },
+            "root_hash": "5TFN8FpthTbWe-IF_RdgGP6vqedpw5EAcZffcqQsetY",
+            "size": 4
+          },
+          "cosignatures": [
+            {
+              "signature": {
+                "alg": {
+                  "alg": "ed25519",
+                  "sig": "cavuxza4A7D9OyI3T_9ngnVFzXV2zVOLEv9uGomvA_hA5XT44iPamX4ISaUb7nR9uizLOEqEMOXRzIgRfrhlCg"
+                },
+                "signer": "000e62ba0c6ce93da66eca96821f963dd440ac086073f7bbe6ef91ef90c9d3f6"
+              },
+              "timestamp": 1900007300
+            },
+            {
+              "signature": {
+                "alg": {
+                  "alg": "ed25519",
+                  "sig": "5jSIGDsynDr_Y_cwNZgwYBPR-hNdldK0gp6ZzJRGaUQVBM6mnyMaOEgp7SQ-inIK5So3OuahAlPilbt20OuYCQ"
+                },
+                "signer": "d8270188647d1a2453e4b07d468a1fef57eec30ecb34cf54639437e416ddbde5"
+              },
+              "timestamp": 1900007300
+            },
+            {
+              "signature": {
+                "alg": {
+                  "alg": "ed25519",
+                  "sig": "CZfzQqLeslVyUSzyzvrdCdv9wsczQIWgG0v1lEXvuxHtU80Hd_SDJKsVDMojcXQYa8trAIwsBpeMSJ9UkuI-Bg"
+                },
+                "signer": "4845ecc67e207f28233c9c2ba96eaae6b588d8aa402893a80f9d6ce199c86a50"
+              },
+              "timestamp": 1900007300
+            }
+          ],
+          "log_signature": {
+            "alg": {
+              "alg": "ed25519",
+              "sig": "lZ2rw-ElKkz0HdN6s15_OExQrAp9YlFnlogf0VUXrZ6EDeWCx_sTBHIio5g7AckptIeiFgYwPQrmYDsAiwDuBg"
+            },
+            "signer": "9aaa744aaee7d4d7ab5043d1f87cec6032b01c14b0b851c765b253e0816f830c"
+          }
+        },
+        "ended_sessions": [],
+        "freshness": [
+          {
+            "body": {
+              "digest": "gD_cOennF-0EPlGSua_-8NvIVTpenFeQBuiy49R_Jgk",
+              "signed_at": 1900007300,
+              "tenant": "acme",
+              "version": 3
+            },
+            "signatures": [
+              {
+                "alg": {
+                  "alg": "ed25519",
+                  "sig": "SdrAVa9Q3bjlFPRxxK6Wz1dQIA2HX7iLBq_9Y_Bd6NDBDzU54ihmUyxBQ9BzuBH9qzZ1DRIntjRSbbmyRDtuBg"
+                },
+                "signer": "9aaa744aaee7d4d7ab5043d1f87cec6032b01c14b0b851c765b253e0816f830c"
+              }
+            ]
+          }
+        ],
+        "root_chain": [
+          {
+            "proof": {
+              "audit_path": [],
+              "checkpoint": {
+                "checkpoint": {
+                  "origin": "dev.log.seal.zone/v1",
+                  "policy": {
+                    "min_service_key_version": {},
+                    "min_tcb": {}
+                  },
+                  "root_hash": "SJNBJt4Y1x5Y6DLecFKWo0RJqop5H95ctQrFqbM8Ki8",
+                  "size": 1
+                },
+                "cosignatures": [
+                  {
+                    "signature": {
+                      "alg": {
+                        "alg": "ed25519",
+                        "sig": "4aPcZzjFkEYJAu0bB_gXFjYipSeRpRrYzao3v13vJEu2ce0L5vmP0YzQNUwgDZx0f7Bp-YeXztLTEkWHE-qMBQ"
+                      },
+                      "signer": "000e62ba0c6ce93da66eca96821f963dd440ac086073f7bbe6ef91ef90c9d3f6"
+                    },
+                    "timestamp": 1899999990
+                  },
+                  {
+                    "signature": {
+                      "alg": {
+                        "alg": "ed25519",
+                        "sig": "wOSjoq2aC1YFszkuDn4JfoP8EmRBO7AVIdeFcno8OM6p-orb_WLt6MWqLZldfKE0Bm5mcfFfZS6ar03dsB1dAA"
+                      },
+                      "signer": "d8270188647d1a2453e4b07d468a1fef57eec30ecb34cf54639437e416ddbde5"
+                    },
+                    "timestamp": 1899999990
+                  },
+                  {
+                    "signature": {
+                      "alg": {
+                        "alg": "ed25519",
+                        "sig": "YYWetAJdBPST8irAnulQsQN-s2DHAWWyEe0A47kHo6BvnrZMikX_HWnkn2B16wEoYJNjMt1Q1z4jKZdrPJuICg"
+                      },
+                      "signer": "4845ecc67e207f28233c9c2ba96eaae6b588d8aa402893a80f9d6ce199c86a50"
+                    },
+                    "timestamp": 1899999990
+                  }
+                ],
+                "log_signature": {
+                  "alg": {
+                    "alg": "ed25519",
+                    "sig": "z8xK0PJwXybSJT-z4aHg-61yIAaTiKPO6BSp9_5b5lC9DkQCpfvM5-Bk5kFoljHUUelcDJjsHJ-pSJ5b8VYJDQ"
+                  },
+                  "signer": "9aaa744aaee7d4d7ab5043d1f87cec6032b01c14b0b851c765b253e0816f830c"
+                }
+              },
+              "leaf_index": 0
+            },
+            "root": {
+              "body": {
+                "admin_keys": [
+                  {
+                    "kind": "ed25519",
+                    "public_key": "43046bfe4092b3e94994eada15dcc20d8aaa07b658fd3954eb8e0efb8bdca5de"
+                  }
+                ],
+                "cosign_releases": false,
+                "tenant": "acme",
+                "threshold": 1,
+                "version": 1
+              },
+              "signatures": [
+                {
+                  "alg": {
+                    "alg": "ed25519",
+                    "sig": "hlmWgyQgCK8io2qSfXu4YSxOLTX7olIP_0_ThPTz___2RMYNz_-B6uxfKA5nCn1jYCTxw25Dtt-bOUBRY1PaAw"
+                  },
+                  "signer": "d7e1e084be213b01e506852af8198b9980b43e03749c67d82dcd0903f4001c77"
+                }
+              ]
+            }
+          }
+        ],
+        "signals": [],
+        "state": {
+          "body": {
+            "apps": {},
+            "deployments": [],
+            "freshness_keys": [],
+            "integrity": {
+              "actions": {},
+              "artifacts": {},
+              "cleared": [],
+              "sources": {}
+            },
+            "issued_at": 1900000000,
+            "pending_window_secs": 3600,
+            "platforms": [
+              "sim"
+            ],
+            "producers": [
+              {
+                "key_id": "0101010101010101010101010101010101010101010101010101010101010101",
+                "kind": "app_key",
+                "public_key": "0101010101010101010101010101010101010101010101010101010101010101"
+              }
+            ],
+            "root_version": 1,
+            "telemetry_readers": [],
+            "tenant": "acme",
+            "tenant_key_versions": {
+              "current": 1,
+              "oldest_accepted": 1
+            },
+            "version": 3
+          },
+          "signatures": [
+            {
+              "alg": {
+                "alg": "ed25519",
+                "sig": "SJn7jR0fKMV3prtxlBQ0xawezL7HyRxRy0kEyqGqtTs7qPuRgZt3gcP09cbSUYvHy7gVyeg7YJ5M1PLBGmBKCg"
+              },
+              "signer": "1f5fe64ec2f8c901be3aad94a41d70c12d2f3a8f43755f902e665c96f41c87e3"
+            }
+          ]
+        },
+        "states": [
+          {
+            "proof": {
+              "audit_path": [
+                [
+                  193,
+                  132,
+                  192,
+                  3,
+                  155,
+                  172,
+                  89,
+                  53,
+                  138,
+                  40,
+                  180,
+                  132,
+                  85,
+                  175,
+                  244,
+                  78,
+                  154,
+                  44,
+                  177,
+                  210,
+                  95,
+                  102,
+                  95,
+                  193,
+                  113,
+                  15,
+                  8,
+                  164,
+                  76,
+                  187,
+                  74,
+                  246
+                ],
+                [
+                  31,
+                  209,
+                  229,
+                  247,
+                  27,
+                  113,
+                  15,
+                  35,
+                  146,
+                  75,
+                  249,
+                  246,
+                  125,
+                  177,
+                  6,
+                  201,
+                  201,
+                  80,
+                  13,
+                  13,
+                  89,
+                  212,
+                  52,
+                  88,
+                  7,
+                  75,
+                  206,
+                  112,
+                  183,
+                  71,
+                  116,
+                  208
+                ]
+              ],
+              "checkpoint": {
+                "checkpoint": {
+                  "origin": "dev.log.seal.zone/v1",
+                  "policy": {
+                    "min_service_key_version": {},
+                    "min_tcb": {}
+                  },
+                  "root_hash": "5TFN8FpthTbWe-IF_RdgGP6vqedpw5EAcZffcqQsetY",
+                  "size": 4
+                },
+                "cosignatures": [
+                  {
+                    "signature": {
+                      "alg": {
+                        "alg": "ed25519",
+                        "sig": "2pyjfrEqyvk5U9IsaLvTKwOQtBdYntzm9b0UAlS6bvDZHXlFNlEqIJd9qCs7tXRs-FmRvvhg5TzKyeSEdX_zCw"
+                      },
+                      "signer": "000e62ba0c6ce93da66eca96821f963dd440ac086073f7bbe6ef91ef90c9d3f6"
+                    },
+                    "timestamp": 1900000300
+                  },
+                  {
+                    "signature": {
+                      "alg": {
+                        "alg": "ed25519",
+                        "sig": "mizfctITFk16mfHy_6QzI_qAMoYydoEYdSgkrWNDRo5mGNjfbUPpXJ2fpltqUOHj2wSKDf08PWhaeCixykqrBQ"
+                      },
+                      "signer": "d8270188647d1a2453e4b07d468a1fef57eec30ecb34cf54639437e416ddbde5"
+                    },
+                    "timestamp": 1900000300
+                  },
+                  {
+                    "signature": {
+                      "alg": {
+                        "alg": "ed25519",
+                        "sig": "S-M1HQ9MZIAU_E8aIJjfC_TObi_Xop9yTzF6VLigyd_I8BtDefS7NK1T9-_8oLc9zjr-Qxe0EBT-N8W1Q-b7Cg"
+                      },
+                      "signer": "4845ecc67e207f28233c9c2ba96eaae6b588d8aa402893a80f9d6ce199c86a50"
+                    },
+                    "timestamp": 1900000300
+                  }
+                ],
+                "log_signature": {
+                  "alg": {
+                    "alg": "ed25519",
+                    "sig": "lZ2rw-ElKkz0HdN6s15_OExQrAp9YlFnlogf0VUXrZ6EDeWCx_sTBHIio5g7AckptIeiFgYwPQrmYDsAiwDuBg"
+                  },
+                  "signer": "9aaa744aaee7d4d7ab5043d1f87cec6032b01c14b0b851c765b253e0816f830c"
+                }
+              },
+              "leaf_index": 3
+            },
+            "state": {
+              "body": {
+                "apps": {},
+                "deployments": [],
+                "freshness_keys": [],
+                "integrity": {
+                  "actions": {},
+                  "artifacts": {},
+                  "cleared": [],
+                  "sources": {}
+                },
+                "issued_at": 1900000000,
+                "pending_window_secs": 3600,
+                "platforms": [
+                  "sim"
+                ],
+                "producers": [
+                  {
+                    "key_id": "0101010101010101010101010101010101010101010101010101010101010101",
+                    "kind": "app_key",
+                    "public_key": "0101010101010101010101010101010101010101010101010101010101010101"
+                  }
+                ],
+                "root_version": 1,
+                "telemetry_readers": [],
+                "tenant": "acme",
+                "tenant_key_versions": {
+                  "current": 1,
+                  "oldest_accepted": 1
+                },
+                "version": 3
+              },
+              "signatures": [
+                {
+                  "alg": {
+                    "alg": "ed25519",
+                    "sig": "SJn7jR0fKMV3prtxlBQ0xawezL7HyRxRy0kEyqGqtTs7qPuRgZt3gcP09cbSUYvHy7gVyeg7YJ5M1PLBGmBKCg"
+                  },
+                  "signer": "1f5fe64ec2f8c901be3aad94a41d70c12d2f3a8f43755f902e665c96f41c87e3"
+                }
+              ]
+            }
+          }
+        ],
+        "wrap_keys": []
+      },
+      "in_force": 3,
+      "latest": 3,
+      "name": "a guardian's anchor stands for the states before it",
+      "now": 1900007300,
+      "pending": []
+    },
+    {
+      "bundle": {
+        "checkpoint": {
+          "checkpoint": {
+            "origin": "dev.log.seal.zone/v1",
+            "policy": {
+              "min_service_key_version": {},
+              "min_tcb": {}
+            },
+            "root_hash": "5TFN8FpthTbWe-IF_RdgGP6vqedpw5EAcZffcqQsetY",
+            "size": 4
+          },
+          "cosignatures": [
+            {
+              "signature": {
+                "alg": {
+                  "alg": "ed25519",
+                  "sig": "cavuxza4A7D9OyI3T_9ngnVFzXV2zVOLEv9uGomvA_hA5XT44iPamX4ISaUb7nR9uizLOEqEMOXRzIgRfrhlCg"
+                },
+                "signer": "000e62ba0c6ce93da66eca96821f963dd440ac086073f7bbe6ef91ef90c9d3f6"
+              },
+              "timestamp": 1900007300
+            },
+            {
+              "signature": {
+                "alg": {
+                  "alg": "ed25519",
+                  "sig": "5jSIGDsynDr_Y_cwNZgwYBPR-hNdldK0gp6ZzJRGaUQVBM6mnyMaOEgp7SQ-inIK5So3OuahAlPilbt20OuYCQ"
+                },
+                "signer": "d8270188647d1a2453e4b07d468a1fef57eec30ecb34cf54639437e416ddbde5"
+              },
+              "timestamp": 1900007300
+            },
+            {
+              "signature": {
+                "alg": {
+                  "alg": "ed25519",
+                  "sig": "CZfzQqLeslVyUSzyzvrdCdv9wsczQIWgG0v1lEXvuxHtU80Hd_SDJKsVDMojcXQYa8trAIwsBpeMSJ9UkuI-Bg"
+                },
+                "signer": "4845ecc67e207f28233c9c2ba96eaae6b588d8aa402893a80f9d6ce199c86a50"
+              },
+              "timestamp": 1900007300
+            }
+          ],
+          "log_signature": {
+            "alg": {
+              "alg": "ed25519",
+              "sig": "lZ2rw-ElKkz0HdN6s15_OExQrAp9YlFnlogf0VUXrZ6EDeWCx_sTBHIio5g7AckptIeiFgYwPQrmYDsAiwDuBg"
+            },
+            "signer": "9aaa744aaee7d4d7ab5043d1f87cec6032b01c14b0b851c765b253e0816f830c"
+          }
+        },
+        "ended_sessions": [],
+        "freshness": [
+          {
+            "body": {
+              "digest": "gD_cOennF-0EPlGSua_-8NvIVTpenFeQBuiy49R_Jgk",
+              "signed_at": 1900007300,
+              "tenant": "acme",
+              "version": 3
+            },
+            "signatures": [
+              {
+                "alg": {
+                  "alg": "ed25519",
+                  "sig": "SdrAVa9Q3bjlFPRxxK6Wz1dQIA2HX7iLBq_9Y_Bd6NDBDzU54ihmUyxBQ9BzuBH9qzZ1DRIntjRSbbmyRDtuBg"
+                },
+                "signer": "9aaa744aaee7d4d7ab5043d1f87cec6032b01c14b0b851c765b253e0816f830c"
+              }
+            ]
+          }
+        ],
+        "root_chain": [
+          {
+            "proof": {
+              "audit_path": [],
+              "checkpoint": {
+                "checkpoint": {
+                  "origin": "dev.log.seal.zone/v1",
+                  "policy": {
+                    "min_service_key_version": {},
+                    "min_tcb": {}
+                  },
+                  "root_hash": "SJNBJt4Y1x5Y6DLecFKWo0RJqop5H95ctQrFqbM8Ki8",
+                  "size": 1
+                },
+                "cosignatures": [
+                  {
+                    "signature": {
+                      "alg": {
+                        "alg": "ed25519",
+                        "sig": "4aPcZzjFkEYJAu0bB_gXFjYipSeRpRrYzao3v13vJEu2ce0L5vmP0YzQNUwgDZx0f7Bp-YeXztLTEkWHE-qMBQ"
+                      },
+                      "signer": "000e62ba0c6ce93da66eca96821f963dd440ac086073f7bbe6ef91ef90c9d3f6"
+                    },
+                    "timestamp": 1899999990
+                  },
+                  {
+                    "signature": {
+                      "alg": {
+                        "alg": "ed25519",
+                        "sig": "wOSjoq2aC1YFszkuDn4JfoP8EmRBO7AVIdeFcno8OM6p-orb_WLt6MWqLZldfKE0Bm5mcfFfZS6ar03dsB1dAA"
+                      },
+                      "signer": "d8270188647d1a2453e4b07d468a1fef57eec30ecb34cf54639437e416ddbde5"
+                    },
+                    "timestamp": 1899999990
+                  },
+                  {
+                    "signature": {
+                      "alg": {
+                        "alg": "ed25519",
+                        "sig": "YYWetAJdBPST8irAnulQsQN-s2DHAWWyEe0A47kHo6BvnrZMikX_HWnkn2B16wEoYJNjMt1Q1z4jKZdrPJuICg"
+                      },
+                      "signer": "4845ecc67e207f28233c9c2ba96eaae6b588d8aa402893a80f9d6ce199c86a50"
+                    },
+                    "timestamp": 1899999990
+                  }
+                ],
+                "log_signature": {
+                  "alg": {
+                    "alg": "ed25519",
+                    "sig": "z8xK0PJwXybSJT-z4aHg-61yIAaTiKPO6BSp9_5b5lC9DkQCpfvM5-Bk5kFoljHUUelcDJjsHJ-pSJ5b8VYJDQ"
+                  },
+                  "signer": "9aaa744aaee7d4d7ab5043d1f87cec6032b01c14b0b851c765b253e0816f830c"
+                }
+              },
+              "leaf_index": 0
+            },
+            "root": {
+              "body": {
+                "admin_keys": [
+                  {
+                    "kind": "ed25519",
+                    "public_key": "43046bfe4092b3e94994eada15dcc20d8aaa07b658fd3954eb8e0efb8bdca5de"
+                  }
+                ],
+                "cosign_releases": false,
+                "tenant": "acme",
+                "threshold": 1,
+                "version": 1
+              },
+              "signatures": [
+                {
+                  "alg": {
+                    "alg": "ed25519",
+                    "sig": "hlmWgyQgCK8io2qSfXu4YSxOLTX7olIP_0_ThPTz___2RMYNz_-B6uxfKA5nCn1jYCTxw25Dtt-bOUBRY1PaAw"
+                  },
+                  "signer": "d7e1e084be213b01e506852af8198b9980b43e03749c67d82dcd0903f4001c77"
+                }
+              ]
+            }
+          }
+        ],
+        "signals": [],
+        "state": {
+          "body": {
+            "apps": {},
+            "deployments": [],
+            "freshness_keys": [],
+            "integrity": {
+              "actions": {},
+              "artifacts": {},
+              "cleared": [],
+              "sources": {}
+            },
+            "issued_at": 1900000000,
+            "pending_window_secs": 3600,
+            "platforms": [
+              "sim"
+            ],
+            "producers": [
+              {
+                "key_id": "0101010101010101010101010101010101010101010101010101010101010101",
+                "kind": "app_key",
+                "public_key": "0101010101010101010101010101010101010101010101010101010101010101"
+              }
+            ],
+            "root_version": 1,
+            "telemetry_readers": [],
+            "tenant": "acme",
+            "tenant_key_versions": {
+              "current": 1,
+              "oldest_accepted": 1
+            },
+            "version": 3
+          },
+          "signatures": [
+            {
+              "alg": {
+                "alg": "ed25519",
+                "sig": "SJn7jR0fKMV3prtxlBQ0xawezL7HyRxRy0kEyqGqtTs7qPuRgZt3gcP09cbSUYvHy7gVyeg7YJ5M1PLBGmBKCg"
+              },
+              "signer": "1f5fe64ec2f8c901be3aad94a41d70c12d2f3a8f43755f902e665c96f41c87e3"
+            }
+          ]
+        },
+        "states": [
+          {
+            "proof": {
+              "audit_path": [
+                [
+                  193,
+                  132,
+                  192,
+                  3,
+                  155,
+                  172,
+                  89,
+                  53,
+                  138,
+                  40,
+                  180,
+                  132,
+                  85,
+                  175,
+                  244,
+                  78,
+                  154,
+                  44,
+                  177,
+                  210,
+                  95,
+                  102,
+                  95,
+                  193,
+                  113,
+                  15,
+                  8,
+                  164,
+                  76,
+                  187,
+                  74,
+                  246
+                ],
+                [
+                  31,
+                  209,
+                  229,
+                  247,
+                  27,
+                  113,
+                  15,
+                  35,
+                  146,
+                  75,
+                  249,
+                  246,
+                  125,
+                  177,
+                  6,
+                  201,
+                  201,
+                  80,
+                  13,
+                  13,
+                  89,
+                  212,
+                  52,
+                  88,
+                  7,
+                  75,
+                  206,
+                  112,
+                  183,
+                  71,
+                  116,
+                  208
+                ]
+              ],
+              "checkpoint": {
+                "checkpoint": {
+                  "origin": "dev.log.seal.zone/v1",
+                  "policy": {
+                    "min_service_key_version": {},
+                    "min_tcb": {}
+                  },
+                  "root_hash": "5TFN8FpthTbWe-IF_RdgGP6vqedpw5EAcZffcqQsetY",
+                  "size": 4
+                },
+                "cosignatures": [
+                  {
+                    "signature": {
+                      "alg": {
+                        "alg": "ed25519",
+                        "sig": "2pyjfrEqyvk5U9IsaLvTKwOQtBdYntzm9b0UAlS6bvDZHXlFNlEqIJd9qCs7tXRs-FmRvvhg5TzKyeSEdX_zCw"
+                      },
+                      "signer": "000e62ba0c6ce93da66eca96821f963dd440ac086073f7bbe6ef91ef90c9d3f6"
+                    },
+                    "timestamp": 1900000300
+                  },
+                  {
+                    "signature": {
+                      "alg": {
+                        "alg": "ed25519",
+                        "sig": "mizfctITFk16mfHy_6QzI_qAMoYydoEYdSgkrWNDRo5mGNjfbUPpXJ2fpltqUOHj2wSKDf08PWhaeCixykqrBQ"
+                      },
+                      "signer": "d8270188647d1a2453e4b07d468a1fef57eec30ecb34cf54639437e416ddbde5"
+                    },
+                    "timestamp": 1900000300
+                  },
+                  {
+                    "signature": {
+                      "alg": {
+                        "alg": "ed25519",
+                        "sig": "S-M1HQ9MZIAU_E8aIJjfC_TObi_Xop9yTzF6VLigyd_I8BtDefS7NK1T9-_8oLc9zjr-Qxe0EBT-N8W1Q-b7Cg"
+                      },
+                      "signer": "4845ecc67e207f28233c9c2ba96eaae6b588d8aa402893a80f9d6ce199c86a50"
+                    },
+                    "timestamp": 1900000300
+                  }
+                ],
+                "log_signature": {
+                  "alg": {
+                    "alg": "ed25519",
+                    "sig": "lZ2rw-ElKkz0HdN6s15_OExQrAp9YlFnlogf0VUXrZ6EDeWCx_sTBHIio5g7AckptIeiFgYwPQrmYDsAiwDuBg"
+                  },
+                  "signer": "9aaa744aaee7d4d7ab5043d1f87cec6032b01c14b0b851c765b253e0816f830c"
+                }
+              },
+              "leaf_index": 3
+            },
+            "state": {
+              "body": {
+                "apps": {},
+                "deployments": [],
+                "freshness_keys": [],
+                "integrity": {
+                  "actions": {},
+                  "artifacts": {},
+                  "cleared": [],
+                  "sources": {}
+                },
+                "issued_at": 1900000000,
+                "pending_window_secs": 3600,
+                "platforms": [
+                  "sim"
+                ],
+                "producers": [
+                  {
+                    "key_id": "0101010101010101010101010101010101010101010101010101010101010101",
+                    "kind": "app_key",
+                    "public_key": "0101010101010101010101010101010101010101010101010101010101010101"
+                  }
+                ],
+                "root_version": 1,
+                "telemetry_readers": [],
+                "tenant": "acme",
+                "tenant_key_versions": {
+                  "current": 1,
+                  "oldest_accepted": 1
+                },
+                "version": 3
+              },
+              "signatures": [
+                {
+                  "alg": {
+                    "alg": "ed25519",
+                    "sig": "SJn7jR0fKMV3prtxlBQ0xawezL7HyRxRy0kEyqGqtTs7qPuRgZt3gcP09cbSUYvHy7gVyeg7YJ5M1PLBGmBKCg"
+                  },
+                  "signer": "1f5fe64ec2f8c901be3aad94a41d70c12d2f3a8f43755f902e665c96f41c87e3"
+                }
+              ]
+            }
+          }
+        ],
+        "wrap_keys": []
+      },
+      "documents": {
+        "checkpoint": {
+          "checkpoint": {
+            "origin": "dev.log.seal.zone/v1",
+            "policy": {
+              "min_service_key_version": {},
+              "min_tcb": {}
+            },
+            "root_hash": "5TFN8FpthTbWe-IF_RdgGP6vqedpw5EAcZffcqQsetY",
+            "size": 4
+          },
+          "cosignatures": [
+            {
+              "signature": {
+                "alg": {
+                  "alg": "ed25519",
+                  "sig": "cavuxza4A7D9OyI3T_9ngnVFzXV2zVOLEv9uGomvA_hA5XT44iPamX4ISaUb7nR9uizLOEqEMOXRzIgRfrhlCg"
+                },
+                "signer": "000e62ba0c6ce93da66eca96821f963dd440ac086073f7bbe6ef91ef90c9d3f6"
+              },
+              "timestamp": 1900007300
+            },
+            {
+              "signature": {
+                "alg": {
+                  "alg": "ed25519",
+                  "sig": "5jSIGDsynDr_Y_cwNZgwYBPR-hNdldK0gp6ZzJRGaUQVBM6mnyMaOEgp7SQ-inIK5So3OuahAlPilbt20OuYCQ"
+                },
+                "signer": "d8270188647d1a2453e4b07d468a1fef57eec30ecb34cf54639437e416ddbde5"
+              },
+              "timestamp": 1900007300
+            },
+            {
+              "signature": {
+                "alg": {
+                  "alg": "ed25519",
+                  "sig": "CZfzQqLeslVyUSzyzvrdCdv9wsczQIWgG0v1lEXvuxHtU80Hd_SDJKsVDMojcXQYa8trAIwsBpeMSJ9UkuI-Bg"
+                },
+                "signer": "4845ecc67e207f28233c9c2ba96eaae6b588d8aa402893a80f9d6ce199c86a50"
+              },
+              "timestamp": 1900007300
+            }
+          ],
+          "log_signature": {
+            "alg": {
+              "alg": "ed25519",
+              "sig": "lZ2rw-ElKkz0HdN6s15_OExQrAp9YlFnlogf0VUXrZ6EDeWCx_sTBHIio5g7AckptIeiFgYwPQrmYDsAiwDuBg"
+            },
+            "signer": "9aaa744aaee7d4d7ab5043d1f87cec6032b01c14b0b851c765b253e0816f830c"
+          }
+        },
+        "roots": [
+          {
+            "proof": {
+              "audit_path": [],
+              "checkpoint": {
+                "checkpoint": {
+                  "origin": "dev.log.seal.zone/v1",
+                  "policy": {
+                    "min_service_key_version": {},
+                    "min_tcb": {}
+                  },
+                  "root_hash": "SJNBJt4Y1x5Y6DLecFKWo0RJqop5H95ctQrFqbM8Ki8",
+                  "size": 1
+                },
+                "cosignatures": [
+                  {
+                    "signature": {
+                      "alg": {
+                        "alg": "ed25519",
+                        "sig": "4aPcZzjFkEYJAu0bB_gXFjYipSeRpRrYzao3v13vJEu2ce0L5vmP0YzQNUwgDZx0f7Bp-YeXztLTEkWHE-qMBQ"
+                      },
+                      "signer": "000e62ba0c6ce93da66eca96821f963dd440ac086073f7bbe6ef91ef90c9d3f6"
+                    },
+                    "timestamp": 1899999990
+                  },
+                  {
+                    "signature": {
+                      "alg": {
+                        "alg": "ed25519",
+                        "sig": "wOSjoq2aC1YFszkuDn4JfoP8EmRBO7AVIdeFcno8OM6p-orb_WLt6MWqLZldfKE0Bm5mcfFfZS6ar03dsB1dAA"
+                      },
+                      "signer": "d8270188647d1a2453e4b07d468a1fef57eec30ecb34cf54639437e416ddbde5"
+                    },
+                    "timestamp": 1899999990
+                  },
+                  {
+                    "signature": {
+                      "alg": {
+                        "alg": "ed25519",
+                        "sig": "YYWetAJdBPST8irAnulQsQN-s2DHAWWyEe0A47kHo6BvnrZMikX_HWnkn2B16wEoYJNjMt1Q1z4jKZdrPJuICg"
+                      },
+                      "signer": "4845ecc67e207f28233c9c2ba96eaae6b588d8aa402893a80f9d6ce199c86a50"
+                    },
+                    "timestamp": 1899999990
+                  }
+                ],
+                "log_signature": {
+                  "alg": {
+                    "alg": "ed25519",
+                    "sig": "z8xK0PJwXybSJT-z4aHg-61yIAaTiKPO6BSp9_5b5lC9DkQCpfvM5-Bk5kFoljHUUelcDJjsHJ-pSJ5b8VYJDQ"
+                  },
+                  "signer": "9aaa744aaee7d4d7ab5043d1f87cec6032b01c14b0b851c765b253e0816f830c"
+                }
+              },
+              "leaf_index": 0
+            },
+            "root": {
+              "body": {
+                "admin_keys": [
+                  {
+                    "kind": "ed25519",
+                    "public_key": "43046bfe4092b3e94994eada15dcc20d8aaa07b658fd3954eb8e0efb8bdca5de"
+                  }
+                ],
+                "cosign_releases": false,
+                "tenant": "acme",
+                "threshold": 1,
+                "version": 1
+              },
+              "signatures": [
+                {
+                  "alg": {
+                    "alg": "ed25519",
+                    "sig": "hlmWgyQgCK8io2qSfXu4YSxOLTX7olIP_0_ThPTz___2RMYNz_-B6uxfKA5nCn1jYCTxw25Dtt-bOUBRY1PaAw"
+                  },
+                  "signer": "d7e1e084be213b01e506852af8198b9980b43e03749c67d82dcd0903f4001c77"
+                }
+              ]
+            }
+          }
+        ],
+        "states": [
+          {
+            "proof": {
+              "audit_path": [
+                [
+                  72,
+                  147,
+                  65,
+                  38,
+                  222,
+                  24,
+                  215,
+                  30,
+                  88,
+                  232,
+                  50,
+                  222,
+                  112,
+                  82,
+                  150,
+                  163,
+                  68,
+                  73,
+                  170,
+                  138,
+                  121,
+                  31,
+                  222,
+                  92,
+                  181,
+                  10,
+                  197,
+                  169,
+                  179,
+                  60,
+                  42,
+                  47
+                ]
+              ],
+              "checkpoint": {
+                "checkpoint": {
+                  "origin": "dev.log.seal.zone/v1",
+                  "policy": {
+                    "min_service_key_version": {},
+                    "min_tcb": {}
+                  },
+                  "root_hash": "H9Hl9xtxDyOSS_n2fbEGyclQDQ1Z1DRYB0vOcLdHdNA",
+                  "size": 2
+                },
+                "cosignatures": [
+                  {
+                    "signature": {
+                      "alg": {
+                        "alg": "ed25519",
+                        "sig": "knpFptt2YS0ht7nBqFvgtdKL-A7S8lnz0GsMbCUAs3ZyUi7mRPGDGSvcb0HNc7ZPGpm7zfR4KajnxEmfpJxzBA"
+                      },
+                      "signer": "000e62ba0c6ce93da66eca96821f963dd440ac086073f7bbe6ef91ef90c9d3f6"
+                    },
+                    "timestamp": 1900000000
+                  },
+                  {
+                    "signature": {
+                      "alg": {
+                        "alg": "ed25519",
+                        "sig": "ILmLAiOv3kaIK3tVJ7-jCvlqB2mL1Uz8aMIBs-TdGgiY2pvTmV0L8XZi0Nyi9y3WSUZ9Er-XTeJBdozFTpJgDw"
+                      },
+                      "signer": "d8270188647d1a2453e4b07d468a1fef57eec30ecb34cf54639437e416ddbde5"
+                    },
+                    "timestamp": 1900000000
+                  },
+                  {
+                    "signature": {
+                      "alg": {
+                        "alg": "ed25519",
+                        "sig": "ulI-lISOkLpXOL1j_pbP9l5Shp_zBSrQoAKD1G_BB9WFe4NRAVFPx_Ydn861mU_w6yDJTErwN-n-NMTPJS-rBQ"
+                      },
+                      "signer": "4845ecc67e207f28233c9c2ba96eaae6b588d8aa402893a80f9d6ce199c86a50"
+                    },
+                    "timestamp": 1900000000
+                  }
+                ],
+                "log_signature": {
+                  "alg": {
+                    "alg": "ed25519",
+                    "sig": "Pp98Rp39VtsUYd5ar73OkwnalAlTgyvQdzSpjj7iOHjsjxsbvRRPS9uDhmzaRACV9PWYb9BQY1sOSlECa4rbBg"
+                  },
+                  "signer": "9aaa744aaee7d4d7ab5043d1f87cec6032b01c14b0b851c765b253e0816f830c"
+                }
+              },
+              "leaf_index": 1
+            },
+            "state": {
+              "body": {
+                "apps": {},
+                "deployments": [],
+                "freshness_keys": [],
+                "integrity": {
+                  "actions": {},
+                  "artifacts": {},
+                  "cleared": [],
+                  "sources": {}
+                },
+                "issued_at": 1900000000,
+                "pending_window_secs": 3600,
+                "platforms": [
+                  "sim"
+                ],
+                "producers": [
+                  {
+                    "key_id": "0101010101010101010101010101010101010101010101010101010101010101",
+                    "kind": "app_key",
+                    "public_key": "0101010101010101010101010101010101010101010101010101010101010101"
+                  }
+                ],
+                "root_version": 1,
+                "telemetry_readers": [],
+                "tenant": "acme",
+                "tenant_key_versions": {
+                  "current": 1,
+                  "oldest_accepted": 1
+                },
+                "version": 1
+              },
+              "signatures": [
+                {
+                  "alg": {
+                    "alg": "ed25519",
+                    "sig": "9DcFio6VdHEw0lN_5PxdJpyQ0nzEBnFUUD8P9tQfasyVD3gFNKKp1Z7zPlLJTQPpWzlyQStn5QWlOGBk4XbgDQ"
+                  },
+                  "signer": "1f5fe64ec2f8c901be3aad94a41d70c12d2f3a8f43755f902e665c96f41c87e3"
+                }
+              ]
+            }
+          },
+          {
+            "proof": {
+              "audit_path": [
+                [
+                  31,
+                  209,
+                  229,
+                  247,
+                  27,
+                  113,
+                  15,
+                  35,
+                  146,
+                  75,
+                  249,
+                  246,
+                  125,
+                  177,
+                  6,
+                  201,
+                  201,
+                  80,
+                  13,
+                  13,
+                  89,
+                  212,
+                  52,
+                  88,
+                  7,
+                  75,
+                  206,
+                  112,
+                  183,
+                  71,
+                  116,
+                  208
+                ]
+              ],
+              "checkpoint": {
+                "checkpoint": {
+                  "origin": "dev.log.seal.zone/v1",
+                  "policy": {
+                    "min_service_key_version": {},
+                    "min_tcb": {}
+                  },
+                  "root_hash": "LJPAspHTRcxyYzT6eMHEDWnmzkLOV1oHv3BRkesXK1k",
+                  "size": 3
+                },
+                "cosignatures": [
+                  {
+                    "signature": {
+                      "alg": {
+                        "alg": "ed25519",
+                        "sig": "hCsaEG6iv5rLzEgitmcjSpaE1dJE6mbOHkSsCmFes3K03VulsM4kg66o-SEWGy70s4kD5luHYV6SLolyXcNHBQ"
+                      },
+                      "signer": "000e62ba0c6ce93da66eca96821f963dd440ac086073f7bbe6ef91ef90c9d3f6"
+                    },
+                    "timestamp": 1900000100
+                  },
+                  {
+                    "signature": {
+                      "alg": {
+                        "alg": "ed25519",
+                        "sig": "ECmdBGwBULwnjsc3UNJYvoZYN8yYbjOUupVl9_IrehQLCxTVxLrHl_XMU91OR8jui20zN18uRsoklq-BUUYSDA"
+                      },
+                      "signer": "d8270188647d1a2453e4b07d468a1fef57eec30ecb34cf54639437e416ddbde5"
+                    },
+                    "timestamp": 1900000100
+                  },
+                  {
+                    "signature": {
+                      "alg": {
+                        "alg": "ed25519",
+                        "sig": "MFYU4-Zp5-Kt7Jh3a4in0rPvRjNAGaQDwzUnQ9lnXaos8cXJgmXHCe2x9USSa9wtke-g99s63X_E1Y88hMf4DA"
+                      },
+                      "signer": "4845ecc67e207f28233c9c2ba96eaae6b588d8aa402893a80f9d6ce199c86a50"
+                    },
+                    "timestamp": 1900000100
+                  }
+                ],
+                "log_signature": {
+                  "alg": {
+                    "alg": "ed25519",
+                    "sig": "E9zBDpouC2ZGzcTQcMIJbExa6GQa1Lt96mZl2Z68CMJwVfY5oV_vNlfEgAkb57OPRXENZnkP1K3gE5ak0S-nAQ"
+                  },
+                  "signer": "9aaa744aaee7d4d7ab5043d1f87cec6032b01c14b0b851c765b253e0816f830c"
+                }
+              },
+              "leaf_index": 2
+            },
+            "state": {
+              "body": {
+                "apps": {},
+                "deployments": [],
+                "freshness_keys": [],
+                "integrity": {
+                  "actions": {},
+                  "artifacts": {},
+                  "cleared": [],
+                  "sources": {}
+                },
+                "issued_at": 1900000000,
+                "pending_window_secs": 3600,
+                "platforms": [
+                  "sim"
+                ],
+                "producers": [
+                  {
+                    "key_id": "0101010101010101010101010101010101010101010101010101010101010101",
+                    "kind": "app_key",
+                    "public_key": "0101010101010101010101010101010101010101010101010101010101010101"
+                  },
+                  {
+                    "key_id": "0202020202020202020202020202020202020202020202020202020202020202",
+                    "kind": "app_key",
+                    "public_key": "0202020202020202020202020202020202020202020202020202020202020202"
+                  }
+                ],
+                "root_version": 1,
+                "telemetry_readers": [],
+                "tenant": "acme",
+                "tenant_key_versions": {
+                  "current": 1,
+                  "oldest_accepted": 1
+                },
+                "version": 2
+              },
+              "signatures": [
+                {
+                  "alg": {
+                    "alg": "ed25519",
+                    "sig": "RxfiCiN-XlkG7fIGIQQlUpc-8yuxJQTu25coYMLh8Hw1EwYapPL_x69z0JdhNk-T8YIK3ISt-E9mINQoaEBHDQ"
+                  },
+                  "signer": "1f5fe64ec2f8c901be3aad94a41d70c12d2f3a8f43755f902e665c96f41c87e3"
+                }
+              ]
+            }
+          },
+          {
+            "proof": {
+              "audit_path": [
+                [
+                  193,
+                  132,
+                  192,
+                  3,
+                  155,
+                  172,
+                  89,
+                  53,
+                  138,
+                  40,
+                  180,
+                  132,
+                  85,
+                  175,
+                  244,
+                  78,
+                  154,
+                  44,
+                  177,
+                  210,
+                  95,
+                  102,
+                  95,
+                  193,
+                  113,
+                  15,
+                  8,
+                  164,
+                  76,
+                  187,
+                  74,
+                  246
+                ],
+                [
+                  31,
+                  209,
+                  229,
+                  247,
+                  27,
+                  113,
+                  15,
+                  35,
+                  146,
+                  75,
+                  249,
+                  246,
+                  125,
+                  177,
+                  6,
+                  201,
+                  201,
+                  80,
+                  13,
+                  13,
+                  89,
+                  212,
+                  52,
+                  88,
+                  7,
+                  75,
+                  206,
+                  112,
+                  183,
+                  71,
+                  116,
+                  208
+                ]
+              ],
+              "checkpoint": {
+                "checkpoint": {
+                  "origin": "dev.log.seal.zone/v1",
+                  "policy": {
+                    "min_service_key_version": {},
+                    "min_tcb": {}
+                  },
+                  "root_hash": "5TFN8FpthTbWe-IF_RdgGP6vqedpw5EAcZffcqQsetY",
+                  "size": 4
+                },
+                "cosignatures": [
+                  {
+                    "signature": {
+                      "alg": {
+                        "alg": "ed25519",
+                        "sig": "2pyjfrEqyvk5U9IsaLvTKwOQtBdYntzm9b0UAlS6bvDZHXlFNlEqIJd9qCs7tXRs-FmRvvhg5TzKyeSEdX_zCw"
+                      },
+                      "signer": "000e62ba0c6ce93da66eca96821f963dd440ac086073f7bbe6ef91ef90c9d3f6"
+                    },
+                    "timestamp": 1900000300
+                  },
+                  {
+                    "signature": {
+                      "alg": {
+                        "alg": "ed25519",
+                        "sig": "mizfctITFk16mfHy_6QzI_qAMoYydoEYdSgkrWNDRo5mGNjfbUPpXJ2fpltqUOHj2wSKDf08PWhaeCixykqrBQ"
+                      },
+                      "signer": "d8270188647d1a2453e4b07d468a1fef57eec30ecb34cf54639437e416ddbde5"
+                    },
+                    "timestamp": 1900000300
+                  },
+                  {
+                    "signature": {
+                      "alg": {
+                        "alg": "ed25519",
+                        "sig": "S-M1HQ9MZIAU_E8aIJjfC_TObi_Xop9yTzF6VLigyd_I8BtDefS7NK1T9-_8oLc9zjr-Qxe0EBT-N8W1Q-b7Cg"
+                      },
+                      "signer": "4845ecc67e207f28233c9c2ba96eaae6b588d8aa402893a80f9d6ce199c86a50"
+                    },
+                    "timestamp": 1900000300
+                  }
+                ],
+                "log_signature": {
+                  "alg": {
+                    "alg": "ed25519",
+                    "sig": "lZ2rw-ElKkz0HdN6s15_OExQrAp9YlFnlogf0VUXrZ6EDeWCx_sTBHIio5g7AckptIeiFgYwPQrmYDsAiwDuBg"
+                  },
+                  "signer": "9aaa744aaee7d4d7ab5043d1f87cec6032b01c14b0b851c765b253e0816f830c"
+                }
+              },
+              "leaf_index": 3
+            },
+            "state": {
+              "body": {
+                "apps": {},
+                "deployments": [],
+                "freshness_keys": [],
+                "integrity": {
+                  "actions": {},
+                  "artifacts": {},
+                  "cleared": [],
+                  "sources": {}
+                },
+                "issued_at": 1900000000,
+                "pending_window_secs": 3600,
+                "platforms": [
+                  "sim"
+                ],
+                "producers": [
+                  {
+                    "key_id": "0101010101010101010101010101010101010101010101010101010101010101",
+                    "kind": "app_key",
+                    "public_key": "0101010101010101010101010101010101010101010101010101010101010101"
+                  }
+                ],
+                "root_version": 1,
+                "telemetry_readers": [],
+                "tenant": "acme",
+                "tenant_key_versions": {
+                  "current": 1,
+                  "oldest_accepted": 1
+                },
+                "version": 3
+              },
+              "signatures": [
+                {
+                  "alg": {
+                    "alg": "ed25519",
+                    "sig": "SJn7jR0fKMV3prtxlBQ0xawezL7HyRxRy0kEyqGqtTs7qPuRgZt3gcP09cbSUYvHy7gVyeg7YJ5M1PLBGmBKCg"
+                  },
+                  "signer": "1f5fe64ec2f8c901be3aad94a41d70c12d2f3a8f43755f902e665c96f41c87e3"
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "in_force": 3,
+      "latest": 3,
+      "name": "without an anchor it trusts, /documents completes the bundle",
+      "now": 1900007300,
+      "pending": []
+    }
+  ],
+  "trust": {
+    "guardians": {
+      "sim": "5526f742941711b3bc530ba44ff6f6dab0f0ab71af832f41a7fe3b9fdaed9c60"
+    },
+    "tenants": {
+      "registrar_keys": [
+        "d54207da194977dcf46adbfec2bc2e75b52d5a8a42184fedfdc00024f0e3e8da"
+      ],
+      "registrar_threshold": 1,
+      "tlog": {
+        "log_key": "054d3838bd472a1dfb33d7f24d31c8015caab5ca6c48574530a30249e1c7e5fb",
+        "origin": "dev.log.seal.zone/v1",
+        "witness_keys": [
+          "62ec3a71cfb17cf364be6f3cb7367f364dcab1cb72cdb66077aad1f161e00ec9",
+          "f54c2b77546ec236873b2250f65c21d14bfb386d29deb6f8eb75c2180e113a53",
+          "c5907f8a7d59cbb991123e83425bbf4fa237c74c90f1a00d7807dcf847781ad7"
+        ],
+        "witness_quorum": 2
+      }
+    }
+  }
+}
