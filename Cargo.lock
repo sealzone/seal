@@ -3243,6 +3243,7 @@ dependencies = [
  "hex",
  "pyo3",
  "sealzone",
+ "sealzone-cli",
  "sealzone-proto",
  "serde",
  "serde_json",

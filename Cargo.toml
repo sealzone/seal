@@ -41,6 +41,7 @@ seal-adapter-pg = { path = "crates/enclave/adapters/seal-adapter-pg", version = 
 seal-adapter-redis = { path = "crates/enclave/adapters/seal-adapter-redis", version = "0.2.0" }
 seal-adapter-clickhouse = { path = "crates/enclave/adapters/seal-adapter-clickhouse", version = "0.2.0" }
 seal-client = { path = "crates/sdk/seal-client", version = "0.2.0", package = "sealzone" }
+seal-cli = { path = "crates/sdk/seal-cli", version = "0.2.0", package = "sealzone-cli" }
 seal-sim = { path = "crates/sim/seal-sim", version = "0.2.0" }
 # external. Every crate takes versions from here. Read docs/DEPS.md before adding or upgrading.
 async-trait = "0.1"

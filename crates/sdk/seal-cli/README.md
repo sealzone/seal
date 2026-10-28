@@ -3,7 +3,8 @@
 Seal secrets and administer a Seal tenant from the command line.
 
 ```sh
-cargo install sealzone-cli        # installs `seal`
+pip install sealzone              # installs `seal` (with the Python SDK)
+cargo install sealzone-cli        # or from source
 ```
 
 ```sh

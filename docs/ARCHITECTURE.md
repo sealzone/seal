@@ -49,7 +49,7 @@ never changes with packaging.
 | crates.io | `sealzone` | `use seal::Client` | `sdk/seal-client` |
 | crates.io | `sealzone-{proto,crypto,tlog,verify,net,attest,control}` | (pulled in by `sealzone`) | the SDK's dependencies in `shared/` and `control-plane/` |
 | crates.io | `sealzone-cli` | `cargo install sealzone-cli` → the `seal` binary | `sdk/seal-cli` |
-| PyPI | `sealzone` | `import seal` | `sdk/seal-py` |
+| PyPI | `sealzone` | `import seal`; `seal`, the CLI compiled into its native module (`seal._cli`) | `sdk/seal-py` over `sdk/seal-cli` (a library too: `seal_cli::run`) |
 | npm | `@sealzone/verify` (the browser verifier, WASM) | `import { verifyTenant } from "@sealzone/verify"` | `sdk/seal-verify-wasm` (`build.sh`) |
 | npm | `@sealzone/sdk` (napi-rs; one prebuilt package per platform) | `import { Client } from "@sealzone/sdk"` | `sdk/seal-node` (`build.sh`) |
 | Go | module `seal.zone/go` (`seal.zone` serves the `go-import` tag for `github.com/sealzone/seal-go`) | `seal.FromEnv(ctx)` | `sdk/seal-go` over the C ABI in `sdk/seal-ffi` (`build.sh`: a static library per platform) |

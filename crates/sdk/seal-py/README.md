@@ -5,7 +5,7 @@ session on the sealed blob and gets a stand-in, while the enclave injects the re
 the way to the upstream.
 
 ```sh
-pip install sealzone
+pip install sealzone   # the SDK, and the `seal` command
 ```
 
 ```python

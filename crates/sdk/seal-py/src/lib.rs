@@ -184,6 +184,13 @@ pub(crate) fn wire_name<T: Serialize>(value: &T) -> String {
     }
 }
 
+/// The `seal` command on `argv` (the program name first); returns its exit status. The GIL is
+/// released while it runs.
+#[pyfunction]
+fn cli(py: Python<'_>, argv: Vec<String>) -> i32 {
+    py.detach(|| seal_cli::run(argv))
+}
+
 #[pymodule]
 fn _seal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<client::Client>()?;
@@ -201,6 +208,7 @@ fn _seal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<types::EndpointReport>()?;
     m.add_class::<client::HostAgentReporter>()?;
     m.add_function(wrap_pyfunction!(types::append_receipts, m)?)?;
+    m.add_function(wrap_pyfunction!(cli, m)?)?;
     m.add("SIM", cfg!(feature = "sim"))?;
     Ok(())
 }

@@ -18,6 +18,10 @@ classifiers = [
     "Typing :: Typed",
 ]
 
+[project.scripts]
+# The `seal` CLI, compiled into the native module (`seal._cli`).
+seal = "seal._cli:main"
+
 [project.urls]
 Homepage = "https://seal.zone"
 
@@ -26,6 +30,8 @@ Homepage = "https://seal.zone"
 python-source = "python"
 module-name = "seal._seal"
 bindings = "pyo3"
+# Release wheels carry the CLI too; symbols stay out of them.
+strip = true
 include = [{ path = "python/seal/py.typed", format = ["sdist", "wheel"] }]
 
 [tool.pytest.ini_options]

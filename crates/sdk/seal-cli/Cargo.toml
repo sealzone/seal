@@ -10,6 +10,10 @@ readme = "README.md"
 keywords = ["secrets", "tee", "attestation", "enclave", "cli"]
 categories = ["command-line-utilities", "cryptography", "authentication"]
 
+[lib]
+name = "seal_cli"
+path = "src/lib.rs"
+
 [[bin]]
 name = "seal"
 path = "src/main.rs"
