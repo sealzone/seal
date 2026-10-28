@@ -376,14 +376,14 @@ pub struct ChangesArgs {
     #[command(subcommand)]
     pub cmd: Option<ChangesCmd>,
     /// Follow pending changes as they are logged, take effect or are superseded
-    #[arg(long)]
+    #[arg(long, help_heading = "Watch")]
     pub watch: bool,
-    /// With --watch: print the state in force and every pending change, then exit: 0 when
-    /// nothing is pending, 3 when something is
-    #[arg(long, requires = "watch")]
+    /// Print the state in force and every pending change, then exit: 0 when nothing is
+    /// pending, 3 when something is
+    #[arg(long, requires = "watch", help_heading = "Watch")]
     pub once: bool,
-    /// With --watch: how often to check (seconds, or a duration such as 5m)
-    #[arg(long, value_name = "DURATION", value_parser = crate::parse_duration, default_value = "60", requires = "watch")]
+    /// How often to check (seconds, or a duration such as 5m)
+    #[arg(long, value_name = "DURATION", value_parser = crate::parse_duration, default_value = "60", requires = "watch", help_heading = "Watch")]
     pub interval: u64,
     /// JSON instead of text (with --watch: one object per pending state)
     #[arg(long)]

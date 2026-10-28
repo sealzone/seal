@@ -81,14 +81,14 @@ pub struct Passthrough {
 #[derive(Args, Debug)]
 pub struct ReleaseArgs {
     /// Deploy this release (its measurement, hex) instead of the newest verified one
-    #[arg(long, value_name = "MEASUREMENT")]
+    #[arg(long, value_name = "MEASUREMENT", help_heading = "Release")]
     release: Option<Measurement>,
     /// Read the release template from FILE instead of the control plane (`seal-release aci-policy`
     /// writes it); its release must still verify
-    #[arg(long, value_name = "FILE")]
+    #[arg(long, value_name = "FILE", help_heading = "Release")]
     template: Option<PathBuf>,
     /// Pull the image as this registry user, with the password in SEAL_REGISTRY_PASSWORD
-    #[arg(long, value_name = "USER")]
+    #[arg(long, value_name = "USER", help_heading = "Release")]
     registry_user: Option<String>,
     /// Verify the release, print the ARM template (stdout) and the commands (stderr); change nothing
     #[arg(long)]
@@ -99,31 +99,31 @@ pub struct ReleaseArgs {
 pub struct AzureArgs {
     /// The VNet your apps run in, by name or resource id (asked at a terminal); it gets a subnet
     /// `seal` and a NAT gateway when it has none
-    #[arg(long, value_name = "NAME|ID")]
+    #[arg(long, value_name = "NAME|ID", help_heading = "Placement")]
     vnet: Option<String>,
     /// A prepared subnet instead: SUBNET in --vnet, VNET/SUBNET or a subnet resource id,
     /// delegated to Microsoft.ContainerInstance/containerGroups, with a NAT gateway
-    #[arg(long, value_name = "SUBNET|ID")]
+    #[arg(long, value_name = "SUBNET|ID", help_heading = "Placement")]
     subnet: Option<String>,
     /// The resource group for the identity, the group and a new NAT gateway (default: the VNet's)
-    #[arg(long, short = 'g', value_name = "RG")]
+    #[arg(long, short = 'g', value_name = "RG", help_heading = "Placement")]
     resource_group: Option<String>,
     /// The container group (default seal-TENANT); one per replica
-    #[arg(long)]
+    #[arg(long, help_heading = "Replica")]
     name: Option<String>,
     /// The user-assigned managed identity in the resource group, created when missing (default
     /// seal-TENANT); replicas may share it
-    #[arg(long, value_name = "NAME")]
+    #[arg(long, value_name = "NAME", help_heading = "Replica")]
     identity: Option<String>,
-    /// Default: the VNet's location
-    #[arg(long)]
+    /// The Azure region (default: the VNet's)
+    #[arg(long, help_heading = "Placement")]
     location: Option<String>,
     /// The Entra app ID URI the replica's token is for (default: the one the tenant's Azure
     /// deployments use, else an Entra application seal-TENANT, registered now)
-    #[arg(long, value_name = "URI")]
+    #[arg(long, value_name = "URI", help_heading = "Replica")]
     audience: Option<String>,
     /// Do not sign the deployment grant; print the `seal grant enclave` command for an admin
-    #[arg(long)]
+    #[arg(long, help_heading = "Replica")]
     skip_grant: bool,
     #[command(flatten)]
     release: ReleaseArgs,

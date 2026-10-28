@@ -77,19 +77,19 @@ struct Cli {
 
 #[derive(Args, Debug, Clone)]
 struct Global {
-    /// Configuration directory (default ~/.config/seal)
+    /// Config directory (default ~/.config/seal)
     #[arg(long, env = "SEAL_HOME", value_name = "DIR", global = true, help_heading = "Global options")]
     home: Option<PathBuf>,
-    /// The console (default https://console.seal.zone)
+    /// The console (default console.seal.zone)
     #[arg(long, env = "SEAL_CONSOLE_URL", value_name = "URL", global = true, help_heading = "Global options")]
     console_url: Option<url::Url>,
-    /// The control plane (default https://control.seal.zone)
+    /// The control plane (default control.seal.zone)
     #[arg(long, env = "SEAL_CONTROL_URL", value_name = "URL", global = true, help_heading = "Global options")]
     control_url: Option<url::Url>,
-    /// The transparency log (default https://log.seal.zone)
+    /// The transparency log (default log.seal.zone)
     #[arg(long, env = "SEAL_LOG_URL", value_name = "URL", global = true, help_heading = "Global options")]
     log_url: Option<url::Url>,
-    /// Verify with this trust.json instead of the trust built into this binary
+    /// Verify with this trust.json, not the built-in trust
     #[arg(long, env = "SEAL_TRUST", value_name = "FILE", global = true, help_heading = "Global options")]
     trust: Option<PathBuf>,
     /// Plain output, no color (also NO_COLOR=1)
@@ -103,9 +103,7 @@ struct Global {
 /// Admin key files to sign with: the only keys the CLI ever uses, read where they are.
 #[derive(Args, Debug, Clone, Default)]
 struct KeyFiles {
-    /// Sign with this admin key file (from `seal key create`): changes, and the requests
-    /// themselves; repeat for M-of-N. Without it, the console login authorizes requests and
-    /// changes are signed in the console
+    /// Sign with this admin key file, not in the console; repeat for M-of-N
     #[arg(long = "key-file", value_name = "FILE", global = true, help_heading = "Signing")]
     key_files: Vec<PathBuf>,
 }
@@ -114,16 +112,16 @@ struct KeyFiles {
 struct SignArgs {
     #[command(flatten)]
     keys: KeyFiles,
-    /// A freshness key file: signs for each new state that names it, and `settings freshness sign`
+    /// Freshness key file to sign new states with
     #[arg(long, env = "SEAL_FRESHNESS_KEY", value_name = "FILE", global = true, help_heading = "Signing")]
     freshness_key: Option<PathBuf>,
     /// Sign or propose without asking
     #[arg(long, short = 'y', global = true, help_heading = "Signing")]
     yes: bool,
-    /// Print the console link instead of opening a browser
+    /// Print the console link, don't open a browser
     #[arg(long, env = "SEAL_NO_BROWSER", value_parser = FalseyValueParser::new(), global = true, help_heading = "Signing")]
     no_browser: bool,
-    /// Propose and exit, without waiting for the signatures
+    /// Propose and exit; don't wait for the signatures
     #[arg(long, global = true, help_heading = "Signing")]
     no_wait: bool,
 }
@@ -175,9 +173,9 @@ enum Command {
     /// Proposals waiting for signatures, and logged changes not yet in force
     Changes {
         #[command(flatten)]
-        sign: SignArgs,
-        #[command(flatten)]
         args: sign::ChangesArgs,
+        #[command(flatten)]
+        sign: SignArgs,
     },
     /// Admin keys, the pending window, platforms, integrity, telemetry readers, freshness
     Settings {
@@ -205,8 +203,12 @@ enum Command {
     },
     /// Co-sign enclave releases (tenants whose root requires it)
     Release {
-        #[command(flatten)]
-        sign: SignArgs,
+        /// Co-sign with this admin key file; repeat for the root's threshold
+        #[arg(long = "key-file", value_name = "FILE", global = true, help_heading = "Signing")]
+        key_files: Vec<PathBuf>,
+        /// Sign without asking
+        #[arg(long, short = 'y', global = true, help_heading = "Signing")]
+        yes: bool,
         #[command(subcommand)]
         cmd: settings::ReleaseCmd,
     },
@@ -222,48 +224,54 @@ enum Command {
 
 #[derive(Args, Debug)]
 struct SecretArgs {
-    /// The tenant to seal for, as `seal status` prints it: `<tenant>@<root id>`, or `<tenant>`
-    /// (then any root chain of that name). Default: the tenant `seal use` picked
-    #[arg(long, value_name = "TENANT[@ROOT]", env = "SEAL_TENANT", value_parser = parse_tenant_pin)]
-    tenant: Option<(TenantId, Option<TenantRootId>)>,
-    /// One of the tenant's enclave replicas, e.g. https://10.0.1.4:8443 (`seal deploy` prints
-    /// it); repeat, or separate with commas
-    #[arg(long = "endpoint", value_name = "URL", env = "SEAL_ENDPOINT", value_delimiter = ',')]
-    endpoints: Vec<url::Url>,
     /// Where the secret may be used (https://, postgres://, rediss://, clickhouse://)
     #[arg(long, value_name = "URL")]
     to: String,
     /// An app that may use it; repeat, or separate with commas
     #[arg(long = "app", value_name = "NAME", value_delimiter = ',', required = true)]
     apps: Vec<String>,
-    /// HTTP: the header that carries the secret (default authorization)
-    #[arg(long)]
-    header: Option<String>,
-    /// HTTP: the header value, with {key} where the secret goes
-    #[arg(long)]
-    format: Option<String>,
-    /// The blob stops working at this time (RFC 3339, YYYY-MM-DD in UTC, or Unix seconds)
-    #[arg(long, value_name = "DATE", value_parser = parse_time)]
-    expires: Option<UnixTime>,
-    /// Require this upstream key in the certificate chain; up to 4
-    #[arg(long = "pin", value_name = "sha256/B64")]
-    pins: Vec<String>,
-    /// HTTP: allowed methods (default any)
-    #[arg(long, value_name = "M,..", value_delimiter = ',')]
-    methods: Vec<String>,
-    /// HTTP: refuse paths under this prefix (e.g. an API's key-management paths)
-    #[arg(long = "deny", value_name = "PATH")]
-    deny: Vec<String>,
-    /// Only enclaves on the sealed platform tier may open the blob
-    #[arg(long)]
-    sealed_only: bool,
-    /// Only hardened sessions may use the blob: the SDK's channel plus verified endpoint
-    /// evidence at every start and extend
-    #[arg(long)]
-    hardened_only: bool,
     /// Append the seal's telemetry receipt to this file (JSON lines, read by `seal telemetry --receipts`)
     #[arg(long, value_name = "FILE")]
     receipt_file: Option<PathBuf>,
+    /// `<tenant>@<root id>` as `seal status` prints it, or `<tenant>` for any root chain of
+    /// that name (default: the `seal use` tenant)
+    #[arg(long, value_name = "TENANT[@ROOT]", env = "SEAL_TENANT", value_parser = parse_tenant_pin, help_heading = "Enclave")]
+    tenant: Option<(TenantId, Option<TenantRootId>)>,
+    /// An enclave replica of the tenant, as `seal deploy` prints it; repeat, or separate with
+    /// commas
+    #[arg(
+        long = "endpoint",
+        value_name = "URL",
+        env = "SEAL_ENDPOINT",
+        value_delimiter = ',',
+        help_heading = "Enclave"
+    )]
+    endpoints: Vec<url::Url>,
+    /// The header that carries the secret (default authorization)
+    #[arg(long, help_heading = "HTTP")]
+    header: Option<String>,
+    /// The header value, with {key} where the secret goes
+    #[arg(long, help_heading = "HTTP")]
+    format: Option<String>,
+    /// Allowed methods (default any)
+    #[arg(long, value_name = "M,..", value_delimiter = ',', help_heading = "HTTP")]
+    methods: Vec<String>,
+    /// Refuse paths under this prefix (e.g. an API's key-management paths)
+    #[arg(long = "deny", value_name = "PATH", help_heading = "HTTP")]
+    deny: Vec<String>,
+    /// The blob stops working at this time (RFC 3339, YYYY-MM-DD in UTC, or Unix seconds)
+    #[arg(long, value_name = "DATE", value_parser = parse_time, help_heading = "Limits")]
+    expires: Option<UnixTime>,
+    /// Require this upstream key in the certificate chain; up to 4
+    #[arg(long = "pin", value_name = "sha256/B64", help_heading = "Limits")]
+    pins: Vec<String>,
+    /// Only enclaves on the sealed platform tier may open the blob
+    #[arg(long, help_heading = "Limits")]
+    sealed_only: bool,
+    /// Only hardened sessions may use the blob: the SDK's channel plus verified endpoint
+    /// evidence at every start and extend
+    #[arg(long, help_heading = "Limits")]
+    hardened_only: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -887,12 +895,13 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             env.sign.keys = keys;
             show_telemetry(&env, args).await?;
         }
-        Command::Release { sign, cmd } => {
-            env.sign = sign;
+        Command::Release { key_files, yes, cmd } => {
+            env.sign = SignArgs { keys: KeyFiles { key_files }, yes, ..SignArgs::default() };
             settings::release(&env, cmd).await?;
         }
         Command::Completion { shell } => {
-            clap_complete::generate(shell, &mut self::command(), "seal", &mut std::io::stdout());
+            // The untidied tree: completions offer the global options under every command.
+            clap_complete::generate(shell, &mut Cli::command(), "seal", &mut std::io::stdout());
         }
         Command::Dev(settings::DevCmd::Init(args)) => settings::init(&mut env, args).await?,
     }
@@ -917,9 +926,24 @@ fn styles() -> clap::builder::Styles {
         .invalid(Style::new().bold())
 }
 
-/// The command tree, its top-level help grouped by `SECTIONS`.
+/// Help wraps at the terminal's width, but no wider: long lines are hard to follow.
+const MAX_WIDTH: usize = 100;
+
+/// The command tree, its top-level help grouped by `SECTIONS`. The global options are listed
+/// there only: every other help ends with their names instead (`tidy`).
 fn command() -> clap::Command {
-    let command = Cli::command();
+    let mut command = Cli::command();
+    let globals: Vec<clap::Arg> = command.get_arguments().filter(|a| a.is_global_set()).cloned().collect();
+    let names: Vec<String> =
+        globals.iter().filter(|a| !a.is_hide_set()).filter_map(|a| a.get_long()).map(|l| format!("--{l}")).collect();
+    let footer = ui::dim(&format!("Global options: {} (`seal --help`)", names.join(", ")));
+    for name in command.get_subcommands().map(|s| s.get_name().to_owned()).collect::<Vec<_>>() {
+        // A subcommand that already has an argument is not given the global one (clap skips
+        // it), so hidden copies keep the globals working without listing them.
+        command = command.mut_subcommand(name, |sub| {
+            tidy(globals.iter().fold(sub, |sub, a| sub.arg(a.clone().hide(true))), &footer)
+        });
+    }
     let mut groups = String::new();
     for (title, names) in SECTIONS {
         groups.push_str(&format!("{}\n", ui::bold(&format!("{title}:"))));
@@ -936,13 +960,22 @@ fn command() -> clap::Command {
     }
     let color = if ui::color() { clap::ColorChoice::Auto } else { clap::ColorChoice::Never };
     command
+        .max_term_width(MAX_WIDTH)
         .styles(styles())
         .color(color)
         .help_template(format!(
             "{{about-with-newline}}\n{{usage-heading}} {{usage}}\n\n{groups}{}\n{{options}}{{after-help}}",
             ui::bold("Global options:")
         ))
-        .after_help("Start with `seal login`, then `seal use <tenant>`. `seal COMMAND --help` explains each command.")
+        .after_help("Start with `seal login`, then `seal use <tenant>`.\n`seal COMMAND --help` explains each command.")
+}
+
+/// `sub` and the commands under it: the global options' footer, and no `help` subcommand
+/// (`--help` does the same).
+fn tidy(sub: clap::Command, footer: &str) -> clap::Command {
+    let names: Vec<String> = sub.get_subcommands().map(|s| s.get_name().to_owned()).collect();
+    let sub = sub.after_help(footer.to_owned()).disable_help_subcommand(true).max_term_width(MAX_WIDTH);
+    names.into_iter().fold(sub, |sub, name| sub.mut_subcommand(name, |s| tidy(s, footer)))
 }
 
 fn parse() -> Cli {
@@ -1031,6 +1064,16 @@ mod tests {
         for sub in command.get_subcommands().filter(|s| !s.is_hide_set() && s.get_name() != "help") {
             assert!(listed.contains(&sub.get_name()), "{} is in no section", sub.get_name());
         }
+    }
+
+    #[test]
+    fn global_options_work_everywhere_and_are_listed_once() {
+        let cli =
+            parse(&["grant", "app", "checkout", "key", "--generate", "--trust", "t.json", "--home", "h"]).unwrap();
+        assert_eq!((cli.global.trust.unwrap(), cli.global.home.unwrap()), ("t.json".into(), "h".into()));
+        let help = command().find_subcommand_mut("grant").unwrap().render_help().to_string();
+        assert!(!help.contains("SEAL_TRUST") && help.contains("Global options: --home,"), "{help}");
+        assert!(command().render_help().to_string().contains("SEAL_TRUST"));
     }
 
     #[test]
