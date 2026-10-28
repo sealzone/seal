@@ -6,6 +6,7 @@
 //!   seal use [TENANT]                       pick a tenant; its root chain and state verified here
 //!   seal status [--log]                     the tenant at a glance; --log scans the transparency log
 //!   seal secret --to URL --app NAME [..]    seal a secret read from the terminal or stdin; prints the blob
+//!                                           (anyone may: --tenant T@ROOT --endpoint URL, no login)
 //! Who may do what (sealing is open to anyone)
 //!   seal grant  app NAME KIND .. | enclave KIND .. [--hosted] | network APP CIDR ..
 //!   seal revoke app NAME [KIND ..] | enclave KIND .. | network APP CIDR ..
@@ -221,6 +222,14 @@ enum Command {
 
 #[derive(Args, Debug)]
 struct SecretArgs {
+    /// The tenant to seal for, as `seal status` prints it: `<tenant>@<root id>`, or `<tenant>`
+    /// (then any root chain of that name). Default: the tenant `seal use` picked
+    #[arg(long, value_name = "TENANT[@ROOT]", env = "SEAL_TENANT", value_parser = parse_tenant_pin)]
+    tenant: Option<(TenantId, Option<TenantRootId>)>,
+    /// One of the tenant's enclave replicas, e.g. https://10.0.1.4:8443 (`seal deploy` prints
+    /// it); repeat, or separate with commas
+    #[arg(long = "endpoint", value_name = "URL", env = "SEAL_ENDPOINT", value_delimiter = ',')]
+    endpoints: Vec<url::Url>,
     /// Where the secret may be used (https://, postgres://, rediss://, clickhouse://)
     #[arg(long, value_name = "URL")]
     to: String,
@@ -292,6 +301,11 @@ struct TelemetryArgs {
     /// One JSON object per entry, then one per finding
     #[arg(long)]
     json: bool,
+}
+
+/// `<tenant>` or `<tenant>@<root id>`, as `SEAL_TENANT` takes it.
+fn parse_tenant_pin(s: &str) -> Result<(TenantId, Option<TenantRootId>), String> {
+    seal_proto::TenantPin::parse_partial(s).map_err(|e| e.to_string())
 }
 
 /// RFC 3339, `YYYY-MM-DD` (midnight UTC) or Unix seconds.
@@ -547,22 +561,35 @@ fn read_secret() -> anyhow::Result<SecretBytes> {
 
 async fn seal_secret(env: &Env, args: SecretArgs) -> anyhow::Result<()> {
     ui::reserve_stdout();
-    let secret = read_secret()?;
-    let mut builder = seal::Client::builder();
-    if std::env::var_os("SEAL_TENANT").is_none() {
-        if let Some(tenant) = &env.config.tenant {
-            builder = builder.tenant(tenant.clone());
+    if args.endpoints.is_empty() {
+        bail!("name an enclave replica of the tenant: --endpoint https://HOST:PORT (or SEAL_ENDPOINT); `seal deploy` prints it");
+    }
+    // A named tenant keeps the root `seal use` verified when it is the same one.
+    let (tenant, root_id) = match args.tenant {
+        Some((tenant, root_id)) => {
+            let saved = env.config.root_id.filter(|_| env.config.tenant.as_ref() == Some(&tenant));
+            (tenant, root_id.or(saved))
         }
-        if let Some(root_id) = env.config.root_id {
-            builder = builder.root_id(root_id);
-        }
+        None => match &env.config.tenant {
+            Some(tenant) => (tenant.clone(), env.config.root_id),
+            None => bail!("name the tenant: --tenant <tenant>@<root id> (its admins' `seal status` prints it), or `seal use <tenant>`"),
+        },
+    };
+    let mut builder = seal::Client::builder().endpoints(args.endpoints).tenant(tenant);
+    if let Some(root_id) = root_id {
+        builder = builder.root_id(root_id);
     }
     if env.global.trust.is_some() {
         if let Some(trust) = env.trust()?.full {
             builder = builder.trust(trust);
         }
     }
-    let client = builder.connect().await?;
+    // Verify the enclave before asking for the secret, so a wrong endpoint or tenant fails first.
+    let client = {
+        let _spinner = ui::Spinner::start("verifying the enclave");
+        builder.connect().await?
+    };
+    let secret = read_secret()?;
     let mut seal = client.seal(secret.expose(), &args.to, &args.apps);
     if let Some(header) = &args.header {
         seal = seal.header(header);
@@ -1080,6 +1107,30 @@ mod tests {
         assert_eq!(s.methods, ["GET", "POST"]);
         assert_eq!(s.expires, Some(1_893_456_000));
         assert!(s.sealed_only && s.hardened_only);
+        assert!(s.tenant.is_none() && s.endpoints.is_empty(), "both default to `seal use` and SEAL_ENDPOINT");
+
+        let root = "ab".repeat(32);
+        let pin = format!("acme@{root}");
+        let cli = parse(&[
+            "secret",
+            "--to",
+            "https://x",
+            "--app",
+            "a",
+            "--tenant",
+            &pin,
+            "--endpoint",
+            "https://10.0.1.4:8443,https://10.0.1.5:8443",
+        ])
+        .unwrap();
+        let Some(Command::Secret(s)) = cli.command else { panic!() };
+        let (tenant, root_id) = s.tenant.unwrap();
+        assert_eq!((tenant.as_str(), root_id.map(|r| r.to_string())), ("acme", Some(root)));
+        assert_eq!(s.endpoints.len(), 2);
+        assert!(
+            parse(&["secret", "--to", "https://x", "--app", "a", "--tenant", "Acme"]).is_err(),
+            "tenant ids are checked"
+        );
         assert!(parse(&["secret", "--app", "a"]).is_err(), "--to is required");
         assert!(parse(&["secret", "--to", "https://x"]).is_err(), "--app is required");
     }

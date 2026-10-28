@@ -6,7 +6,7 @@ secret on the way to the upstream. The app, its host and Seal's control plane ne
 
 ```toml
 [dependencies]
-seal = { package = "sealzone", version = "0.1" }
+seal = { package = "sealzone", version = "0.2" }
 ```
 
 ```rust,no_run

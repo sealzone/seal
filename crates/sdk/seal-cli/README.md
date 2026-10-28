@@ -12,7 +12,11 @@ seal login
 seal use acme
 
 # Seal a secret for app `checkout` (read from the terminal or stdin); prints the blob.
-seal secret --to https://api.openai.com/v1 --app checkout --header x-api-key > api.blob
+# The enclave is verified before the secret is asked for.
+seal secret --endpoint https://10.0.1.4:8443 --to https://api.openai.com/v1 --app checkout --header x-api-key > api.blob
+
+# Anyone may seal, without signing in: name the tenant as its admins' `seal status` prints it.
+seal secret --tenant acme@<root id> --endpoint https://10.0.1.4:8443 --to https://api.openai.com/v1 --app checkout
 
 # Who may do what: every change is built on the verified state, shown as classified
 # differences, then signed by the admins (in the console, or here with --key-file) and logged.
