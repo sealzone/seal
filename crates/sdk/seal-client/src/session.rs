@@ -104,7 +104,7 @@ impl<'a> IntoFuture for SessionBuilder<'a> {
     fn into_future(self) -> Self::IntoFuture {
         Box::pin(async move {
             Blob::from_str(&self.blob)?;
-            self.client.warn_if_env_app_key_and_blob(&self.blob);
+            self.client.warn_if_env_app_key_and_blob(&self.blob).await;
             let live = Arc::new(Live {
                 client: self.client.clone(),
                 min_tier: self.min_tier,

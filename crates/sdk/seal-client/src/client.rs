@@ -32,10 +32,11 @@ pub struct Client {
 struct Inner {
     endpoints: Vec<url::Url>,
     expected: Expected,
-    /// `Err` (why detection found none) when only sealing is possible.
-    identity: Result<Arc<dyn IdentityProvider>, String>,
-    /// The identity is `SEAL_APP_KEY`, found by detection.
-    app_key_from_env: bool,
+    /// `ClientBuilder::identity`, else detected on the first session or signal: sealing needs
+    /// none, so a client that only seals never looks. A failed detection is retried next time.
+    identity: tokio::sync::OnceCell<Arc<dyn IdentityProvider>>,
+    /// The identity is detected, not given.
+    detected: bool,
     trust: seal_verify::Trust,
     /// The latest verified enclave and the local time it was verified at.
     enclave: RwLock<(Arc<VerifiedEnclave>, UnixTime)>,
@@ -80,8 +81,9 @@ const TICKET_MARGIN_SECS: u64 = 20;
 
 impl Client {
     /// Everything from the environment: `SEAL_ENDPOINT` (the tenant's enclave replicas,
-    /// comma-separated), `SEAL_TENANT` (`<tenant>` or `<tenant>@<root id>`) and the first
-    /// workload identity `detect_identity` finds. Verifies the enclave before returning.
+    /// comma-separated), `SEAL_TENANT` (`<tenant>` or `<tenant>@<root id>`) and, for sessions
+    /// and signals, the first workload identity `detect_identity` finds. Verifies the enclave
+    /// before returning.
     pub async fn from_env() -> Result<Self, ClientError> {
         Self::builder().connect().await
     }
@@ -200,9 +202,10 @@ impl Client {
 
     /// Warns once per process when the app key and `blob` both come from environment
     /// variables: whoever can read this process's environment then holds both.
-    pub(crate) fn warn_if_env_app_key_and_blob(&self, blob: &str) {
+    pub(crate) async fn warn_if_env_app_key_and_blob(&self, blob: &str) {
         static WARNED: std::sync::Once = std::sync::Once::new();
-        if self.inner.app_key_from_env && std::env::vars().any(|(_, v)| v.trim() == blob.trim()) {
+        let from_env = self.inner.detected && self.identity().await.is_ok_and(|i| i.kind() == "app-key");
+        if from_env && std::env::vars().any(|(_, v)| v.trim() == blob.trim()) {
             WARNED.call_once(|| {
                 tracing::warn!(
                     "SEAL_APP_KEY and the blob both come from environment variables: anyone who can read this \
@@ -225,9 +228,13 @@ impl Client {
             tls_spki_sha256: *enclave.tls_spki_sha256(),
             ticket,
         };
-        let identity = self.inner.identity.as_ref().map_err(|why| ClientError::NoIdentity(why.clone()))?;
-        let proof = identity.prove(&context).await?;
+        let proof = self.identity().await?.prove(&context).await?;
         Ok((context, proof))
+    }
+
+    /// The workload identity, detected the first time it is needed.
+    async fn identity(&self) -> Result<&Arc<dyn IdentityProvider>, ClientError> {
+        self.inner.identity.get_or_try_init(|| crate::identity::detect_identity(self.tenant())).await
     }
 
     async fn ticket(&self, enclave: &Arc<VerifiedEnclave>) -> Result<ProofTicket, ClientError> {
@@ -394,7 +401,7 @@ impl ClientBuilder {
         self.root_id = Some(root_id);
         self
     }
-    /// Default: `detect_identity`.
+    /// Default: `detect_identity`, on the first session or signal (sealing needs no identity).
     pub fn identity(mut self, identity: Arc<dyn IdentityProvider>) -> Self {
         self.identity = Some(identity);
         self
@@ -423,15 +430,6 @@ impl ClientBuilder {
             Some(t) => t,
             None => shipped_trust()?,
         };
-        let explicit_identity = self.identity.is_some();
-        let identity = match self.identity {
-            Some(i) => Ok(i),
-            None => match crate::identity::detect_identity(&tenant).await {
-                Ok(i) => Ok(i),
-                Err(ClientError::NoIdentity(why)) => Err(why),
-                Err(e) => return Err(e),
-            },
-        };
         let expected = Expected { tenant, root_id };
         let verify = || verify_any(&endpoints, 0, &trust, &expected);
         let (enclave, index) = match verify().await {
@@ -443,9 +441,9 @@ impl ClientBuilder {
         Ok(Client {
             inner: Arc::new(Inner {
                 endpoints,
-                app_key_from_env: !explicit_identity && identity.as_ref().is_ok_and(|i| i.kind() == "app-key"),
+                detected: self.identity.is_none(),
+                identity: tokio::sync::OnceCell::new_with(self.identity),
                 expected,
-                identity,
                 trust,
                 enclave: RwLock::new((Arc::new(enclave), now())),
                 refresh: tokio::sync::Mutex::new(()),
