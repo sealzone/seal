@@ -113,12 +113,11 @@ describe("native errors map to their class", () => {
     assert.throws(() => new GitHubActionsIdentity("acme"), NotAllowed);
   });
 
-  test("no release trust is VerificationFailed", async () => {
-    // This build ships none, and SEAL_TRUST is unset.
+  test("a trust that does not parse is BadRequest, before any connection", async () => {
     const identity = new AppKeyIdentity(APP_KEY);
     await assert.rejects(
-      Client.connect({ endpoints: ["https://127.0.0.1:1"], tenant: "acme", identity }),
-      (e) => e instanceof VerificationFailed && !e.retryable,
+      Client.connect({ endpoints: ["https://127.0.0.1:1"], tenant: "acme", identity, trust: '{"releases": {}}' }),
+      (e) => e instanceof BadRequest && !e.retryable,
     );
   });
 });
