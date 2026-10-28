@@ -145,11 +145,9 @@ impl World {
 
     /// An in-process SDK client acting as `app_key`, for the replica.
     async fn client(&self, app_key: &str) -> Client {
-        let (tenant, root) = self.pin.split_once('@').unwrap();
         Client::builder()
-            .endpoints([url::Url::parse(&self.sim.endpoint()).unwrap()])
-            .tenant(seal::TenantId::new(tenant).unwrap())
-            .root_id(root.parse().unwrap())
+            .endpoints([self.sim.endpoint()])
+            .tenant(&self.pin)
             .identity(Arc::new(AppKeyIdentity::parse(app_key).unwrap()))
             .trust(self.trust.clone())
             .connect()

@@ -45,8 +45,8 @@ async fn use_secret(secret: &[u8]) -> Result<(), ClientError> {
 #[allow(dead_code)]
 async fn explicit(trust: seal_verify::Trust) -> Result<Client, ClientError> {
     Client::builder()
-        .endpoints(["https://10.0.1.4:8443".parse().expect("url")])
-        .tenant("acme".parse()?)
+        .endpoints(["https://10.0.1.4:8443"])
+        .tenant("acme")
         .identity(Arc::new(AppKeyIdentity::from_env()?))
         .trust(trust)
         .connect()

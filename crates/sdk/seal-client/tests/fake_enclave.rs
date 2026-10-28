@@ -78,9 +78,18 @@ async fn refuses_enclaves_that_do_not_verify() {
     // Another root chain for the same tenant name, or another tenant.
     let err = f.builder().root_id(TenantRootId([9; 32])).connect().await.err().unwrap();
     assert!(matches!(&err, ClientError::Verification(m) if m.contains("root chain")), "{err}");
-    let err = f.builder().tenant(TenantId::new("globex").unwrap()).connect().await.err().unwrap();
+    let pinned = seal::Client::builder().endpoints([f.endpoint()]).trust(f.trust.clone());
+    let err = pinned.tenant(format!("acme@{}", TenantRootId([9; 32]))).connect().await.err().unwrap();
+    assert!(matches!(&err, ClientError::Verification(m) if m.contains("root chain")), "a pinned root: {err}");
+    let err = f.builder().tenant("globex").connect().await.err().unwrap();
     assert!(matches!(&err, ClientError::Verification(m) if m.contains("tenant")), "{err}");
     assert_eq!(err.code(), ErrorCode::VerificationFailed);
+
+    // Strings are checked before anything is sent.
+    let err = f.builder().tenant("Acme").connect().await.err().unwrap();
+    assert_eq!(err.code(), ErrorCode::BadRequest, "{err}");
+    let err = f.builder().endpoints(["not a url"]).connect().await.err().unwrap();
+    assert!(matches!(&err, ClientError::Invalid(m) if m.starts_with("endpoint not a url")), "{err}");
 
     // A trust without the guardian's key accepts no certificate.
     let mut trust = f.trust.clone();
@@ -98,11 +107,10 @@ async fn refuses_enclaves_that_do_not_verify() {
 async fn fails_over_to_a_replica_that_answers() {
     let f = Fixture::new().await;
     let dead = TcpListener::bind("127.0.0.1:0").await.unwrap().local_addr().unwrap();
-    let client =
-        f.builder().endpoints([format!("https://{dead}").parse().unwrap(), f.endpoint()]).connect().await.unwrap();
+    let client = f.builder().endpoints([format!("https://{dead}"), f.endpoint().to_string()]).connect().await.unwrap();
     client.signal("edr-alert", Severity::High).await.unwrap();
     // With no replica reachable, connecting keeps trying (`UNREACHABLE_WAIT_SECS`).
-    let only_dead = f.builder().endpoints([format!("https://{dead}").parse().unwrap()]).connect();
+    let only_dead = f.builder().endpoints([format!("https://{dead}")]).connect();
     assert!(tokio::time::timeout(Duration::from_secs(3), only_dead).await.is_err(), "still retrying");
 }
 
@@ -134,7 +142,7 @@ async fn waits_for_a_replica_that_is_not_up_yet() {
     // Nothing listens until a second after the client starts connecting, as with a replica
     // restarting or a hosted one cold-starting.
     let replica = replica_at(f.enclave.clone(), addr, Duration::from_secs(1));
-    let client = f.builder().endpoints([format!("https://{addr}").parse().unwrap()]).connect().await.unwrap();
+    let client = f.builder().endpoints([format!("https://{addr}")]).connect().await.unwrap();
     // It stops and comes back: a call in between waits for it.
     stop(replica).await;
     let replica = replica_at(f.enclave.clone(), addr, Duration::from_secs(1));

@@ -37,20 +37,9 @@ impl Connect {
         trust: Option<&[u8]>,
     ) -> Result<seal::ClientBuilder, ClientError> {
         let mut builder = seal::Client::builder();
-        if !self.endpoints.is_empty() {
-            let endpoints = self
-                .endpoints
-                .iter()
-                .map(|e| url::Url::parse(e.trim()).map_err(|err| ClientError::Invalid(format!("endpoint {e}: {err}"))))
-                .collect::<Result<Vec<_>, _>>()?;
-            builder = builder.endpoints(endpoints);
-        }
+        builder = builder.endpoints(self.endpoints);
         if let Some(tenant) = self.tenant {
-            let (tenant, root_id) = seal_proto::TenantPin::parse_partial(&tenant)?;
             builder = builder.tenant(tenant);
-            if let Some(root_id) = root_id {
-                builder = builder.root_id(root_id);
-            }
         }
         if let Some(root_id) = self.root_id {
             builder = builder.root_id(TenantRootId::from_str(root_id.trim())?);

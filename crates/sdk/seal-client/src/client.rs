@@ -377,8 +377,8 @@ async fn verify_any(
 /// `Client::builder()`. Unset fields come from the environment.
 #[derive(Default)]
 pub struct ClientBuilder {
-    endpoints: Vec<url::Url>,
-    tenant: Option<TenantId>,
+    endpoints: Vec<String>,
+    tenant: Option<String>,
     root_id: Option<TenantRootId>,
     identity: Option<Arc<dyn IdentityProvider>>,
     trust: Option<seal_verify::Trust>,
@@ -386,13 +386,15 @@ pub struct ClientBuilder {
 
 impl ClientBuilder {
     /// The tenant's enclave replicas, e.g. `https://10.0.1.4:8443`. Replicas share keys and
-    /// ports, so the SDK fails over between them without a load balancer.
-    pub fn endpoints(mut self, endpoints: impl IntoIterator<Item = url::Url>) -> Self {
-        self.endpoints = endpoints.into_iter().collect();
+    /// ports, so the SDK fails over between them without a load balancer. `connect` checks them.
+    pub fn endpoints<S: AsRef<str>>(mut self, endpoints: impl IntoIterator<Item = S>) -> Self {
+        self.endpoints = endpoints.into_iter().map(|e| e.as_ref().to_owned()).collect();
         self
     }
-    pub fn tenant(mut self, tenant: TenantId) -> Self {
-        self.tenant = Some(tenant);
+    /// `acme`, or `acme@<root id>` as `seal status` prints it (that root, unless `root_id` names one).
+    /// `connect` checks it.
+    pub fn tenant(mut self, tenant: impl AsRef<str>) -> Self {
+        self.tenant = Some(tenant.as_ref().to_owned());
         self
     }
     /// The tenant's root chain. Enclaves serving another chain for the same tenant name are
@@ -419,13 +421,14 @@ impl ClientBuilder {
     /// lifetime. When no endpoint is reachable, retries for up to `UNREACHABLE_WAIT_SECS`.
     pub async fn connect(self) -> Result<Client, ClientError> {
         let endpoints = match self.endpoints.is_empty() {
-            false => self.endpoints,
+            false => parse_endpoints("endpoint", &self.endpoints)?,
             true => endpoints_from_env()?,
         };
         for endpoint in &endpoints {
             verify::host_port(endpoint)?;
         }
-        let (tenant, root_id) = tenant_from_env(self.tenant, self.root_id)?;
+        let (tenant, pin_root) = self.tenant.as_deref().map(parse_tenant).transpose()?.unzip();
+        let (tenant, root_id) = tenant_from_env(tenant, self.root_id.or(pin_root.flatten()))?;
         let trust = match self.trust {
             Some(t) => t,
             None => shipped_trust()?,
@@ -456,16 +459,17 @@ impl ClientBuilder {
 
 fn endpoints_from_env() -> Result<Vec<url::Url>, ClientError> {
     let text = std::env::var("SEAL_ENDPOINT").map_err(|_| ClientError::Invalid("SEAL_ENDPOINT is not set".into()))?;
-    let endpoints = text
-        .split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(|s| url::Url::parse(s).map_err(|e| ClientError::Invalid(format!("SEAL_ENDPOINT {s}: {e}"))))
-        .collect::<Result<Vec<_>, _>>()?;
-    if endpoints.is_empty() {
+    let listed: Vec<&str> = text.split(',').filter(|s| !s.trim().is_empty()).collect();
+    if listed.is_empty() {
         return Err(ClientError::Invalid("SEAL_ENDPOINT names no endpoint".into()));
     }
-    Ok(endpoints)
+    parse_endpoints("SEAL_ENDPOINT", &listed)
+}
+
+/// Endpoint URLs; `what` names their source in errors.
+fn parse_endpoints<S: AsRef<str>>(what: &str, endpoints: &[S]) -> Result<Vec<url::Url>, ClientError> {
+    let parse = |s: &str| url::Url::parse(s.trim()).map_err(|e| ClientError::Invalid(format!("{what} {s}: {e}")));
+    endpoints.iter().map(|s| parse(s.as_ref())).collect()
 }
 
 /// The builder's tenant and root, completed from `SEAL_TENANT` (`<tenant>` or

@@ -606,7 +606,7 @@ async fn azure(env: &Env, args: AzureArgs) -> anyhow::Result<()> {
             steps.note(format!("audience {a}{own}"));
             a
         }
-        None => register_audience(&mut steps, &tenant.to_string()).await?,
+        None => register_audience(&mut steps, tenant.as_ref()).await?,
     };
     let subnet = match network {
         Network::Prepared { id, nat } => {

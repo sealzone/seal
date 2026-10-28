@@ -101,18 +101,10 @@ fn builder(
 ) -> Result<seal::ClientBuilder, ClientError> {
     let mut builder = seal::Client::builder();
     if let Some(endpoints) = endpoints {
-        let endpoints = endpoints
-            .iter()
-            .map(|e| url::Url::parse(e.trim()).map_err(|err| ClientError::Invalid(format!("endpoint {e}: {err}"))))
-            .collect::<Result<Vec<_>, _>>()?;
         builder = builder.endpoints(endpoints);
     }
     if let Some(tenant) = tenant {
-        let (tenant, root_id) = seal_proto::TenantPin::parse_partial(&tenant)?;
         builder = builder.tenant(tenant);
-        if let Some(root_id) = root_id {
-            builder = builder.root_id(root_id);
-        }
     }
     if let Some(root_id) = root_id {
         builder = builder.root_id(TenantRootId::from_str(root_id.trim())?);

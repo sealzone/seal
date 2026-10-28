@@ -48,6 +48,11 @@ macro_rules! name_type {
                 v.0
             }
         }
+        impl AsRef<str> for $name {
+            fn as_ref(&self) -> &str {
+                &self.0
+            }
+        }
         impl FromStr for $name {
             type Err = ProtoError;
             fn from_str(s: &str) -> Result<Self, ProtoError> {
