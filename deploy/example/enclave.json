@@ -13,9 +13,9 @@
     },
     "releases": {
       "release_keys": [
-        "f887cd8f32fe03668ee9604d708754799b66a8d5c80f85aea785c6c5e96fdb33",
-        "4aa19827e0966856c96e057e7b03474a449ce1f837ddc6f5a1faace80df66f18",
-        "ad415fde8fd526d94657afd2d244cc2f4a84824034a448bf04b7d5ae089cbc88"
+        "b59dbb2106c40cfae71fb9574f5953373f65ae6022a6dfbcd0c50ba9c1a115db",
+        "940c33d7d1f094c022d76713b9ea3ce878907d524f6afb3a250275d09927f3b8",
+        "4fb2defb9b864c42147ee07888ce85c4e20c9ef6825188e10dcb4f5fa3d48b8c"
       ],
       "release_threshold": 2,
       "required_auditor": null,

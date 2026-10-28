@@ -1,0 +1,41 @@
+{
+  "guardians": {
+    "azure_snp_aci": "c16c179cd37e3096dd5197b791ef1a36849c00eab9d3e84a8b67683e0ed5edad"
+  },
+  "releases": {
+    "release_keys": [
+      "f887cd8f32fe03668ee9604d708754799b66a8d5c80f85aea785c6c5e96fdb33",
+      "4aa19827e0966856c96e057e7b03474a449ce1f837ddc6f5a1faace80df66f18",
+      "ad415fde8fd526d94657afd2d244cc2f4a84824034a448bf04b7d5ae089cbc88"
+    ],
+    "release_threshold": 2,
+    "required_auditor": null,
+    "time_lock_secs": 300,
+    "tlog": {
+      "log_key": "d58ebb3aa5807e42b9f9e1bcba2016a512ba4e495765da9f72aa7991c3772e59",
+      "origin": "log.seal.zone/v1",
+      "witness_keys": [
+        "11f61373672d9041dd390b814b0b5fef41339389c19597848429cb6034a4cbc8",
+        "aeddae03750659c0a2b3487bae4cc596b36103eb2e1f2b297c4f2e02b4be797c",
+        "e719cc38fce3e73404c1751b6f34f00e665aa1e018016cb3453657f250c98f72"
+      ],
+      "witness_quorum": 2
+    }
+  },
+  "tenants": {
+    "registrar_keys": [
+      "eca854b6726eb6b0d05d8000c66f3701d9164bd3e489a35180312b3a94b489b4"
+    ],
+    "registrar_threshold": 1,
+    "tlog": {
+      "log_key": "d58ebb3aa5807e42b9f9e1bcba2016a512ba4e495765da9f72aa7991c3772e59",
+      "origin": "log.seal.zone/v1",
+      "witness_keys": [
+        "11f61373672d9041dd390b814b0b5fef41339389c19597848429cb6034a4cbc8",
+        "aeddae03750659c0a2b3487bae4cc596b36103eb2e1f2b297c4f2e02b4be797c",
+        "e719cc38fce3e73404c1751b6f34f00e665aa1e018016cb3453657f250c98f72"
+      ],
+      "witness_quorum": 2
+    }
+  }
+}
