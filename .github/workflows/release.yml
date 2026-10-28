@@ -69,7 +69,7 @@ jobs:
           - { runner: ubuntu-24.04-arm, target: aarch64, manylinux: "2_28" }
           - { runner: ubuntu-latest, target: x86_64, manylinux: musllinux_1_2 }
           - { runner: ubuntu-24.04-arm, target: aarch64, manylinux: musllinux_1_2 }
-          - { runner: macos-13, target: x86_64 }
+          - { runner: macos-15-intel, target: x86_64 }
           - { runner: macos-14, target: aarch64 }
     steps:
       - uses: actions/checkout@v4
@@ -95,7 +95,7 @@ jobs:
           - { runner: ubuntu-24.04-arm, platform: linux-arm64-gnu }
           - { runner: ubuntu-latest, platform: linux-x64-musl, musl: true }
           - { runner: ubuntu-24.04-arm, platform: linux-arm64-musl, musl: true }
-          - { runner: macos-13, platform: darwin-x64 }
+          - { runner: macos-15-intel, platform: darwin-x64 }
           - { runner: macos-14, platform: darwin-arm64 }
     steps:
       - uses: actions/checkout@v4
@@ -127,7 +127,7 @@ jobs:
         include:
           - { runner: ubuntu-latest, goos: linux, goarch: amd64 }
           - { runner: ubuntu-24.04-arm, goos: linux, goarch: arm64 }
-          - { runner: macos-13, goos: darwin, goarch: amd64 }
+          - { runner: macos-15-intel, goos: darwin, goarch: amd64 }
           - { runner: macos-14, goos: darwin, goarch: arm64 }
     steps:
       - uses: actions/checkout@v4
