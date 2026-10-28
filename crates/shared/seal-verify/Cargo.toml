@@ -15,6 +15,7 @@ name = "seal_verify"
 seal-proto.workspace = true
 seal-crypto.workspace = true
 seal-tlog.workspace = true
+seal-attest.workspace = true
 thiserror.workspace = true
 serde.workspace = true
 # `Trust::from_json`.

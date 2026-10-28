@@ -20,11 +20,9 @@ use std::sync::{Arc, Mutex};
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime as TlsTime};
 use rustls::{CertificateError, DigitallySignedStruct, SignatureScheme};
-use seal_proto::api::{AttestationBinding, AttestationResponse, ATTESTATION_BINDING_LABEL};
-use seal_proto::codec::labeled_digest;
-use seal_proto::freshness::ATTESTATION_MAX_AGE_SECS;
-use seal_proto::release::{Component, ServiceKeyCertificate};
-use seal_proto::{Measurement, PlatformId, TenantId, TenantRootId, TrustedTime, UnixTime};
+use seal_proto::api::{AttestationBinding, AttestationResponse};
+use seal_proto::release::ServiceKeyCertificate;
+use seal_proto::{Measurement, PlatformId, TenantId, TenantRootId, UnixTime};
 use sha2::{Digest, Sha256};
 
 use crate::transport;
@@ -114,7 +112,8 @@ pub(crate) fn spki_sha256(cert_der: &[u8]) -> Option<[u8; 32]> {
     Some(Sha256::digest(spki).into())
 }
 
-/// Every check on an attestation response, given the key the TLS connection presented. Pure.
+/// Every check on an attestation response, given the key the TLS connection presented. Pure:
+/// the presented key against the attested one, then `seal_verify::attestation::verify`.
 pub(crate) fn check(
     response: &AttestationResponse,
     presented_spki: &[u8; 32],
@@ -122,64 +121,19 @@ pub(crate) fn check(
     expected: &Expected,
     now: UnixTime,
 ) -> Result<VerifiedEnclave, ClientError> {
-    let time = TrustedTime::exact(now);
-    let binding = &response.binding;
-
-    let evidence = seal_attest::verify(&response.evidence, &time).map_err(|e| fail(format!("evidence: {e}")))?;
-    if evidence.report_data != labeled_digest(ATTESTATION_BINDING_LABEL, binding) {
-        return Err(fail("the evidence does not commit to this binding"));
-    }
-    if presented_spki != &binding.tls_spki_sha256 {
+    if presented_spki != &response.binding.tls_spki_sha256 {
         return Err(fail("the enclave presented a TLS key other than the attested one"));
     }
-    if binding.attested_at.abs_diff(now) > ATTESTATION_MAX_AGE_SECS {
-        return Err(fail(format!(
-            "attestation from {} is more than {ATTESTATION_MAX_AGE_SECS} s from this clock ({now})",
-            binding.attested_at
-        )));
-    }
-
-    let release = seal_verify::ReleaseVerifier::new(trust.releases.clone())
-        .verify(&response.release, &time)
-        .map_err(|e| fail(format!("release: {e}")))?;
-    let manifest = release.manifest();
-    if manifest.component != Component::Enclave {
-        return Err(fail("the release is not an enclave release"));
-    }
-    if manifest.platform != evidence.platform || manifest.measurement != evidence.measurement {
-        return Err(fail("the evidence's measurement is not the release's"));
-    }
-    if manifest.service_key_version != binding.service_key_version {
-        return Err(fail("the binding's service key version is not the release's"));
-    }
-    seal_verify::ReleaseVerifier::check_tcb(release.constraints(), evidence.platform, &evidence.tcb)
-        .map_err(|e| fail(format!("release: {e}")))?;
-
-    let cert = seal_verify::verify_service_certificate(&trust.guardians, &response.certificate)
-        .map_err(|e| fail(e.to_string()))?;
-    if cert.platform != evidence.platform
-        || cert.service_key_version != binding.service_key_version
-        || cert.tls_spki_sha256 != binding.tls_spki_sha256
-        || cert.ingest_public_key != binding.ingest_public_key
-        || cert.telemetry_public_keys != binding.telemetry_public_keys
-    {
-        return Err(fail("the guardian's certificate is for other keys than the attested ones"));
-    }
-    if cert.tenant != expected.tenant {
-        return Err(fail(format!("the enclave serves tenant {}, not {}", cert.tenant, expected.tenant)));
-    }
-    if expected.root_id.is_some_and(|r| r != cert.root_id) {
-        return Err(fail(format!("the enclave serves another root chain of {} ({})", cert.tenant, cert.root_id)));
-    }
-
-    let config = pinned_config(Pin::Key(binding.tls_spki_sha256));
+    let verified = seal_verify::attestation::verify(response, trust, &expected.tenant, expected.root_id.as_ref(), now)
+        .map_err(fail)?;
+    let config = pinned_config(Pin::Key(verified.binding.tls_spki_sha256));
     let mut tunnel_config = (*config).clone();
     tunnel_config.alpn_protocols = vec![seal_proto::tunnel::ALPN.to_vec()];
     Ok(VerifiedEnclave {
-        binding: binding.clone(),
-        certificate: cert.clone(),
-        measurement: evidence.measurement,
-        release_version: manifest.version.clone(),
+        binding: verified.binding,
+        certificate: verified.certificate,
+        measurement: verified.measurement,
+        release_version: verified.release_version,
         config,
         tunnel_config: Arc::new(tunnel_config),
     })

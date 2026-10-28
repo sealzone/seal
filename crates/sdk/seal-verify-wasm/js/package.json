@@ -1,7 +1,7 @@
 {
   "name": "@sealzone/verify",
   "version": "@VERSION@",
-  "description": "Seal's verifier in the browser: tenant documents and the pending window, passkey signatures, telemetry.",
+  "description": "Seal's verifier in the browser: tenant documents and the pending window, passkey signatures, telemetry; sealing secrets to an attested enclave (`/seal`).",
   "license": "Apache-2.0",
   "homepage": "https://seal.zone",
   "type": "module",
@@ -9,8 +9,21 @@
   "types": "index.d.ts",
   "exports": {
     ".": { "types": "./index.d.ts", "default": "./index.js" },
-    "./seal_verify_wasm_bg.wasm": "./seal_verify_wasm_bg.wasm"
+    "./seal": { "types": "./seal.d.ts", "default": "./seal.js" },
+    "./seal_verify_wasm_bg.wasm": "./seal_verify_wasm_bg.wasm",
+    "./seal/seal_wasm_bg.wasm": "./seal/seal_wasm_bg.wasm"
   },
-  "files": ["index.js", "index.d.ts", "seal_verify_wasm.js", "seal_verify_wasm.d.ts", "seal_verify_wasm_bg.wasm"],
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "seal_verify_wasm.js",
+    "seal_verify_wasm.d.ts",
+    "seal_verify_wasm_bg.wasm",
+    "seal.js",
+    "seal.d.ts",
+    "seal/seal_wasm.js",
+    "seal/seal_wasm.d.ts",
+    "seal/seal_wasm_bg.wasm"
+  ],
   "sideEffects": false
 }

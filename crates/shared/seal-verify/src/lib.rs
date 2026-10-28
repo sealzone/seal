@@ -2,6 +2,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod attestation;
 pub mod change;
 pub mod telemetry;
 mod window;

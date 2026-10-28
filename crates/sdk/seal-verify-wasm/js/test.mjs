@@ -86,3 +86,21 @@ test("telemetry", () => {
   const closed = seal.analyzeTelemetry(v.tenant, certified.keys, t.batches, { receipts: t.receipts })
   assert.equal(closed.sealed.length, t.sealed_without_reader)
 })
+
+// The sealing module. A real seal needs a live attested enclave (the console's e2e covers it);
+// here, what holds without one.
+const sealing = await import(join(pkg, "seal.js"))
+sealing.initSync({ module: readFileSync(join(pkg, "seal", "seal_wasm_bg.wasm")) })
+
+test("sealing: producer keys and refusals before any network", () => {
+  const key = `sealak_${Buffer.alloc(32, 9).toString("base64url")}`
+  const id = sealing.producerIdentity(key)
+  assert.equal(id.kind, "app_key")
+  assert.match(id.key_id, /^[0-9a-f]{64}$/)
+  assert.match(id.public_key, /^[0-9a-f]{64}$/)
+  assert.throws(() => sealing.producerIdentity("sealak_short"), /a producer key is sealak_/)
+  assert.throws(() => sealing.producerIdentity(Buffer.alloc(32, 9).toString("hex")), (e) => !e.message.includes("0909"))
+  const root = "11".repeat(32)
+  assert.throws(() => sealing.verifyEnclave(v.trust, v.tenant, root, {}, 0), /attestation/)
+  assert.throws(() => sealing.checkSealed({ blob: "seal1.x", blob_id: "0", telemetry: {} }, v.tenant, root, {}), /./)
+})

@@ -5,6 +5,9 @@
 #   crates/sdk/seal-verify-wasm/build.sh OUT        into OUT
 #   crates/sdk/seal-verify-wasm/build.sh --test     build, then run js/test.mjs (Node 20+) against it
 #
+# Two modules: the verifier (`@sealzone/verify`) and, with the `seal` feature, the sealing one
+# (`@sealzone/verify/seal`), which only pages that seal load.
+#
 # Needs the wasm32-unknown-unknown target (`rustup target add wasm32-unknown-unknown`) and
 # wasm-bindgen-cli at exactly the workspace's wasm-bindgen version
 # (`cargo install wasm-bindgen-cli --version =<version> --locked`).
@@ -34,7 +37,10 @@ target="$root/target/wasm"
 rm -rf "$out"
 mkdir -p "$out"
 wasm-bindgen --target web --out-dir "$out" "$target/wasm32-unknown-unknown/release/seal_verify_wasm.wasm"
-cp "$here/js/index.js" "$here/js/index.d.ts" "$out/"
+# The sealing module (`/seal`): the same crate with the sealing exports, in a target dir of its own.
+(cd "$root" && CARGO_TARGET_DIR="$target-seal" cargo build --locked --release -p sealzone-verify-wasm --features seal --target wasm32-unknown-unknown)
+wasm-bindgen --target web --out-dir "$out/seal" --out-name seal_wasm "$target-seal/wasm32-unknown-unknown/release/seal_verify_wasm.wasm"
+cp "$here/js/index.js" "$here/js/index.d.ts" "$here/js/seal.js" "$here/js/seal.d.ts" "$out/"
 version=$(sed -n 's/^version = "\(.*\)"$/\1/p' "$root/Cargo.toml" | head -n 1)
 sed "s/@VERSION@/$version/" "$here/js/package.json" > "$out/package.json"
 echo "built @sealzone/verify $version in $out"

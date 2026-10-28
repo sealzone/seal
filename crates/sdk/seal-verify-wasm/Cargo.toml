@@ -12,6 +12,12 @@ publish = false
 name = "seal_verify_wasm"
 crate-type = ["cdylib", "rlib"]
 
+[features]
+# The sealing exports (`verifyEnclave`, `sealRequest`, …), built as a second module (`build.sh`):
+# enclave attestation brings in RSA, P-384 and X.509, which pages that only verify documents
+# should not load.
+seal = []
+
 [dependencies]
 seal-proto.workspace = true
 seal-crypto.workspace = true
@@ -19,6 +25,7 @@ seal-tlog.workspace = true
 seal-verify.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+zeroize.workspace = true
 
 # Only in the WebAssembly build, so no other build (and never a TEE image) sees them.
 [target.'cfg(target_arch = "wasm32")'.dependencies]

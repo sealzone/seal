@@ -1,11 +1,12 @@
 //! `seal-verify` for the browser: the web UI checks tenant documents, the pending window,
 //! passkey signatures and telemetry with the same code the enclave, the guardian and the CLI
-//! run. `api` holds the functions (JSON in and out); built for `wasm32-unknown-unknown`, they
-//! are exported to JavaScript, and `js/index.js` wraps them (`build.sh` makes the npm package
-//! `@sealzone/verify`).
+//! run, and seals secrets to an attested enclave as the CLI does. `api` holds the functions
+//! (JSON in and out); built for `wasm32-unknown-unknown`, they are exported to JavaScript, and
+//! `js/index.js` wraps them (`build.sh` makes the npm package `@sealzone/verify`).
 //!
 //! Browser verification protects against the control plane and storage, not against the page
-//! that loads it: the trust it is given comes from wherever the page does.
+//! that loads it: the trust it is given comes from wherever the page does. The same goes for a
+//! secret sealed in the browser: relays see only ciphertext, but the page sees what is typed.
 
 #![deny(unsafe_code)]
 
@@ -116,5 +117,46 @@ mod js {
     #[wasm_bindgen(js_name = telemetryReaderPublicKey)]
     pub fn telemetry_reader_public_key(reader_seed: &str) -> Result<String, JsError> {
         js(api::telemetry_reader_public_key(reader_seed))
+    }
+
+    #[cfg(feature = "seal")]
+    #[wasm_bindgen(js_name = verifyEnclave)]
+    pub fn verify_enclave(
+        trust: &str,
+        tenant: &str,
+        root_id: &str,
+        attestation: &str,
+        now: f64,
+    ) -> Result<String, JsError> {
+        js(api::verify_enclave(trust, tenant, root_id, attestation, now as u64))
+    }
+
+    #[cfg(feature = "seal")]
+    #[wasm_bindgen(js_name = producerIdentity)]
+    pub fn producer_identity(producer_key: &str) -> Result<String, JsError> {
+        js(api::producer_identity(producer_key))
+    }
+
+    #[cfg(feature = "seal")]
+    #[wasm_bindgen(js_name = sealRequest)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn seal_request(
+        trust: &str,
+        tenant: &str,
+        root_id: &str,
+        attestation: &str,
+        ticket: &str,
+        producer_key: &str,
+        secret: &[u8],
+        options: &str,
+        now: f64,
+    ) -> Result<String, JsError> {
+        js(api::seal_request(trust, tenant, root_id, attestation, ticket, producer_key, secret, options, now as u64))
+    }
+
+    #[cfg(feature = "seal")]
+    #[wasm_bindgen(js_name = checkSealed)]
+    pub fn check_sealed(response: &str, tenant: &str, root_id: &str, policy: &str) -> Result<String, JsError> {
+        js(api::check_sealed(response, tenant, root_id, policy))
     }
 }

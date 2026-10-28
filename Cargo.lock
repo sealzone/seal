@@ -3547,6 +3547,7 @@ name = "sealzone-verify"
 version = "0.1.0"
 dependencies = [
  "p256",
+ "sealzone-attest",
  "sealzone-crypto",
  "sealzone-proto",
  "sealzone-tlog",
@@ -3570,6 +3571,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "wasm-bindgen",
+ "zeroize",
 ]
 
 [[package]]
