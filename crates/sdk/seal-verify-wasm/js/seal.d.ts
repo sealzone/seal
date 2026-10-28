@@ -20,7 +20,7 @@ export interface VerifiedEnclave {
   root_id: string
 }
 
-/** `seal seal`'s options: where the secret may be sent, which apps may use it, and how. */
+/** `seal secret`'s options: where the secret may be sent, which apps may use it, and how. */
 export interface SealOptions {
   to: string
   apps: string[]
@@ -43,23 +43,15 @@ export function verifyEnclave(
   attestation: Json,
   now: number
 ): VerifiedEnclave
-/** The `IdentityMatcher` a producer key (`sealak_…`) is granted as. */
-export function producerIdentity(producerKey: string): {
-  kind: "app_key"
-  key_id: string
-  public_key: string
-}
 /**
- * `POST /v1/blobs`'s body: `secret` HPKE-sealed to the verified enclave's ingest key, proven by
- * `producerKey` over `ticket`. Relays see only ciphertext; this page sees the secret.
+ * `POST /v1/blobs`'s body: `secret` HPKE-sealed to the verified enclave's ingest key. Anyone may
+ * seal. Relays see only ciphertext; this page sees the secret.
  */
 export function sealRequest(
   trust: Trust,
   tenant: string,
   rootId: string,
   attestation: Json,
-  ticket: Json,
-  producerKey: string,
   secret: Uint8Array,
   options: SealOptions,
   now: number

@@ -152,7 +152,6 @@ mod tests {
             version,
             root_version: 1,
             apps: Default::default(),
-            producers: Default::default(),
             tenant_key_versions: TenantKeyVersions {
                 current: TenantKeyVersion(1),
                 oldest_accepted: TenantKeyVersion(1),

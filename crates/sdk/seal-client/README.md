@@ -1,6 +1,6 @@
 # sealzone: the Seal SDK for Rust
 
-Use secrets without holding them. A producer seals a secret for named apps; an app starts a
+Use secrets without holding them. Anyone seals a secret for named apps; one of those apps starts a
 session on the sealed blob and gets a stand-in, while an attested enclave injects the real
 secret on the way to the upstream. The app, its host and Seal's control plane never see it.
 
@@ -13,7 +13,7 @@ seal = { package = "sealzone", version = "0.1" }
 # async fn demo(secret: &[u8]) -> Result<(), seal::ClientError> {
 let seal = seal::Client::from_env().await?;   // SEAL_ENDPOINT, SEAL_TENANT, the workload's identity
 
-// Seal (needs a producer grant).
+// Seal (anyone may: no identity or grant needed).
 let blob = seal.seal(secret, "https://api.openai.com/v1", ["checkout"]).header("x-api-key").await?;
 
 // Use it (needs an app grant): the app gets a stand-in key, the enclave injects the real one.

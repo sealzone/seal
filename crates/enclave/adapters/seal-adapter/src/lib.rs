@@ -63,7 +63,7 @@ pub trait Session: Send + Sync {
     /// identity, app, blob and connection) and runs completion detectors.
     fn complete(&self, completion: Completion);
     /// Resolves with the reason once this session must end: `expires_at` reached, the caller
-    /// or producer no longer granted, the tenant key version retired, the caller suspended,
+    /// no longer granted, the tenant key version retired, the caller suspended,
     /// or the session ended early (`SessionEnd`, on any replica). The runtime rechecks live
     /// sessions whenever the tenant's verified state changes, so this also ends connections
     /// that are already established.
@@ -87,8 +87,8 @@ pub struct ConnMeta {
 #[async_trait]
 pub trait SessionResolver: Send + Sync {
     /// Local key (as found by `find_local_key`) → session: `SHA-256(credential)` must equal
-    /// `meta.tunnel.local_key_sha256`, and the preamble's token is then redeemed. Then checks expiry, tenant key version, service key version, and that caller and
-    /// producer are still granted. Errors are safe to show the client.
+    /// `meta.tunnel.local_key_sha256`, and the preamble's token is then redeemed. Then checks expiry, tenant key version, service key version, and that the caller is
+    /// still granted. Errors are safe to show the client.
     async fn resolve(&self, credential: &str, meta: &ConnMeta) -> Result<Arc<dyn Session>, ErrorCode>;
 }
 

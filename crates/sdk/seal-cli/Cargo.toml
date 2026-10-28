@@ -1,6 +1,6 @@
 [package]
 name = "sealzone-cli"
-description = "The `seal` command: seal secrets, administer a Seal tenant (apps, producers, deployments, integrity), verify telemetry, deploy enclaves."
+description = "The `seal` command: seal secrets, administer a Seal tenant (apps, deployments, integrity), verify telemetry, deploy enclaves."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

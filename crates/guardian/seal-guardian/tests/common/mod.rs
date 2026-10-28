@@ -186,7 +186,6 @@ impl World {
             version: 1,
             root_version: 1,
             apps: Default::default(),
-            producers: Default::default(),
             tenant_key_versions: versions,
             platforms: [PlatformId::Sim].into(),
             integrity: Default::default(),

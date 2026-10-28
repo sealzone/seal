@@ -30,7 +30,7 @@ export interface Trust {
 
 export type Change = "narrowing" | "widening"
 
-/** One difference: `item.kind` names it (`producer_added`, `pending_window`, `admin_key_added`, …). */
+/** One difference: `item.kind` names it (`deployment_added`, `pending_window`, `admin_key_added`, …). */
 export interface Difference {
   change: Change
   item: { kind: string; [field: string]: Json }

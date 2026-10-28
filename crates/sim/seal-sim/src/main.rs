@@ -128,7 +128,6 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             println!("environment in {}", sim.dir.display());
             println!("enclave measurement {}", sim.measurement);
             println!("guardian key {}", sim.guardian_key);
-            println!("producer key {}", sim.producer_public_key);
             println!("deployment identity {}", sim.deployment_json());
             println!("log seed {}", sim.log_seed);
         }

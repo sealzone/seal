@@ -13,11 +13,9 @@ use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Nonce};
 
 use crate::{CryptoError, Key32, SecretBytes, TenantWrappingKey};
-use seal_proto::blob::{BlobHeader, DekWrap, DEK_WRAP_INFO, POLICY_LABEL};
+use seal_proto::blob::{BlobHeader, DekWrap, BLOB_VERSION, DEK_WRAP_INFO, POLICY_LABEL};
 use seal_proto::codec::{canonical, labeled_digest};
-use seal_proto::{
-    blob::Blob, identity::WorkloadIdentity, policy::SecretPolicy, release::TenantWrapKey, BlobId, PlatformId, UnixTime,
-};
+use seal_proto::{blob::Blob, policy::SecretPolicy, release::TenantWrapKey, BlobId, PlatformId, UnixTime};
 
 /// `DEK_WRAP_INFO || platform`.
 fn wrap_info(platform: PlatformId) -> Vec<u8> {
@@ -58,7 +56,6 @@ impl<'k> BlobSealer<'k> {
         &self,
         secret: &[u8],
         policy: SecretPolicy,
-        producer: WorkloadIdentity,
         now: UnixTime,
         rng: &mut impl rand::CryptoRng,
     ) -> Result<Blob, CryptoError> {
@@ -72,12 +69,11 @@ impl<'k> BlobSealer<'k> {
         let mut blob_id = [0u8; 8];
         rng.fill_bytes(&mut blob_id);
         let header = BlobHeader {
-            version: 1,
+            version: BLOB_VERSION,
             tenant: first.tenant.clone(),
             root_id: first.root_id,
             tenant_key_version: first.tenant_key_version,
             blob_id: BlobId(blob_id),
-            producer,
             policy_digest: labeled_digest(POLICY_LABEL, &policy),
             created_at: now,
         };

@@ -107,7 +107,6 @@ async fn init_resumes_where_a_failed_run_stopped() {
         version: 1,
         root_version: 1,
         apps: Default::default(),
-        producers: Default::default(),
         tenant_key_versions: seal_proto::state::TenantKeyVersions {
             current: seal_proto::TenantKeyVersion(1),
             oldest_accepted: seal_proto::TenantKeyVersion(1),
@@ -164,7 +163,6 @@ async fn init_resubmits_a_proposed_state_the_log_holds() {
         version: 1,
         root_version: 1,
         apps: Default::default(),
-        producers: Default::default(),
         tenant_key_versions: seal_proto::state::TenantKeyVersions {
             current: seal_proto::TenantKeyVersion(1),
             oldest_accepted: seal_proto::TenantKeyVersion(1),
@@ -243,7 +241,7 @@ async fn rotating_the_root_re_signs_the_state_under_it() {
     // Later edits need both keys.
     let current = admin.fetch(&now()).await.unwrap();
     let proposal = Admin::draft(&current, &now(), |s| {
-        s.producers.insert(app_key(3));
+        s.apps.entry(seal_proto::AppName::new("billing").unwrap()).or_default().insert(app_key(3));
         Ok(())
     })
     .unwrap();
@@ -339,7 +337,7 @@ async fn admins_sign_a_proposal_one_after_another() {
     let current = admin.fetch(&now()).await.unwrap();
     let root = current.tenant.root().clone();
     let draft = Admin::draft(&current, &now(), |s| {
-        s.producers.insert(app_key(4));
+        s.apps.entry(seal_proto::AppName::new("billing").unwrap()).or_default().insert(app_key(4));
         Ok(())
     })
     .unwrap();

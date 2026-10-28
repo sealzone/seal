@@ -1,11 +1,11 @@
 use seal_proto::{
-    api::{ExtendRequest, SealRequest, SessionRequest},
+    api::{ExtendRequest, SessionRequest},
     codec,
     freshness::ProofTicket,
     identity::{IdentityProof, ProofContext, ProofPurpose},
     policy::{HttpPath, HttpRules, Injection, SecretPolicy},
     session::ConsumerTier,
-    AppName, KeyId, ServiceKeyVersion, TenantId,
+    AppName, KeyId, TenantId,
 };
 
 fn policy() -> SecretPolicy {
@@ -76,30 +76,6 @@ fn session_commitment_covers_every_operation_field() {
     let mut changed = session();
     changed.endpoint = Some(Default::default());
     assert_ne!(expected, changed.expected_purpose());
-}
-
-#[test]
-fn upload_encryption_precedes_proof_without_a_circular_binding() {
-    let mut upload = SealRequest {
-        service_key_version: ServiceKeyVersion(1),
-        hpke_enc: vec![1],
-        sealed_payload: vec![2],
-        context: context(),
-        proof: proof(),
-    };
-    let aad = codec::canonical(&upload.ingest_context());
-    let expected = upload.expected_purpose();
-    upload.sealed_payload.push(3);
-    assert_ne!(expected, upload.expected_purpose());
-    assert_eq!(aad, codec::canonical(&upload.ingest_context()));
-    let expected = upload.expected_purpose();
-    upload.hpke_enc.push(4);
-    assert_ne!(expected, upload.expected_purpose());
-    assert_eq!(aad, codec::canonical(&upload.ingest_context()));
-    let expected = upload.expected_purpose();
-    upload.service_key_version = ServiceKeyVersion(2);
-    assert_ne!(expected, upload.expected_purpose());
-    assert_ne!(aad, codec::canonical(&upload.ingest_context()));
 }
 
 #[test]

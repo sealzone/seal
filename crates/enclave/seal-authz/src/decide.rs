@@ -1,6 +1,7 @@
 //! Pure decisions over one verified tenant snapshot. Every operation that needs a decision
 //! gets a permit (`SealPermit`, `SessionPermit`, `ExtendPermit`, `SignalPermit`), and the
 //! enclave acts only by consuming one. Ending a session needs no decision: its token suffices.
+//! Sealing needs no caller: anyone may seal, and only the apps a blob names can use it.
 //! Expiry checks use `time.latest()`; suspensions use `time.earliest()`.
 //!
 //! Every decision first requires the snapshot to be fresh (`time.latest() < fresh_until`,
@@ -16,7 +17,7 @@ use std::str::FromStr;
 
 use crate::{AuthenticatedRequest, AuthzError};
 use seal_proto::{
-    api::{ExtendRequest, SealRequest, SessionRequest, SignalRequest},
+    api::{ExtendRequest, SessionRequest, SignalRequest},
     blob::Blob,
     identity::{AuthenticationScope, IdentityMatcher, WorkloadIdentity},
     integrity::{
@@ -127,16 +128,13 @@ impl<'a> TenantAuthorizer<'a> {
         self.not_suspended(identity, time)
     }
 
-    /// Everything about the blob itself: this tenant and root, a producer still allowed, not
-    /// expired, a tenant key version in the accepted window. Returns whether to reseal.
+    /// Everything about the blob itself: this tenant and root, not expired, a tenant key
+    /// version in the accepted window. Returns whether to reseal.
     fn check_blob(&self, blob: &Blob, time: &TrustedTime) -> Result<bool, AuthzError> {
         let state = self.tenant.state();
         let h = &blob.header;
         if h.tenant != state.tenant || &h.root_id != self.tenant.root_id() {
             return Err(AuthzError::not_allowed("blob of another tenant"));
-        }
-        if !state.producers.iter().any(|m| m.matches(&h.producer)) {
-            return Err(AuthzError::not_allowed("the blob's producer is no longer allowed"));
         }
         if blob.policy.expires_at().is_some_and(|e| time.latest() >= e) {
             return Err(AuthzError::denied(ErrorCode::Expired, "blob expired"));
@@ -196,33 +194,19 @@ impl<'a> TenantAuthorizer<'a> {
             .ok_or_else(|| self.artifact_mismatch(identity, blob, time))
     }
 
-    /// Requires a current producer grant for the request tenant and a producer that is not
-    /// suspended; no consumer grant is implied.
-    pub fn seal<'p>(
-        &'p self,
-        request: &'p AuthenticatedRequest<SealRequest>,
-        time: &TrustedTime,
-    ) -> Result<SealPermit<'p>, AuthzError> {
+    /// A fresh snapshot to seal under. Anyone may seal: no grant is checked.
+    pub fn seal(&self, time: &TrustedTime) -> Result<SealPermit<'a>, AuthzError> {
         self.fresh(time)?;
-        let state = self.tenant.state();
-        self.own_tenant(&request.request().context.tenant)?;
-        let caller = request.caller();
-        if !holds(caller.scope(), caller.identity(), &state.producers, time) {
-            return Err(AuthzError::not_allowed("the caller holds no producer grant"));
-        }
-        self.not_suspended(caller.identity(), time)?;
-        Ok(SealPermit { request })
+        Ok(SealPermit { tenant: self.tenant })
     }
 
-    /// Checks the exact blob in request, producer, current grants, expiry, tenant key version and tier;
+    /// Checks the exact blob in request, current grants, expiry, tenant key version and tier;
     /// that the caller is not suspended; and that the request's `endpoint` report passes the
     /// app's artifact rule (`ArtifactMismatch` otherwise, carrying the `artifact-mismatch`
     /// signal the enclave records for the caller).
     /// Requires the exact authenticated envelope: compare request blob to opened.blob().
     /// Caller matching intersects exact original matchers with current app grants,
     /// checks identity, and caps validity by original authentication expiry.
-    /// Producer removal is principal-based: original producer JWT expiry does
-    /// not expire a blob, and producer authentication scope is not replayed.
     /// When the caller is granted under several of the blob's apps, the first (by name) whose
     /// artifact rule the report passes is the session's app.
     pub fn session<'p>(
@@ -274,7 +258,7 @@ impl<'a> TenantAuthorizer<'a> {
 
     /// A fresh proof for a live session: `request`'s caller must be `current.caller`, the
     /// session must not have ended early (`SessionEnded`), and it must still pass everything `session` checks (grants with the new proof's
-    /// scope, producer, expiry, key version, suspension, endpoint report). The permit carries
+    /// scope, expiry, key version, suspension, endpoint report). The permit carries
     /// the new authentication scope; the enclave issues the new token from it.
     pub fn extend<'p>(
         &'p self,
@@ -308,8 +292,7 @@ impl<'a> TenantAuthorizer<'a> {
 
     /// Uses persisted proof scope, not identity alone, when evaluating current grants.
     /// Also ends the session if it was ended early (with its `SessionEnd::reason`) or the
-    /// caller is suspended. Checks the token's expiry, the blob (producer, expiry, tenant key
-    /// version) and the snapshot's freshness too; the endpoint report is checked only when
+    /// caller is suspended. Checks the token's expiry, the blob (expiry, tenant key version) and the snapshot's freshness too; the endpoint report is checked only when
     /// one is sent (start and extend).
     pub fn recheck(&self, claims: &SessionClaims, time: &TrustedTime) -> Result<(), AuthzError> {
         self.fresh(time)?;
@@ -319,8 +302,8 @@ impl<'a> TenantAuthorizer<'a> {
     }
 
     /// The suspension in force for `identity` at `time`, if any: an uncleared signal whose
-    /// severity maps to `Suspend`, still within its duration. Session starts, extends,
-    /// seals and live sessions all check this. Of several, the one lasting longest.
+    /// severity maps to `Suspend`, still within its duration. Session starts, extends and
+    /// live sessions all check this. Of several, the one lasting longest.
     pub(crate) fn suspension(&self, identity: &WorkloadIdentity, time: &TrustedTime) -> Option<Suspension> {
         let state = self.tenant.state();
         let policy = &state.integrity;
@@ -339,7 +322,7 @@ impl<'a> TenantAuthorizer<'a> {
     }
 
     /// The signal a caller raises about itself. It always names the authenticated caller, who must hold
-    /// an app or producer grant in the tenant; the enclave signs the permit's signal.
+    /// an app grant in the tenant; the enclave signs the permit's signal.
     pub fn signal(
         &self,
         request: &AuthenticatedRequest<SignalRequest>,
@@ -352,8 +335,7 @@ impl<'a> TenantAuthorizer<'a> {
         self.own_tenant(&context.tenant)?;
         validate_code(&req.code).map_err(|_| AuthzError::denied(ErrorCode::BadRequest, "malformed signal code"))?;
         let caller = request.caller();
-        let granted = holds(caller.scope(), caller.identity(), &state.producers, time)
-            || state.apps.values().any(|g| holds(caller.scope(), caller.identity(), g, time));
+        let granted = state.apps.values().any(|g| holds(caller.scope(), caller.identity(), g, time));
         if !granted {
             return Err(AuthzError::not_allowed("the caller holds no grant in the tenant"));
         }
@@ -379,14 +361,14 @@ pub(crate) struct Suspension {
     pub(crate) until: Option<UnixTime>,
 }
 
-/// An approved seal: the exact authenticated request. The enclave seals with the permit's
-/// caller as the blob's producer.
+/// An approved seal: the fresh snapshot whose platforms and tenant key version the blob is
+/// sealed under.
 pub struct SealPermit<'a> {
-    request: &'a AuthenticatedRequest<SealRequest>,
+    tenant: &'a VerifiedTenant,
 }
 impl SealPermit<'_> {
-    pub fn request(&self) -> &AuthenticatedRequest<SealRequest> {
-        self.request
+    pub fn tenant(&self) -> &VerifiedTenant {
+        self.tenant
     }
 }
 

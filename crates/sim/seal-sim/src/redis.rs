@@ -19,7 +19,7 @@ const IMAGE: &str = "docker.io/library/redis:7-alpine";
 pub struct Redis(pub Container);
 
 impl Redis {
-    /// What producers seal the password to.
+    /// What the password is sealed to.
     pub fn destination(&self) -> String {
         format!("rediss://{USER}@{}:{}/0", crate::setup::HOST, self.0.port)
     }

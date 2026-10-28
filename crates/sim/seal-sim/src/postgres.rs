@@ -18,7 +18,7 @@ const IMAGE: &str = "docker.io/library/postgres:17";
 pub struct Postgres(pub Container);
 
 impl Postgres {
-    /// What producers seal the password to.
+    /// What the password is sealed to.
     pub fn destination(&self) -> String {
         format!("postgres://{USER}@{}:{}/{DATABASE}", crate::setup::HOST, self.0.port)
     }

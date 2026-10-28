@@ -11,7 +11,6 @@ use seal_crypto::sign::{admin_key_id, verify_admin};
 use seal_crypto::telemetry::TelemetryReaderKey;
 use seal_proto::api::{AttestationResponse, IngestContext, SealPayload, SealRequest, SealResponse, TelemetryReceipt};
 use seal_proto::codec::{self, labeled_digest};
-use seal_proto::identity::{IdentityProof, ProofContext, ProofPurpose, PROOF_CONTEXT_LABEL};
 use seal_proto::policy::{HttpRules, Injection, SecretPolicy, SpkiPin};
 use seal_proto::release::{ReleaseCosign, SignedCheckpoint, SignedServiceKeyCertificate, RELEASE_COSIGN_LABEL};
 use seal_proto::signed::{SigAlg, Signature};
@@ -367,9 +366,9 @@ pub fn telemetry_reader_public_key(reader_seed: &str) -> Result<String> {
 }
 
 // Sealing in the browser. The page verifies the tenant's enclave (`verify_enclave`), then
-// HPKE-seals the secret to the attested ingest key and signs the request with a producer's app
-// key (`seal_request`), as `seal seal` does; the attestation, the ticket and the request travel
-// through any relay, which sees only ciphertext. What it cannot protect against is the page
+// HPKE-seals the secret to the attested ingest key (`seal_request`), as `seal secret` does;
+// the attestation and the request travel through any relay, which sees only ciphertext.
+// Sealing is open, so no key or proof is involved. What it cannot protect against is the page
 // itself: the trust and this code come from wherever the page does.
 
 fn full_trust(trust: &str) -> Result<seal_verify::Trust> {
@@ -415,23 +414,7 @@ pub fn verify_enclave(trust: &str, tenant: &str, root_id: &str, attestation: &st
     })
 }
 
-/// A producer's app key as `seal grant producer key --generate` writes it (`SEAL_APP_KEY`'s
-/// `sealak_<base64url(32-byte seed)>`). Errors never repeat the key.
-fn app_key(text: &str) -> Result<seal_crypto::sign::SigningKey> {
-    const BAD: &str = "a producer key is sealak_ followed by 32 bytes in base64url";
-    let encoded = text.trim().strip_prefix("sealak_").ok_or(BAD)?;
-    let seed = zeroize::Zeroizing::new(codec::from_b64url(encoded).map_err(|_| BAD)?);
-    let seed: &[u8; 32] = seed.as_slice().try_into().map_err(|_| BAD)?;
-    Ok(seal_crypto::sign::SigningKey::from_seed(seed))
-}
-
-/// The `IdentityMatcher` a producer key is granted as: `{"kind":"app_key","key_id","public_key"}`.
-pub fn producer_identity(producer_key: &str) -> Result<String> {
-    let key = app_key(producer_key)?;
-    json(&seal_proto::identity::IdentityMatcher::AppKey { key_id: key.key_id(), public_key: key.public_key() })
-}
-
-/// What a seal says about the secret: `seal seal`'s options.
+/// What a seal says about the secret: `seal secret`'s options.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SealOptions {
@@ -506,25 +489,20 @@ struct SealRequestJson<'a> {
 }
 
 /// `POST /v1/blobs`'s body sealing `secret` under `options` to the enclave of `attestation`
-/// (verified as `verify_enclave` does), proven by `producer_key` over `ticket` (`POST
-/// /v1/tickets`). The plaintext is `canonical(SealPayload)`, HPKE-sealed to the attested ingest
-/// key with info `ingest_info(tenant)` and AAD `canonical(IngestContext)`; it is zeroed here.
-#[allow(clippy::too_many_arguments)]
+/// (verified as `verify_enclave` does). The plaintext is `canonical(SealPayload)`, HPKE-sealed
+/// to the attested ingest key with info `ingest_info(tenant)` and AAD `canonical(IngestContext)`;
+/// it is zeroed here.
 pub fn seal_request(
     trust: &str,
     tenant: &str,
     root_id: &str,
     attestation: &str,
-    ticket: &str,
-    producer_key: &str,
     secret: &[u8],
     options: &str,
     now: UnixTime,
 ) -> Result<String> {
     let tenant = tenant_id(tenant)?;
     let enclave = verified_enclave(trust, &tenant, root_id, attestation, now)?;
-    let key = app_key(producer_key)?;
-    let ticket: seal_proto::freshness::ProofTicket = parse("ticket", ticket)?;
     let options: SealOptions = parse("options", options)?;
     let policy = options.policy()?;
     policy.validate_secret(secret).map_err(|e| e.to_string())?;
@@ -547,24 +525,7 @@ pub fn seal_request(
         &mut seal_crypto::UnwrapErr(seal_crypto::SysRng),
     )
     .map_err(|e| format!("the attested ingest key: {e}"))?;
-    let mut request = SealRequest {
-        service_key_version: binding.service_key_version,
-        hpke_enc,
-        sealed_payload,
-        context: ProofContext {
-            tenant: tenant.clone(),
-            purpose: ProofPurpose::Seal { request_digest: [0; 32] },
-            tls_spki_sha256: binding.tls_spki_sha256,
-            ticket,
-        },
-        proof: IdentityProof::AppKey { key_id: key.key_id(), signature: Vec::new() },
-    };
-    request.context.purpose = request.expected_purpose();
-    let signature = key.sign(PROOF_CONTEXT_LABEL, &request.context);
-    let SigAlg::Ed25519 { sig } = signature.alg else {
-        return Err("app keys are Ed25519".into());
-    };
-    request.proof = IdentityProof::AppKey { key_id: signature.signer, signature: sig };
+    let request = SealRequest { service_key_version: binding.service_key_version, hpke_enc, sealed_payload };
     json(&SealRequestJson { request: &request, policy: &policy })
 }
 

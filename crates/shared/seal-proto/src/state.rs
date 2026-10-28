@@ -76,7 +76,6 @@ pub struct TenantState {
     /// The root version whose keys signed this state.
     pub root_version: u64,
     pub apps: BTreeMap<AppName, BTreeSet<IdentityMatcher>>,
-    pub producers: BTreeSet<IdentityMatcher>,
     pub tenant_key_versions: TenantKeyVersions,
     /// Platforms new blobs get DEK wraps for.
     pub platforms: BTreeSet<PlatformId>,

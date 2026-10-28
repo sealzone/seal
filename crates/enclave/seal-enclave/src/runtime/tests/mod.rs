@@ -28,8 +28,8 @@ use seal_authz::DeploymentProof;
 use seal_crypto::sign::SigningKey;
 use seal_crypto::{Key32, PlatformMasterKey, ServiceKeyScope, ServiceKeys, TenantWrappingKey, TenantWrappingKeyScope};
 use seal_proto::api::{
-    AttestationResponse, EndRequest, ExtendRequest, ExtendResponse, SealPayload, SealRequest, SealResponse,
-    SessionRequest, SessionResponse, SignalRequest,
+    AttestationResponse, EndRequest, ExtendRequest, ExtendResponse, IngestContext, SealPayload, SealRequest,
+    SealResponse, SessionRequest, SessionResponse, SignalRequest,
 };
 use seal_proto::freshness::ProofTicket;
 use seal_proto::identity::{
@@ -66,7 +66,6 @@ pub(super) const DAY: u64 = 86_400;
 const RELEASE_KEYS: [u8; 3] = [1, 2, 3];
 const REGISTRARS: [u8; 2] = [21, 22];
 const ADMIN: u8 = 31;
-pub(super) const PRODUCER: u8 = 41;
 pub(super) const CONSUMER: u8 = 42;
 pub(super) const STRANGER: u8 = 43;
 pub(super) const MEASUREMENT: Measurement = Measurement([0xe1; 48]);
@@ -181,7 +180,6 @@ impl World {
             version: 0,
             root_version: 1,
             apps: [(checkout(), [app_key(CONSUMER)].into())].into(),
-            producers: [app_key(PRODUCER)].into(),
             tenant_key_versions: TenantKeyVersions {
                 current: TenantKeyVersion(1),
                 oldest_accepted: TenantKeyVersion(1),
@@ -553,30 +551,23 @@ impl Harness {
         ProofContext { tenant: acme(), purpose, tls_spki_sha256, ticket }
     }
 
-    /// Seals `SECRET` for `checkout` at `https://api.example.com/v1` as `key(producer)`.
-    pub async fn seal(&self, producer: u8) -> Result<SealResponse, ServiceError> {
-        self.seal_with(producer, |p| p).await
+    /// Seals `SECRET` for `checkout` at `https://api.example.com/v1`.
+    pub async fn seal(&self) -> Result<SealResponse, ServiceError> {
+        self.seal_with(|p| p).await
     }
 
     /// `seal` with the policy adjusted before sealing (e.g. `.with_min_tier(Hardened)`).
     pub async fn seal_with(
         &self,
-        producer: u8,
         edit: impl FnOnce(SecretPolicy) -> SecretPolicy,
     ) -> Result<SealResponse, ServiceError> {
         let policy = edit(SecretPolicy::new(&format!("https://{HOST}/v1"), [checkout()]).unwrap());
         let payload = SealPayload { secret: SecretVec::new(SECRET.as_bytes().to_vec()), policy };
         let binding = self.attestation().await.binding;
-        let placeholder = ProofPurpose::Seal { request_digest: [0; 32] };
-        let mut request = SealRequest {
-            service_key_version: SVK,
-            hpke_enc: vec![],
-            sealed_payload: vec![],
-            context: self.context(placeholder).await,
-            proof: IdentityProof::AppKey { key_id: key(producer).key_id(), signature: vec![] },
-        };
-        let aad = codec::canonical(&request.ingest_context());
-        let (enc, ct) = seal_crypto::hpke::seal(
+        let ingest =
+            IngestContext { tenant: acme(), service_key_version: SVK, tls_spki_sha256: binding.tls_spki_sha256 };
+        let aad = codec::canonical(&ingest);
+        let (hpke_enc, sealed_payload) = seal_crypto::hpke::seal(
             &binding.ingest_public_key,
             &seal_crypto::hpke::ingest_info(&acme()),
             &aad,
@@ -584,11 +575,7 @@ impl Harness {
             &mut super::rng(),
         )
         .unwrap();
-        request.hpke_enc = enc;
-        request.sealed_payload = ct;
-        request.context.purpose = request.expected_purpose();
-        request.proof = proof(producer, &request.context);
-        self.service.seal(request).await
+        self.service.seal(SealRequest { service_key_version: SVK, hpke_enc, sealed_payload }).await
     }
 
     pub async fn start(
@@ -612,7 +599,7 @@ impl Harness {
 
     /// A sealed blob and a session on it for `CONSUMER`.
     pub async fn sealed_session(&self) -> SessionResponse {
-        let blob = self.seal(PRODUCER).await.unwrap().blob;
+        let blob = self.seal().await.unwrap().blob;
         self.start(CONSUMER, &blob, None).await.unwrap()
     }
 

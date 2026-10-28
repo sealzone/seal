@@ -302,7 +302,7 @@ pub struct TokenKey {
     pub(crate) service_key_version: ServiceKeyVersion,
 }
 
-/// X25519 key pair producers HPKE-seal secrets to.
+/// X25519 key pair secrets are HPKE-sealed to.
 pub struct IngestKey {
     pub(crate) secret: x25519_dalek::StaticSecret,
 }

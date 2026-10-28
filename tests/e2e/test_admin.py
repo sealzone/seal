@@ -19,12 +19,12 @@ def key_version(blob: str) -> int:
 
 
 def test_a_tenant_key_bump_reaches_running_replicas(world: World) -> None:
-    producer = world.client(world.producer_key)
-    blobs = [producer.seal(SECRET, to=world.upstream_url, apps=["checkout"])]
+    anyone = world.client(world.stranger_key)
+    blobs = [anyone.seal(SECRET, to=world.upstream_url, apps=["checkout"])]
     assert key_version(blobs[0]) == 1
 
     def seal_again() -> int:
-        blobs.append(producer.seal(SECRET, to=world.upstream_url, apps=["checkout"]))
+        blobs.append(anyone.seal(SECRET, to=world.upstream_url, apps=["checkout"]))
         return key_version(blobs[-1])
 
     world.admin("settings", "tenant-key", "bump", "--yes")
@@ -40,34 +40,36 @@ def test_the_pending_window_delays_widening_changes(world: World) -> None:
     # Lengthening the window narrows access, so it applies at once.
     world.admin("settings", "window", f"{WINDOW}s", "--yes")
 
-    # Adding a producer widens access: it waits, in public, for the window to pass.
-    out = world.admin("grant", "producer", "key", "--generate", "--out", str(world.path("cancelled.key")), "--yes")
+    # Adding an app identity widens access: it waits, in public, for the window to pass.
+    grant = ("grant", "app", "checkout", "key", "--generate", "--out")
+    out = world.admin(*grant, str(world.path("cancelled.key")), "--yes")
     assert "this widens access" in out, out
     code, out = world.admin_status("changes", "--watch", "--once")
-    assert code == 3 and "+ producer: app key" in out and "(widening)" in out, out
+    assert code == 3 and "+ app checkout: app key" in out and "(widening)" in out, out
 
     # A change built on the state in force supersedes the pending one, which never applies.
     out = world.admin("settings", "window", f"{WINDOW + 1}s", "--yes")
     assert "this narrows access" in out and "never take effect" in out, out
     assert world.admin_status("changes", "--watch", "--once")[0] == 0, "nothing pending once superseded"
 
-    world.admin("grant", "producer", "key", "--generate", "--out", str(world.path("added.key")), "--yes")
+    world.admin(*grant, str(world.path("added.key")), "--yes")
     published = time.monotonic()
+    blob = world.seal_with_cli(SECRET, world.upstream_url)
     added = world.client(world.path("added.key").read_text().strip())
     cancelled = world.client(world.path("cancelled.key").read_text().strip())
 
-    def may_seal(client: seal.Client) -> bool:
+    def may_start(client: seal.Client) -> bool:
         try:
-            client.seal(SECRET, to=world.upstream_url, apps=["checkout"])
-            return True
+            with client.session(blob, kind="http"):
+                return True
         except seal.NotAllowed:
             return False
 
     time.sleep(2)  # a reload after the publish, still within the window
-    assert not may_seal(added) and not may_seal(cancelled), "neither is a producer yet"
-    eventually("the added producer takes effect after the window", lambda: may_seal(added), timeout=WINDOW + 15)
+    assert not may_start(added) and not may_start(cancelled), "neither is the app's yet"
+    eventually("the added identity takes effect after the window", lambda: may_start(added), timeout=WINDOW + 15)
     assert time.monotonic() - published >= WINDOW + 1, "not before the window passed"
-    assert not may_seal(cancelled), "the superseded producer never takes effect"
+    assert not may_start(cancelled), "the superseded identity never takes effect"
     assert world.path("control/tenants/acme/anchors.json").exists(), "the control plane holds the guardian's anchor"
 
 

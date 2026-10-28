@@ -9,11 +9,12 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-use crate::identity::WorkloadIdentity;
 use crate::policy::SecretPolicy;
 use crate::{codec, BlobId, PlatformId, ProtoError, TenantId, TenantKeyVersion, TenantRootId, UnixTime};
 
 pub const BLOB_PREFIX: &str = "seal1";
+/// `BlobHeader::version`.
+pub const BLOB_VERSION: u8 = 2;
 pub const POLICY_LABEL: &str = "seal/policy/v1";
 
 /// Authenticated, unencrypted header. `codec::canonical(&BlobHeader)` is the
@@ -26,8 +27,6 @@ pub struct BlobHeader {
     pub root_id: TenantRootId,
     pub tenant_key_version: TenantKeyVersion,
     pub blob_id: BlobId,
-    /// The producer that sealed it; checked against the tenant's producers on every session start.
-    pub producer: WorkloadIdentity,
     /// `codec::labeled_digest(POLICY_LABEL, &policy)`. The policy travels in clear text next
     /// to the header; this digest, inside the AEAD's associated data, makes it tamper-evident.
     #[serde(with = "codec::array_b64")]
@@ -79,7 +78,7 @@ pub struct Blob {
 impl Blob {
     /// Structural checks only; cryptographic checks live in `seal-crypto`.
     pub fn check_structure(&self) -> Result<(), ProtoError> {
-        if self.header.version != 1 {
+        if self.header.version != BLOB_VERSION {
             return Err(ProtoError::Unsupported(format!("blob version {}", self.header.version)));
         }
         if codec::labeled_digest(POLICY_LABEL, &self.policy) != self.header.policy_digest {

@@ -61,7 +61,6 @@ fn state(version: u64, root_version: u64) -> TenantState {
         version,
         root_version,
         apps: Default::default(),
-        producers: Default::default(),
         tenant_key_versions: TenantKeyVersions { current: TenantKeyVersion(1), oldest_accepted: TenantKeyVersion(1) },
         platforms: [PlatformId::Sim].into(),
         integrity: Default::default(),

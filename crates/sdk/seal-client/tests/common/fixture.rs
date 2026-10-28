@@ -23,7 +23,7 @@ use seal_crypto::{Key32, PlatformMasterKey, ServiceKeys};
 use seal_proto::api::*;
 use seal_proto::blob::Blob;
 use seal_proto::codec::{canonical, labeled_digest};
-use seal_proto::identity::{IdentityProof, ProofContext, ProofPurpose, WorkloadIdentity, PROOF_CONTEXT_LABEL};
+use seal_proto::identity::{IdentityProof, ProofContext, ProofPurpose, PROOF_CONTEXT_LABEL};
 use seal_proto::policy::SecretPolicy;
 use seal_proto::release::{Component, LogEntry, ReleaseEvidence, ReleaseManifest, RELEASE_LABEL};
 use seal_proto::session::{ConsumerTier, PlatformTier, SessionInfo};
@@ -259,9 +259,8 @@ impl Fixture {
 impl Enclave {
     fn blob(&self, secret: &[u8], policy: SecretPolicy) -> String {
         let wrap = [self.master.tenant_wrap_key(&acme(), &ROOT, TenantKeyVersion(1)).body];
-        let producer = WorkloadIdentity::AppKey { key_id: AppKeyIdentity::from_seed(&APP_KEY_SEED).key_id() };
         let sealer = seal_crypto::blob::BlobSealer::new(&wrap).unwrap();
-        sealer.seal(secret, policy, producer, now(), &mut rng()).unwrap().to_string()
+        sealer.seal(secret, policy, now(), &mut rng()).unwrap().to_string()
     }
 
     fn attestation(&self) -> serde_json::Value {
@@ -326,8 +325,11 @@ impl Enclave {
             "/v1/tickets" => json(&self.keys.ticket.issue(&acme(), &TrustedTime::exact(now()), &mut rng())),
             "/v1/blobs" => {
                 let request: SealRequest = serde_json::from_slice(body).map_err(bad)?;
-                self.check_proof(&request.context, &request.proof, request.expected_purpose())?;
-                let aad = canonical(&request.ingest_context());
+                let aad = canonical(&IngestContext {
+                    tenant: acme(),
+                    service_key_version: request.service_key_version,
+                    tls_spki_sha256: self.keys.tls.spki_sha256(),
+                });
                 let opened = seal_crypto::hpke::open_ingest(
                     &self.keys.ingest,
                     &request.hpke_enc,

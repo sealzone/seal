@@ -9,7 +9,7 @@
 //! | Field | Narrowing | Widening |
 //! | --- | --- | --- |
 //! | `apps` | removing an app or an identity | adding an app or an identity |
-//! | `producers`, `deployments` | removing one | adding one |
+//! | `deployments` | removing one | adding one |
 //! | a deployment's `hosted` mark (Azure or Confidential Space) | setting it (the replica becomes Seal's, which idles out) | clearing it |
 //! | `platforms` | removing one | adding one |
 //! | `tenant_key_versions` | raising `oldest_accepted` (retiring); raising `current` | lowering either |
@@ -74,12 +74,6 @@ pub enum Item {
     },
     IdentityRemoved {
         app: AppName,
-        identity: IdentityMatcher,
-    },
-    ProducerAdded {
-        identity: IdentityMatcher,
-    },
-    ProducerRemoved {
         identity: IdentityMatcher,
     },
     DeploymentAdded {
@@ -275,13 +269,6 @@ pub fn diff_states(old: &TenantState, new: &TenantState) -> Vec<Difference> {
         }
     }
 
-    d.sets(
-        &old.producers,
-        &new.producers,
-        false,
-        |identity| Item::ProducerAdded { identity },
-        |identity| Item::ProducerRemoved { identity },
-    );
     deployments(&mut d, &old.deployments, &new.deployments);
     d.sets(
         &old.platforms,
@@ -498,7 +485,6 @@ mod tests {
             version: 1,
             root_version: 1,
             apps: [(app("checkout"), [id(1), id(2)].into())].into(),
-            producers: [id(3), id(4)].into(),
             tenant_key_versions: TenantKeyVersions {
                 current: TenantKeyVersion(3),
                 oldest_accepted: TenantKeyVersion(2),
@@ -593,15 +579,7 @@ mod tests {
     }
 
     #[test]
-    fn producers_deployments_platforms() {
-        let item = narrows(|s| {
-            s.producers.remove(&id(3));
-        });
-        assert_eq!(item, Item::ProducerRemoved { identity: id(3) });
-        let item = widens(|s| {
-            s.producers.insert(id(9));
-        });
-        assert_eq!(item, Item::ProducerAdded { identity: id(9) });
+    fn deployments_platforms() {
         let item = narrows(|s| {
             s.deployments.remove(&id(5));
         });
@@ -833,7 +811,7 @@ mod tests {
     fn a_mix_with_one_widening_widens() {
         let old = base();
         let mut new = old.clone();
-        new.producers.clear();
+        new.apps.clear();
         new.deployments.clear();
         new.deployments.insert(id(9));
         assert_eq!(classify_state(&old, &new), Change::Widening);

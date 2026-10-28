@@ -357,7 +357,7 @@ class Client:
     ) -> Union[str, Tuple[str, TelemetryReceipt]]:
         """Seal `secret` so only the named `apps` can use it, and only with `to`. Returns the
         portable blob text (`seal1.…`), safe to store anywhere; with `with_receipt=True`,
-        `(blob, receipt)`. Needs a producer grant.
+        `(blob, receipt)`. Anyone may seal: it needs no identity or grant.
 
         `to` is the destination URL (`https://`, `postgres://`, `clickhouse://`, `rediss://`).
         HTTP options: `header` (default `authorization`), `format` (`{key}` where the secret

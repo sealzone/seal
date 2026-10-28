@@ -6,8 +6,8 @@ type ErrorCode string
 const (
 	// CodeExpired: the blob is past its expiry, or its tenant key version is retired.
 	CodeExpired ErrorCode = "expired"
-	// CodeNotAllowed: this identity may not do this (not in the blob's apps, no producer
-	// grant), or no workload identity was found.
+	// CodeNotAllowed: this identity may not do this (not in the blob's apps), or no workload
+	// identity was found.
 	CodeNotAllowed ErrorCode = "not_allowed"
 	// CodeTierTooLow: the session would be weaker than WithMinTier.
 	CodeTierTooLow ErrorCode = "tier_too_low"

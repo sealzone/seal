@@ -19,7 +19,7 @@ async fn an_artifact_mismatch_is_signed_recorded_applied_and_published() {
     .await
     .map_err(|(e, _)| e)
     .unwrap();
-    let blob = h.seal(PRODUCER).await.unwrap().blob;
+    let blob = h.seal().await.unwrap().blob;
     // The allowed artifact starts a session.
     let good = h.start(CONSUMER, &blob, Some(report(1))).await.unwrap();
     let mut conn = h.connect(&good.token).await;
@@ -62,7 +62,7 @@ async fn an_artifact_mismatch_at_extend_is_applied_too() {
     .await
     .map_err(|(e, _)| e)
     .unwrap();
-    let blob = h.seal(PRODUCER).await.unwrap().blob;
+    let blob = h.seal().await.unwrap().blob;
     let session = h.start(CONSUMER, &blob, Some(report(1))).await.unwrap();
     let refused = h.extend(CONSUMER, &session.token, Some(report(3))).await.unwrap_err();
     assert_eq!(refused.code, ErrorCode::IntegrityFailed);
@@ -220,7 +220,7 @@ async fn evidence_bound_to_the_request_passes_and_replays_are_refused() {
     });
     boot.evidence_checks = vec![Arc::new(ChallengeCheck)];
     let h = boot.start().await.map_err(|(e, _)| e).unwrap();
-    let blob = h.seal(PRODUCER).await.unwrap().blob;
+    let blob = h.seal().await.unwrap().blob;
 
     // Evidence bound to exactly this request starts the session.
     let challenge = start_challenge(&blob);
@@ -228,7 +228,7 @@ async fn evidence_bound_to_the_request_passes_and_replays_are_refused() {
     assert!(good.is_ok(), "{:?}", good.err().map(|e| e.detail));
 
     // Evidence replayed from another request (different blob): finding, refusal, signal out.
-    let other = h.seal(PRODUCER).await.unwrap().blob;
+    let other = h.seal().await.unwrap().blob;
     let stale = start_challenge(&other);
     let refused = h.start(CONSUMER, &blob, Some(evidence_report(stale.to_vec()))).await.unwrap_err();
     assert_eq!(refused.code, ErrorCode::IntegrityFailed);
@@ -246,7 +246,7 @@ async fn evidence_from_an_unenrolled_provider_is_ignored() {
     });
     boot.evidence_checks = vec![Arc::new(ChallengeCheck)];
     let h = boot.start().await.map_err(|(e, _)| e).unwrap();
-    let blob = h.seal(PRODUCER).await.unwrap().blob;
+    let blob = h.seal().await.unwrap().blob;
     // No key registered for the provider: the check must not fire (fail-open), so hosts
     // running a reporter without the add-on keep working.
     let session = h.start(CONSUMER, &blob, Some(evidence_report(vec![0; 32]))).await;
@@ -265,7 +265,7 @@ async fn hardened_world() -> (Harness, String) {
     });
     boot.evidence_checks = vec![Arc::new(ChallengeCheck)];
     let h = boot.start().await.map_err(|(e, _)| e).unwrap();
-    let sealed = h.seal_with(PRODUCER, |p| p.with_min_tier(ConsumerTier::Hardened)).await.unwrap();
+    let sealed = h.seal_with(|p| p.with_min_tier(ConsumerTier::Hardened)).await.unwrap();
     (h, sealed.blob)
 }
 
@@ -297,7 +297,7 @@ async fn hardened_needs_verified_evidence() {
 
     // Evidence replayed from another request: below the floor, and the
     // endpoint's silence is recorded as `agent-silent` (log-only by default).
-    let other = h.seal(PRODUCER).await.unwrap().blob;
+    let other = h.seal().await.unwrap().blob;
     let stale = start_challenge(&other);
     let report = evidence_report(stale.to_vec());
     let err = h.start(CONSUMER, &blob, Some(report)).await.unwrap_err();
@@ -334,11 +334,11 @@ async fn images_that_cannot_verify_never_attest() {
     // No compiled-in checks: Hardened is unreachable, so a hardened blob fails closed
     // even with evidence bytes present (nothing verified them).
     let h = Boot::with_state(|_| {}).start().await.map_err(|(e, _)| e).unwrap();
-    let sealed = h.seal_with(PRODUCER, |p| p.with_min_tier(ConsumerTier::Hardened)).await.unwrap();
+    let sealed = h.seal_with(|p| p.with_min_tier(ConsumerTier::Hardened)).await.unwrap();
     let err = h.start(CONSUMER, &sealed.blob, Some(evidence_report(vec![0; 32]))).await.unwrap_err();
     assert_eq!(err.code, ErrorCode::TierTooLow);
     // A base blob is unaffected.
-    let base = h.seal(PRODUCER).await.unwrap().blob;
+    let base = h.seal().await.unwrap().blob;
     assert!(h.start(CONSUMER, &base, None).await.is_ok());
 }
 
@@ -385,7 +385,7 @@ async fn agent_findings_apply_at_once_when_the_replica_receives_them() {
     .await
     .map_err(|(e, _)| e)
     .unwrap();
-    let blob = h.seal(PRODUCER).await.unwrap().blob;
+    let blob = h.seal().await.unwrap().blob;
 
     // Sessions work before the finding.
     assert!(h.start(CONSUMER, &blob, None).await.is_ok());

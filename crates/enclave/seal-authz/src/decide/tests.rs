@@ -1,7 +1,7 @@
 use super::*;
 use crate::testing::*;
 use crate::AuthenticatedCaller;
-use seal_proto::api::{ExtendRequest, SealRequest, SessionRequest, SignalRequest};
+use seal_proto::api::{ExtendRequest, SessionRequest, SignalRequest};
 use seal_proto::freshness::ProofTicket;
 use seal_proto::identity::{IdentityProof, ProofContext, ProofPurpose};
 use seal_proto::integrity::{ArtifactHash, Clearance, IntegrityAction, IntegritySignal, Severity, SignalSource};
@@ -9,14 +9,13 @@ use seal_proto::session::SessionEnd;
 use seal_proto::state::{TenantKeyVersions, TenantState, STATE_FRESHNESS_SECS};
 use seal_proto::{Bearer, KeyId, PlatformId, ServiceKeyVersion, TenantId, TenantKeyVersion};
 
-const PRODUCER: u8 = 41;
 const CONSUMER: u8 = 42;
 const STRANGER: u8 = 43;
 
 fn ctx(tenant: TenantId) -> ProofContext {
     ProofContext {
         tenant,
-        purpose: ProofPurpose::Seal { request_digest: [0; 32] },
+        purpose: ProofPurpose::Session { request_digest: [0; 32] },
         tls_spki_sha256: [0; 32],
         ticket: ProofTicket { value: [0; 32], expires_at: 0, mac: [0; 32] },
     }
@@ -31,10 +30,9 @@ fn who(n: u8) -> AuthenticatedCaller {
     caller(id, &[m], None)
 }
 
-/// Producers {41}, apps {checkout: {42}, billing: {}}.
+/// Apps {checkout: {42}, billing: {}}.
 fn state(change: impl FnOnce(&mut TenantState)) -> TenantState {
     let mut s = base_state(1);
-    s.producers.insert(app_key(PRODUCER).0);
     s.apps.insert(app("checkout"), [app_key(CONSUMER).0].into());
     s.apps.insert(app("billing"), Default::default());
     change(&mut s);
@@ -43,17 +41,6 @@ fn state(change: impl FnOnce(&mut TenantState)) -> TenantState {
 
 fn tenant(change: impl FnOnce(&mut TenantState)) -> VerifiedTenant {
     verified(state(change))
-}
-
-fn seal_request(tenant: TenantId, caller: AuthenticatedCaller) -> AuthenticatedRequest<SealRequest> {
-    let req = SealRequest {
-        service_key_version: ServiceKeyVersion(1),
-        hpke_enc: vec![1],
-        sealed_payload: vec![2],
-        context: ctx(tenant),
-        proof: proof(),
-    };
-    AuthenticatedRequest::new(req, caller)
 }
 
 fn session_request(blob: &Blob, caller: AuthenticatedCaller) -> AuthenticatedRequest<SessionRequest> {
@@ -69,10 +56,6 @@ fn session_request_with(
         SessionRequest { blob: blob_text(blob), context: ctx(acme()), proof: proof(), min_tier: None, endpoint: None };
     change(&mut req);
     AuthenticatedRequest::new(req, caller)
-}
-
-fn producer_id() -> WorkloadIdentity {
-    app_key(PRODUCER).1
 }
 
 fn code<T>(r: Result<T, AuthzError>) -> ErrorCode {
@@ -146,50 +129,20 @@ fn report(b: u8) -> EndpointReport {
 // ---- seal ----
 
 #[test]
-fn seal_needs_a_current_producer_grant() {
-    let t = tenant(|_| {});
-    let auth = TenantAuthorizer::new(&t);
-    let now = at(T + 1);
-    let r = seal_request(acme(), who(PRODUCER));
-    assert!(auth.seal(&r, &now).is_ok());
-    // A consumer grant implies nothing about sealing.
-    assert_eq!(code(auth.seal(&seal_request(acme(), who(CONSUMER)), &now)), ErrorCode::NotAllowed);
-    assert_eq!(code(auth.seal(&seal_request(acme(), who(STRANGER)), &now)), ErrorCode::NotAllowed);
-    // Another tenant's request.
-    assert_eq!(code(auth.seal(&seal_request(other_tenant(), who(PRODUCER)), &now)), ErrorCode::NotAllowed);
-    // Authentication expiry, against the latest end of the interval.
-    let (m, id) = app_key(PRODUCER);
-    let expiring = seal_request(acme(), caller(id.clone(), std::slice::from_ref(&m), Some(T + 10)));
-    assert!(auth.seal(&expiring, &at(T + 9)).is_ok());
-    assert_eq!(code(auth.seal(&expiring, &at(T + 10))), ErrorCode::NotAllowed);
-    assert_eq!(code(auth.seal(&expiring, &TrustedTime { now: T + 8, radius: 2 })), ErrorCode::NotAllowed);
-    // A matched grant that does not match the identity does not count.
-    let confused = seal_request(acme(), caller(app_key(STRANGER).1, &[m], None));
-    assert_eq!(code(auth.seal(&confused, &now)), ErrorCode::NotAllowed);
-
-    // Removed from producers: refused.
-    let removed = tenant(|s| s.producers.clear());
-    assert_eq!(code(TenantAuthorizer::new(&removed).seal(&r, &now)), ErrorCode::NotAllowed);
-}
-
-#[test]
-fn seal_refuses_a_suspended_producer() {
-    let mut fx = Fixture::new(31);
-    let t = fx.verified(state(with_actions), &[signal_of(producer_id(), Severity::Critical, T)], &[]);
-    let r = seal_request(acme(), who(PRODUCER));
-    assert_eq!(code(TenantAuthorizer::new(&t).seal(&r, &at(T + 1))), ErrorCode::IntegrityFailed);
+fn anyone_may_seal_under_a_fresh_state() {
+    let t = tenant(|s| s.apps.clear());
+    assert_eq!(TenantAuthorizer::new(&t).seal(&at(T + 1)).unwrap().tenant().state().version, 1);
 }
 
 #[test]
 fn nothing_is_decided_on_a_state_past_its_freshness() {
     let t = tenant(|_| {});
     let auth = TenantAuthorizer::new(&t);
-    let r = seal_request(acme(), who(PRODUCER));
     let last = T + STATE_FRESHNESS_SECS - 1;
-    assert!(auth.seal(&r, &at(last)).is_ok());
-    assert!(matches!(auth.seal(&r, &at(last + 1)), Err(AuthzError::Stale)));
-    assert_eq!(code(auth.seal(&r, &TrustedTime { now: last, radius: 1 })), ErrorCode::Unavailable);
-    let b = blob(t.root_id(), 1, producer_id(), &["checkout"], None);
+    assert!(auth.seal(&at(last)).is_ok());
+    assert!(matches!(auth.seal(&at(last + 1)), Err(AuthzError::Stale)));
+    assert_eq!(code(auth.seal(&TrustedTime { now: last, radius: 1 })), ErrorCode::Unavailable);
+    let b = blob(t.root_id(), 1, &["checkout"], None);
     let opened = open(&b);
     let s = session_request(&b, who(CONSUMER));
     assert!(matches!(auth.session(&s, &opened, ConsumerTier::Base, &at(last + 1)), Err(AuthzError::Stale)));
@@ -203,16 +156,13 @@ fn nothing_is_decided_on_a_state_past_its_freshness() {
 fn a_granted_consumer_starts_a_session() {
     let t = tenant(|_| {});
     let auth = TenantAuthorizer::new(&t);
-    let b = blob(t.root_id(), 1, producer_id(), &["checkout"], None);
+    let b = blob(t.root_id(), 1, &["checkout"], None);
     let opened = open(&b);
     let r = session_request(&b, who(CONSUMER));
     let permit = auth.session(&r, &opened, ConsumerTier::Base, &at(T + 1)).unwrap();
     assert_eq!(permit.decision(), &SessionDecision { app: app("checkout"), tier: ConsumerTier::Base, reseal: false });
     assert_eq!(permit.opened().blob(), &b);
     assert_eq!(permit.request().caller().identity(), &app_key(CONSUMER).1);
-    // Producers hold no consumer grant.
-    let p = session_request(&b, who(PRODUCER));
-    assert_eq!(code(auth.session(&p, &opened, ConsumerTier::Base, &at(T + 1))), ErrorCode::NotAllowed);
     let s = session_request(&b, who(STRANGER));
     assert_eq!(code(auth.session(&s, &opened, ConsumerTier::Base, &at(T + 1))), ErrorCode::NotAllowed);
 }
@@ -221,8 +171,8 @@ fn a_granted_consumer_starts_a_session() {
 fn session_requires_the_exact_opened_blob() {
     let t = tenant(|_| {});
     let auth = TenantAuthorizer::new(&t);
-    let b = blob(t.root_id(), 1, producer_id(), &["checkout"], None);
-    let other = blob(t.root_id(), 1, producer_id(), &["checkout"], None);
+    let b = blob(t.root_id(), 1, &["checkout"], None);
+    let other = blob(t.root_id(), 1, &["checkout"], None);
     let r = session_request(&b, who(CONSUMER));
     assert_eq!(code(auth.session(&r, &open(&other), ConsumerTier::Base, &at(T + 1))), ErrorCode::BadRequest);
     let garbage = session_request_with(&b, who(CONSUMER), |r| r.blob = "seal1.nope".into());
@@ -234,39 +184,19 @@ fn session_refuses_a_blob_of_another_root_chain() {
     let t = tenant(|_| {});
     let other_root = Fixture::new(32).root_id();
     assert_ne!(&other_root, t.root_id());
-    let b = blob(&other_root, 1, producer_id(), &["checkout"], None);
+    let b = blob(&other_root, 1, &["checkout"], None);
     let r = session_request(&b, who(CONSUMER));
     assert_eq!(
         code(TenantAuthorizer::new(&t).session(&r, &open(&b), ConsumerTier::Base, &at(T + 1))),
         ErrorCode::NotAllowed
     );
-}
-
-#[test]
-fn session_needs_the_producer_still_allowed() {
-    let t = tenant(|s| s.producers.clear());
-    let b = blob(t.root_id(), 1, producer_id(), &["checkout"], None);
-    let r = session_request(&b, who(CONSUMER));
-    assert_eq!(
-        code(TenantAuthorizer::new(&t).session(&r, &open(&b), ConsumerTier::Base, &at(T + 1))),
-        ErrorCode::NotAllowed
-    );
-}
-
-#[test]
-fn session_on_a_blob_of_a_suspended_producer_still_works() {
-    let mut fx = Fixture::new(31);
-    let t = fx.verified(state(with_actions), &[signal_of(producer_id(), Severity::Critical, T)], &[]);
-    let b = blob(t.root_id(), 1, producer_id(), &["checkout"], None);
-    let r = session_request(&b, who(CONSUMER));
-    assert!(TenantAuthorizer::new(&t).session(&r, &open(&b), ConsumerTier::Base, &at(T + 1)).is_ok());
 }
 
 #[test]
 fn session_refuses_an_expired_blob() {
     let t = tenant(|_| {});
     let auth = TenantAuthorizer::new(&t);
-    let b = blob(t.root_id(), 1, producer_id(), &["checkout"], Some(T + 100));
+    let b = blob(t.root_id(), 1, &["checkout"], Some(T + 100));
     let (r, opened) = (session_request(&b, who(CONSUMER)), open(&b));
     assert!(auth.session(&r, &opened, ConsumerTier::Base, &at(T + 99)).is_ok());
     assert_eq!(code(auth.session(&r, &opened, ConsumerTier::Base, &at(T + 100))), ErrorCode::Expired);
@@ -285,7 +215,7 @@ fn tenant_key_version_window_and_reseal() {
         }
     };
     let decide = |t: &VerifiedTenant, v: u32| {
-        let b = blob(t.root_id(), v, producer_id(), &["checkout"], None);
+        let b = blob(t.root_id(), v, &["checkout"], None);
         let r = session_request(&b, who(CONSUMER));
         TenantAuthorizer::new(t).session(&r, &open(&b), ConsumerTier::Base, &at(T + 1)).map(|p| p.decision().reseal)
     };
@@ -309,7 +239,7 @@ fn session_grant_is_the_original_matchers_intersected_with_current_grants() {
         let t = tenant(|s| {
             s.apps.insert(app("checkout"), grants.into_iter().collect());
         });
-        let b = blob(t.root_id(), 1, producer_id(), &b_apps, None);
+        let b = blob(t.root_id(), 1, &b_apps, None);
         let r = session_request(&b, c.clone());
         TenantAuthorizer::new(&t).session(&r, &open(&b), ConsumerTier::Base, &time).map(|p| p.decision().app.clone())
     };
@@ -320,7 +250,7 @@ fn session_grant_is_the_original_matchers_intersected_with_current_grants() {
     assert_eq!(code(decide(vec![azure("api://a")], &caller_a, at(T + 1000))), ErrorCode::NotAllowed);
     // An app grant the blob does not list does not count.
     let t = tenant(|_| {});
-    let b = blob(t.root_id(), 1, producer_id(), &["billing"], None);
+    let b = blob(t.root_id(), 1, &["billing"], None);
     let r = session_request(&b, who(CONSUMER));
     assert_eq!(
         code(TenantAuthorizer::new(&t).session(&r, &open(&b), ConsumerTier::Base, &at(T + 1))),
@@ -333,7 +263,7 @@ fn session_refuses_a_suspended_caller() {
     let mut fx = Fixture::new(31);
     let t = fx.verified(state(with_actions), &[signal_of(app_key(CONSUMER).1, Severity::High, T)], &[]);
     let auth = TenantAuthorizer::new(&t);
-    let b = blob(t.root_id(), 1, producer_id(), &["checkout"], None);
+    let b = blob(t.root_id(), 1, &["checkout"], None);
     let (r, opened) = (session_request(&b, who(CONSUMER)), open(&b));
     assert_eq!(code(auth.session(&r, &opened, ConsumerTier::Base, &at(T + 59))), ErrorCode::IntegrityFailed);
     assert!(auth.session(&r, &opened, ConsumerTier::Base, &at(T + 60)).is_ok());
@@ -345,7 +275,7 @@ fn artifact_rule_produces_an_artifact_mismatch_signal() {
         s.integrity.artifacts.insert(app("checkout"), [report(1).artifact.unwrap()].into());
     });
     let auth = TenantAuthorizer::new(&t);
-    let b = blob(t.root_id(), 1, producer_id(), &["checkout"], None);
+    let b = blob(t.root_id(), 1, &["checkout"], None);
     let opened = open(&b);
     let good = session_request_with(&b, who(CONSUMER), |r| r.endpoint = Some(report(1)));
     assert!(auth.session(&good, &opened, ConsumerTier::Base, &at(T + 1)).is_ok());
@@ -377,7 +307,7 @@ fn artifact_rule_picks_an_app_whose_rule_passes() {
         s.apps.insert(app("zeta"), [app_key(CONSUMER).0].into());
     });
     let auth = TenantAuthorizer::new(&t);
-    let b = blob(t.root_id(), 1, producer_id(), &["billing", "zeta"], None);
+    let b = blob(t.root_id(), 1, &["billing", "zeta"], None);
     let opened = open(&b);
     let with = |report| session_request_with(&b, who(CONSUMER), |r| r.endpoint = report);
     let app_of = |r: &AuthenticatedRequest<SessionRequest>| {
@@ -391,7 +321,7 @@ fn artifact_rule_picks_an_app_whose_rule_passes() {
 fn tier() {
     let t = tenant(|_| {});
     let auth = TenantAuthorizer::new(&t);
-    let b = blob(t.root_id(), 1, producer_id(), &["checkout"], None);
+    let b = blob(t.root_id(), 1, &["checkout"], None);
     let opened = open(&b);
     // The caller's own floor: fail fast below it.
     let r = session_request_with(&b, who(CONSUMER), |r| r.min_tier = Some(ConsumerTier::Hardened));
@@ -406,7 +336,7 @@ fn tier() {
 fn the_sealed_policy_floor_outranks_everyone() {
     let t = tenant(|_| {});
     let auth = TenantAuthorizer::new(&t);
-    let hardened = hardened_blob(t.root_id(), 1, producer_id(), &["checkout"], ConsumerTier::Hardened);
+    let hardened = hardened_blob(t.root_id(), 1, &["checkout"], ConsumerTier::Hardened);
     let opened = open(&hardened);
     let r = session_request_with(&hardened, who(CONSUMER), |_| {});
     // Below the floor, whatever the caller asks for.
@@ -414,7 +344,7 @@ fn the_sealed_policy_floor_outranks_everyone() {
     // At the floor.
     assert!(auth.session(&r, &opened, ConsumerTier::Hardened, &at(T + 1)).is_ok());
     // A base blob never refuses.
-    let base = blob(t.root_id(), 1, producer_id(), &["checkout"], None);
+    let base = blob(t.root_id(), 1, &["checkout"], None);
     let opened = open(&base);
     let r = session_request_with(&base, who(CONSUMER), |_| {});
     assert!(auth.session(&r, &opened, ConsumerTier::Base, &at(T + 1)).is_ok());
@@ -426,7 +356,7 @@ fn the_sealed_policy_floor_outranks_everyone() {
 fn extend_needs_the_same_caller_and_a_fresh_grant() {
     let t = tenant(|_| {});
     let auth = TenantAuthorizer::new(&t);
-    let b = blob(t.root_id(), 1, producer_id(), &["checkout"], None);
+    let b = blob(t.root_id(), 1, &["checkout"], None);
     let current = claims(b, &who(CONSUMER), "checkout");
     let (m, id) = app_key(CONSUMER);
     let fresh = caller(id.clone(), std::slice::from_ref(&m), Some(T + 500));
@@ -462,7 +392,7 @@ fn extend_refuses_an_ended_session() {
     for reason in [ErrorCode::SessionEnded, ErrorCode::IntegrityFailed] {
         let end = SessionEnd { tenant: acme(), session_id: [5; 16], reason, ended_at: T + 10 };
         let t = Fixture::new(31).verified(state(|_| {}), &[], &[end]);
-        let b = blob(t.root_id(), 1, producer_id(), &["checkout"], None);
+        let b = blob(t.root_id(), 1, &["checkout"], None);
         let current = claims(b, &who(CONSUMER), "checkout");
         let r = extend_request(who(CONSUMER), None);
         assert_eq!(
@@ -473,18 +403,12 @@ fn extend_refuses_an_ended_session() {
 }
 
 #[test]
-fn extend_rechecks_producer_blob_suspension_and_endpoint() {
+fn extend_rechecks_blob_suspension_and_endpoint() {
     let current_for = |t: &VerifiedTenant, v: u32, expires: Option<UnixTime>| {
-        claims(blob(t.root_id(), v, producer_id(), &["checkout"], expires), &who(CONSUMER), "checkout")
+        claims(blob(t.root_id(), v, &["checkout"], expires), &who(CONSUMER), "checkout")
     };
     let r = extend_request(who(CONSUMER), None);
     let now = at(T + 300);
-
-    let t = tenant(|s| s.producers.clear());
-    assert_eq!(
-        code(TenantAuthorizer::new(&t).extend(&r, &current_for(&t, 1, None), ConsumerTier::Base, &now)),
-        ErrorCode::NotAllowed
-    );
 
     let t = tenant(|_| {});
     assert_eq!(
@@ -525,7 +449,7 @@ fn recheck_uses_the_persisted_scope() {
     let t = tenant(|s| {
         s.apps.insert(app("checkout"), [azure("api://a")].into());
     });
-    let b = blob(t.root_id(), 1, producer_id(), &["checkout"], None);
+    let b = blob(t.root_id(), 1, &["checkout"], None);
     let c = claims(b.clone(), &caller(azure_id(), &[azure("api://a")], Some(T + 400)), "checkout");
     let auth = TenantAuthorizer::new(&t);
     auth.recheck(&c, &at(T + 1)).unwrap();
@@ -536,7 +460,7 @@ fn recheck_uses_the_persisted_scope() {
         s.apps.insert(app("checkout"), [azure("api://b")].into());
     });
     let c = claims(
-        blob(changed.root_id(), 1, producer_id(), &["checkout"], None),
+        blob(changed.root_id(), 1, &["checkout"], None),
         &caller(azure_id(), &[azure("api://a")], None),
         "checkout",
     );
@@ -545,11 +469,11 @@ fn recheck_uses_the_persisted_scope() {
     let removed = tenant(|s| {
         s.apps.remove(&app("checkout"));
     });
-    let c = claims(blob(removed.root_id(), 1, producer_id(), &["checkout"], None), &who(CONSUMER), "checkout");
+    let c = claims(blob(removed.root_id(), 1, &["checkout"], None), &who(CONSUMER), "checkout");
     assert_eq!(code(TenantAuthorizer::new(&removed).recheck(&c, &at(T + 1))), ErrorCode::NotAllowed);
     // Token expiry.
     let t = tenant(|_| {});
-    let c = claims(blob(t.root_id(), 1, producer_id(), &["checkout"], None), &who(CONSUMER), "checkout");
+    let c = claims(blob(t.root_id(), 1, &["checkout"], None), &who(CONSUMER), "checkout");
     assert_eq!(code(TenantAuthorizer::new(&t).recheck(&c, &at(T + 600))), ErrorCode::SessionExpired);
 }
 
@@ -558,25 +482,22 @@ fn recheck_ends_sessions_with_the_end_reason_and_on_state_changes() {
     for reason in [ErrorCode::SessionEnded, ErrorCode::IntegrityFailed] {
         let end = SessionEnd { tenant: acme(), session_id: [5; 16], reason, ended_at: T + 10 };
         let t = Fixture::new(31).verified(state(|_| {}), &[], &[end]);
-        let c = claims(blob(t.root_id(), 1, producer_id(), &["checkout"], None), &who(CONSUMER), "checkout");
+        let c = claims(blob(t.root_id(), 1, &["checkout"], None), &who(CONSUMER), "checkout");
         assert_eq!(code(TenantAuthorizer::new(&t).recheck(&c, &at(T + 20))), reason);
         // Another session is unaffected.
-        let mut other = claims(blob(t.root_id(), 1, producer_id(), &["checkout"], None), &who(CONSUMER), "checkout");
+        let mut other = claims(blob(t.root_id(), 1, &["checkout"], None), &who(CONSUMER), "checkout");
         other.session_id = [6; 16];
         TenantAuthorizer::new(&t).recheck(&other, &at(T + 20)).unwrap();
     }
-    let t = tenant(|s| s.producers.clear());
-    let c = claims(blob(t.root_id(), 1, producer_id(), &["checkout"], None), &who(CONSUMER), "checkout");
-    assert_eq!(code(TenantAuthorizer::new(&t).recheck(&c, &at(T + 1))), ErrorCode::NotAllowed);
     let t = tenant(|_| {});
-    let c = claims(blob(t.root_id(), 1, producer_id(), &["checkout"], Some(T + 5)), &who(CONSUMER), "checkout");
+    let c = claims(blob(t.root_id(), 1, &["checkout"], Some(T + 5)), &who(CONSUMER), "checkout");
     assert_eq!(code(TenantAuthorizer::new(&t).recheck(&c, &at(T + 5))), ErrorCode::Expired);
     let t =
         Fixture::new(31).verified(state(with_actions), &[signal_of(app_key(CONSUMER).1, Severity::High, T + 100)], &[]);
-    let c = claims(blob(t.root_id(), 1, producer_id(), &["checkout"], None), &who(CONSUMER), "checkout");
+    let c = claims(blob(t.root_id(), 1, &["checkout"], None), &who(CONSUMER), "checkout");
     let auth = TenantAuthorizer::new(&t);
     assert_eq!(code(auth.recheck(&c, &at(T + 120))), ErrorCode::IntegrityFailed);
-    let mut foreign = claims(blob(t.root_id(), 1, producer_id(), &["checkout"], None), &who(CONSUMER), "checkout");
+    let mut foreign = claims(blob(t.root_id(), 1, &["checkout"], None), &who(CONSUMER), "checkout");
     foreign.tenant = other_tenant();
     assert_eq!(code(auth.recheck(&foreign, &at(T + 1))), ErrorCode::NotAllowed);
 }
@@ -649,7 +570,8 @@ fn signal_names_the_authenticated_caller() {
             c,
         )
     };
-    for n in [CONSUMER, PRODUCER] {
+    {
+        let n = CONSUMER;
         let r = req(who(n), "edr-high");
         let permit = auth.signal(&r, &at(T + 3)).unwrap();
         assert_eq!(
@@ -697,7 +619,7 @@ fn with_networks(s: &mut TenantState) {
 #[test]
 fn a_network_rule_admits_its_networks_only() {
     let t = tenant(with_networks);
-    let b = blob(t.root_id(), 1, producer_id(), &["checkout"], None);
+    let b = blob(t.root_id(), 1, &["checkout"], None);
     let (r, opened) = (session_request(&b, who(CONSUMER)), open(&b));
     let from = |source: Option<&str>| {
         TenantAuthorizer::new(&t)
@@ -714,7 +636,7 @@ fn a_network_rule_admits_its_networks_only() {
 #[test]
 fn apps_without_a_rule_and_calls_without_a_source_are_not_checked() {
     let t = tenant(|_| {});
-    let b = blob(t.root_id(), 1, producer_id(), &["checkout"], None);
+    let b = blob(t.root_id(), 1, &["checkout"], None);
     let (r, opened) = (session_request(&b, who(CONSUMER)), open(&b));
     let auth = TenantAuthorizer::new(&t).with_source(None);
     assert!(auth.session(&r, &opened, ConsumerTier::Base, &at(T + 1)).is_ok(), "no rule: any address, even unknown");
@@ -736,7 +658,7 @@ fn an_empty_rule_admits_nobody() {
     let t = tenant(|s| {
         s.app_networks.insert(app("checkout"), Default::default());
     });
-    let b = blob(t.root_id(), 1, producer_id(), &["checkout"], None);
+    let b = blob(t.root_id(), 1, &["checkout"], None);
     let (r, opened) = (session_request(&b, who(CONSUMER)), open(&b));
     let auth = TenantAuthorizer::new(&t).with_source(Some(ip("203.0.113.9")));
     assert_eq!(code(auth.session(&r, &opened, ConsumerTier::Base, &at(T + 1))), ErrorCode::NotAllowed);
@@ -745,7 +667,7 @@ fn an_empty_rule_admits_nobody() {
 #[test]
 fn extend_checks_the_network_rule_again() {
     let t = tenant(with_networks);
-    let b = blob(t.root_id(), 1, producer_id(), &["checkout"], None);
+    let b = blob(t.root_id(), 1, &["checkout"], None);
     let current = claims(b, &who(CONSUMER), "checkout");
     let r = extend_request(who(CONSUMER), None);
     let from = |s: &str| {

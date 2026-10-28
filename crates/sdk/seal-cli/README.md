@@ -17,7 +17,7 @@ seal secret --to https://api.openai.com/v1 --app checkout --header x-api-key > a
 # Who may do what: every change is built on the verified state, shown as classified
 # differences, then signed by the admins (in the console, or here with --key-file) and logged.
 seal grant app checkout azure --object-id <oid> --entra-tenant <id> --audience api://seal
-seal grant producer github --repo acme/api --environment production --repository-id <n> --owner-id <n>
+seal grant app checkout github --repo acme/api --environment production --repository-id <n> --owner-id <n>
 seal settings integrity on critical suspend=3600
 seal changes --watch              # proposals waiting for signatures, logged changes not yet in force
 

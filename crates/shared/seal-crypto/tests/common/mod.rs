@@ -69,7 +69,7 @@ pub fn root_id() -> TenantRootId {
 pub fn app() -> AppName {
     AppName::new("checkout").unwrap()
 }
-pub fn producer() -> WorkloadIdentity {
+pub fn workload() -> WorkloadIdentity {
     WorkloadIdentity::AppKey { key_id: KeyId([0x11; 32]) }
 }
 pub fn policy() -> SecretPolicy {
@@ -95,7 +95,7 @@ pub fn claims(blob: seal_proto::blob::Blob, service_key_version: ServiceKeyVersi
         tenant: tenant(),
         app: app(),
         session_id: [0x5e; 16],
-        caller: producer(),
+        caller: workload(),
         authentication: AuthenticationScope {
             matched_grants: vec![],
             expires_at: None,

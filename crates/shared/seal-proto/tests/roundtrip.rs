@@ -59,7 +59,7 @@ fn proof() -> TlogProof {
 fn tagged_enums_with_bytes_roundtrip() {
     both(&app_key());
     both(&IdentityMatcher::AppKey { key_id: KeyId([1; 32]), public_key: PublicKey([2; 32]) });
-    both(&ProofPurpose::Seal { request_digest: [4; 32] });
+    both(&ProofPurpose::Signal { request_digest: [4; 32] });
     both(&AdminKey::WebAuthnEs256 { sec1: vec![4; 65], rp_id: "seal.dev".into() });
     both(&sig());
     both(&LogEntry::Release(ReleaseManifest {
@@ -77,12 +77,11 @@ fn tagged_enums_with_bytes_roundtrip() {
 fn blob_with(p: SecretPolicy) -> Blob {
     Blob {
         header: BlobHeader {
-            version: 1,
+            version: seal_proto::blob::BLOB_VERSION,
             tenant: TenantId::new("acme").unwrap(),
             root_id: TenantRootId([6; 32]),
             tenant_key_version: TenantKeyVersion(3),
             blob_id: BlobId([0xb7, 0xf2, 0, 0, 0, 0, 0, 1]),
-            producer: app_key(),
             policy_digest: labeled_digest(seal_proto::blob::POLICY_LABEL, &p),
             created_at: 1,
         },
@@ -94,7 +93,7 @@ fn blob_with(p: SecretPolicy) -> Blob {
 }
 
 #[test]
-fn blob_text_roundtrip_with_app_key_producer() {
+fn blob_text_roundtrip() {
     let blob = blob_with(policy());
     let text = blob.to_string();
     assert!(text.starts_with("seal1.acme.3.b7f2000000000001."));
@@ -255,7 +254,6 @@ fn app_networks_are_omitted_until_used() {
         version: 2,
         root_version: 1,
         apps: [(AppName::new("checkout").unwrap(), Default::default())].into(),
-        producers: Default::default(),
         tenant_key_versions: TenantKeyVersions { current: TenantKeyVersion(1), oldest_accepted: TenantKeyVersion(1) },
         platforms: Default::default(),
         integrity: Default::default(),
@@ -285,7 +283,6 @@ fn a_pending_window_has_one_encoding() {
         version: 2,
         root_version: 1,
         apps: Default::default(),
-        producers: Default::default(),
         tenant_key_versions: TenantKeyVersions { current: TenantKeyVersion(1), oldest_accepted: TenantKeyVersion(1) },
         platforms: Default::default(),
         integrity: Default::default(),

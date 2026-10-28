@@ -33,7 +33,7 @@ class Sim:
     tenant: str
     trust: Path
     app_key: str
-    producer_key: str
+    stranger_key: str
     upstream: str
 
     def env(self) -> Dict[str, str]:
@@ -58,7 +58,7 @@ def sim() -> Iterator[Sim]:
     ok = False
     try:
         yield Sim(world=world, work=world.work, endpoint=world.endpoint(), tenant=world.pin,
-                  trust=world.path("trust.json"), app_key=world.app_key, producer_key=world.producer_key,
+                  trust=world.path("trust.json"), app_key=world.app_key, stranger_key=world.stranger_key,
                   upstream=world.upstream_url)
         ok = True
     finally:
@@ -78,12 +78,12 @@ def app_env(sim: Sim) -> Iterator[Sim]:
 
 @pytest.fixture(scope="session")
 def blob(app_env: Sim) -> str:
-    """The upstream's API key, sealed for `checkout` by the producer."""
+    """The upstream's API key, sealed for `checkout` by a stranger (anyone may seal)."""
     import seal
 
-    producer = seal.Client(
+    stranger = seal.Client(
         endpoints=[app_env.endpoint],
         tenant=app_env.tenant,
-        identity=seal.AppKeyIdentity(app_env.producer_key),
+        identity=seal.AppKeyIdentity(app_env.stranger_key),
     )
-    return producer.seal(SECRET, to=app_env.upstream, apps=["checkout"], header="authorization", format="Bearer {key}")
+    return stranger.seal(SECRET, to=app_env.upstream, apps=["checkout"], header="authorization", format="Bearer {key}")

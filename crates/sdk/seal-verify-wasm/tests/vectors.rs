@@ -94,21 +94,20 @@ fn uniform(cp: &seal_proto::release::SignedCheckpoint) -> Option<UnixTime> {
     cp.cosignatures.iter().all(|c| c.timestamp == first).then_some(first)
 }
 
-fn producer(n: u8) -> IdentityMatcher {
+fn deployment(n: u8) -> IdentityMatcher {
     IdentityMatcher::AppKey { key_id: KeyId([n; 32]), public_key: PublicKey([n; 32]) }
 }
 
-fn state(version: u64, producers: &[u8]) -> TenantState {
+fn state(version: u64, deployments: &[u8]) -> TenantState {
     TenantState {
         tenant: acme(),
         version,
         root_version: 1,
         apps: Default::default(),
-        producers: producers.iter().map(|&n| producer(n)).collect(),
         tenant_key_versions: TenantKeyVersions { current: TenantKeyVersion(1), oldest_accepted: TenantKeyVersion(1) },
         platforms: [PlatformId::Sim].into(),
         integrity: Default::default(),
-        deployments: Default::default(),
+        deployments: deployments.iter().map(|&n| deployment(n)).collect(),
         freshness_keys: Default::default(),
         telemetry_readers: Default::default(),
         issued_at: T,
@@ -171,7 +170,7 @@ fn build() -> Value {
         "guardians": { "sim": guardian.public_key() },
     });
 
-    // A tenant with a one-hour window: state 1, a widening state 2 (a producer added), and a
+    // A tenant with a one-hour window: state 1, a widening state 2 (a deployment added), and a
     // state 3 that supersedes it with state 1's contents.
     let root = TenantRoot {
         tenant: acme(),
@@ -349,8 +348,8 @@ fn build() -> Value {
             "public_since": [T, T + 100, T + 300],
         },
         "classify": [
-            { "old": state(1, &[1]), "new": state(2, &[1, 2]), "change": "widening", "kinds": ["producer_added"] },
-            { "old": state(2, &[1, 2]), "new": state(3, &[1]), "change": "narrowing", "kinds": ["producer_removed"] },
+            { "old": state(1, &[1]), "new": state(2, &[1, 2]), "change": "widening", "kinds": ["deployment_added"] },
+            { "old": state(2, &[1, 2]), "new": state(3, &[1]), "change": "narrowing", "kinds": ["deployment_removed"] },
             { "old": state(1, &[1]), "new": hosted_on_azure(2, HostedMode::Sessions),
               "change": "widening", "kinds": ["deployment_added"] },
         ],

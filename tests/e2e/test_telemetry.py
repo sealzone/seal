@@ -18,8 +18,8 @@ def test_telemetry_is_complete_and_matches_kept_receipts(world: World) -> None:
 
     # Things worth recording, each with a receipt where the SDK or the CLI hands one out.
     blob = world.seal_with_cli(SECRET, world.upstream_url, "--receipt-file", str(receipts))
-    producer = world.client(world.producer_key)
-    _, receipt = producer.seal(SECRET, to=world.upstream_url, apps=["checkout"], with_receipt=True)
+    stranger = world.client(world.stranger_key)
+    _, receipt = stranger.seal(SECRET, to=world.upstream_url, apps=["checkout"], with_receipt=True)
     seal.receipts.append(receipts, [receipt])
     s = world.client().session(blob, kind="http")
     seal.receipts.append(receipts, s.receipts())
@@ -28,7 +28,7 @@ def test_telemetry_is_complete_and_matches_kept_receipts(world: World) -> None:
     key = s.key
     s.close()  # an end
     with pytest.raises(seal.NotAllowed):
-        producer.session(blob, kind="http")  # a refusal: the producer is not the app
+        stranger.session(blob, kind="http")  # a refusal: anyone may seal, only the app may use it
 
     # Telemetry is complete once the replica stops gracefully and sends its last batch.
     world.stop_replica(1)

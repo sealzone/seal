@@ -48,7 +48,7 @@ async fn a_hosted_replica_exits_when_idle_and_then_starts_nothing() {
     assert!(started.elapsed() >= IDLE);
 
     // Draining: nothing new starts.
-    assert_eq!(h.seal(PRODUCER).await.unwrap_err().code, ErrorCode::Unavailable);
+    assert_eq!(h.seal().await.unwrap_err().code, ErrorCode::Unavailable);
     assert_eq!(h.extend(CONSUMER, &session.token, None).await.unwrap_err().code, ErrorCode::Unavailable);
     assert_eq!(closed_unanswered(&h), ErrorCode::Unavailable);
     h.attestation().await;
@@ -61,16 +61,18 @@ async fn requests_by_authenticated_callers_keep_it_up_and_others_do_not() {
     let idle = Duration::from_millis(800);
     let exit = h.service.idle_exit(idle);
     tokio::pin!(exit);
-    // A seal every half period: never idle.
+    let blob = h.seal().await.unwrap().blob;
+    // A session start every half period: never idle.
     for _ in 0..4 {
         assert!(tokio::time::timeout(idle / 2, &mut exit).await.is_err());
-        h.seal(PRODUCER).await.unwrap();
+        h.start(CONSUMER, &blob, None).await.unwrap();
     }
-    // Tickets and refused proofs are anyone's: they do not count.
+    // Tickets, seals and refused proofs are anyone's: they do not count.
     let stranger = async {
         loop {
             let _ = h.service.ticket().await;
-            let _ = h.seal(STRANGER).await;
+            let _ = h.seal().await;
+            let _ = h.start(STRANGER, &blob, None).await;
             tokio::time::sleep(idle / 8).await;
         }
     };
@@ -85,5 +87,5 @@ async fn requests_by_authenticated_callers_keep_it_up_and_others_do_not() {
 async fn customer_replicas_never_idle_out() {
     let h = Boot::new().start().await.map_err(|(e, _)| e).unwrap();
     assert!(tokio::time::timeout(IDLE * 5, h.service.idle_exit(IDLE)).await.is_err());
-    h.seal(PRODUCER).await.unwrap();
+    h.seal().await.unwrap();
 }

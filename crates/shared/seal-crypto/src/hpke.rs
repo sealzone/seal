@@ -1,7 +1,7 @@
 //! HPKE base mode, DHKEM(X25519, HKDF-SHA256) / HKDF-SHA256 / AES-256-GCM (RFC 9180).
 //!
 //! One single-shot message per encapsulation: `enc` is the 32-byte ephemeral public key and the
-//! ciphertext carries the 16-byte tag. Uses: producers seal secrets to the ingest key
+//! ciphertext carries the 16-byte tag. Uses: secrets are sealed to the ingest key
 //! (`ingest_info`), the guardian seals `ReleasedKeys` to a requester's ephemeral key
 //! (`KEY_RELEASE_INFO`), and blob sealing wraps DEKs to tenant wrap keys
 //! (`DEK_WRAP_INFO || platform`, `open_wrap`).

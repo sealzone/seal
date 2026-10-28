@@ -33,8 +33,9 @@ pub(crate) fn serving(state: &TenantState, identity: &WorkloadIdentity) -> Optio
 }
 
 /// When the replica last did something for an authenticated caller, what it is doing now, and
-/// whether it is draining. Only authenticated work counts: anyone can reach the API, and
-/// unauthenticated requests must not keep a hosted replica (and its VM) running.
+/// whether it is draining. Only authenticated work counts as activity: anyone can reach the
+/// API (and seal), and unauthenticated requests must not keep a hosted replica (and its VM)
+/// running. Open work in flight only holds off the drain until it ends.
 pub(crate) struct Activity {
     inner: Mutex<State>,
 }
@@ -55,12 +56,21 @@ impl Activity {
     /// Authenticated work starts; it counts until the returned guard drops. `Unavailable` once
     /// the replica drains, so nothing starts that could outlive it.
     pub(crate) fn begin(&self) -> Result<Busy<'_>, ServiceError> {
+        self.start(true)
+    }
+
+    /// Open work (a seal) starts: like `begin`, but its end does not count as activity.
+    pub(crate) fn begin_open(&self) -> Result<Busy<'_>, ServiceError> {
+        self.start(false)
+    }
+
+    fn start(&self, authenticated: bool) -> Result<Busy<'_>, ServiceError> {
         let mut state = lock(&self.inner);
         if state.draining {
             return Err(fail(ErrorCode::Unavailable, "the replica is stopping"));
         }
         state.in_flight += 1;
-        Ok(Busy(self))
+        Ok(Busy { activity: self, authenticated })
     }
 
     /// `Unavailable` once the replica drains.
@@ -88,14 +98,19 @@ impl Activity {
     }
 }
 
-/// Authenticated work in progress (`Activity::begin`).
-pub(crate) struct Busy<'a>(&'a Activity);
+/// Work in progress (`Activity::begin`, `Activity::begin_open`).
+pub(crate) struct Busy<'a> {
+    activity: &'a Activity,
+    authenticated: bool,
+}
 
 impl Drop for Busy<'_> {
     fn drop(&mut self) {
-        let mut state = lock(&self.0.inner);
+        let mut state = lock(&self.activity.inner);
         state.in_flight -= 1;
-        state.last = Instant::now();
+        if self.authenticated {
+            state.last = Instant::now();
+        }
     }
 }
 
@@ -115,7 +130,6 @@ mod tests {
             version: 1,
             root_version: 1,
             apps: Default::default(),
-            producers: Default::default(),
             tenant_key_versions: seal_proto::state::TenantKeyVersions {
                 current: seal_proto::TenantKeyVersion(1),
                 oldest_accepted: seal_proto::TenantKeyVersion(1),

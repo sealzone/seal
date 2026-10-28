@@ -1,6 +1,7 @@
-//! `seal grant` and `seal revoke`: who may start sessions (apps), from which networks, seal
-//! (producers) and serve the tenant (enclaves). On a terminal, a grant without an identity kind asks for one and
-//! for its ids; scripts name it (`seal grant app checkout azure --object-id …`).
+//! `seal grant` and `seal revoke`: who may start sessions (apps), from which networks, and
+//! serve the tenant (enclaves). Sealing needs no grant. On a terminal, a grant without an
+//! identity kind asks for one and for its ids; scripts name it (`seal grant app checkout azure
+//! --object-id …`).
 
 use std::collections::BTreeSet;
 use std::io::IsTerminal as _;
@@ -27,11 +28,6 @@ pub enum GrantCmd {
         #[command(subcommand)]
         identity: Option<Workload>,
     },
-    /// Let a workload seal secrets for the tenant's apps
-    Producer {
-        #[command(subcommand)]
-        identity: Option<Workload>,
-    },
     /// Let an enclave deployment serve the tenant (get its keys)
     Enclave {
         #[command(subcommand)]
@@ -53,11 +49,6 @@ pub enum RevokeCmd {
     App {
         /// The app's name
         name: AppName,
-        #[command(subcommand)]
-        identity: Option<WorkloadRef>,
-    },
-    /// Remove a producer
-    Producer {
         #[command(subcommand)]
         identity: Option<WorkloadRef>,
     },
@@ -224,13 +215,6 @@ pub async fn run_grant(env: &Env, cmd: GrantCmd) -> anyhow::Result<()> {
             let app = name.clone();
             grant_workload(env, format!("app {name}"), identity, move |s| s.apps.entry(app).or_default()).await
         }
-        GrantCmd::Producer { identity } => {
-            let identity = match identity {
-                Some(i) => i,
-                None => prompt("may seal", "seal grant producer azure|aws|k8s|gcp|github|key …")?,
-            };
-            grant_workload(env, "producer".into(), identity, |s| &mut s.producers).await
-        }
         GrantCmd::Enclave { identity } => {
             let identity = match identity {
                 Some(i) => i,
@@ -294,15 +278,6 @@ pub async fn run_revoke(env: &Env, cmd: RevokeCmd) -> anyhow::Result<()> {
         })
         .await
         .map(|_| ()),
-        RevokeCmd::Producer { identity } => {
-            let identity: WorkloadRef = match identity {
-                Some(i) => i,
-                None => prompt("may no longer seal", "seal revoke producer azure|aws|k8s|gcp|github|key …")?,
-            };
-            edit_state(env, move |s| revoke(&mut s.producers, "the tenant's producers", |m| identity.selects(m)))
-                .await
-                .map(|_| ())
-        }
         RevokeCmd::Enclave { identity } => {
             let identity: DeploymentRef = match identity {
                 Some(i) => i,

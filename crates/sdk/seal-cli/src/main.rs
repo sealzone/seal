@@ -6,9 +6,9 @@
 //!   seal use [TENANT]                       pick a tenant; its root chain and state verified here
 //!   seal status [--log]                     the tenant at a glance; --log scans the transparency log
 //!   seal secret --to URL --app NAME [..]    seal a secret read from the terminal or stdin; prints the blob
-//! Who may do what
-//!   seal grant  app NAME KIND .. | producer KIND .. | enclave KIND .. [--hosted] | network APP CIDR ..
-//!   seal revoke app NAME [KIND ..] | producer KIND .. | enclave KIND .. | network APP CIDR ..
+//! Who may do what (sealing is open to anyone)
+//!   seal grant  app NAME KIND .. | enclave KIND .. [--hosted] | network APP CIDR ..
+//!   seal revoke app NAME [KIND ..] | enclave KIND .. | network APP CIDR ..
 //!   seal changes [--watch] | show|sign|submit|cancel ID
 //! Tenant settings
 //!   seal settings admins|window|platforms|integrity|telemetry-readers|freshness|tenant-key ..
@@ -18,8 +18,8 @@
 //!   seal release approve MEASUREMENT        tenant co-signature of a release
 //!   seal completion SHELL
 //! ```
-//! KIND is azure, aws, k8s, gcp, github or key (apps, producers), or azure, aws or
-//! confidential-space (enclaves), each with its own id flags.
+//! KIND is azure, aws, k8s, gcp, github or key (apps), or azure, aws or confidential-space
+//! (enclaves), each with its own id flags.
 //!
 //! A change is built on the verified state in force, shown as classified differences, then
 //! proposed on the control plane and signed by the admins' passkeys in the console, which the
@@ -157,7 +157,7 @@ enum Command {
     },
     /// Seal a secret (read from the terminal, or stdin) for apps; prints the blob
     Secret(SecretArgs),
-    /// Let an app start sessions, a producer seal, or an enclave serve the tenant
+    /// Let an app start sessions, or an enclave serve the tenant
     Grant {
         #[command(flatten)]
         sign: SignArgs,
@@ -1034,7 +1034,7 @@ mod tests {
             &["key", "create", "--out", "admin.key"][..],
             &["key", "create", "--out", "freshness.key"],
             &["key", "public", "admin.key"],
-            &["grant", "producer", "key", "--generate", "--out", "producer.key"],
+            &["grant", "app", "checkout", "key", "--generate", "--out", "checkout.key"],
             &["secret", "--to", "https://api.openai.com/v1", "--app", "checkout", "--header", "authorization"],
             &["settings", "telemetry-readers", "add", "--generate", "reader.key"],
             &["settings", "freshness", "sign"],

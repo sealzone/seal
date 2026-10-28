@@ -30,10 +30,9 @@ fn plural(n: usize, one: &str, many: &str) -> String {
 fn grants(state: &TenantState) -> String {
     let identities: usize = state.apps.values().map(|s| s.len()).sum();
     format!(
-        "{} ({}) · {} · {}",
+        "{} ({}) · {}",
         plural(state.apps.len(), "app", "apps"),
         plural(identities, "identity", "identities"),
-        plural(state.producers.len(), "producer", "producers"),
         plural(state.deployments.len(), "enclave", "enclaves"),
     ) + &networks(state)
 }
@@ -80,7 +79,7 @@ pub async fn run(env: &Env, args: StatusArgs) -> anyhow::Result<()> {
             "workspace": env.config.workspace,
             "root": {"version": root.version, "threshold": root.threshold, "cosign_releases": root.cosign_releases, "admin_keys": keys},
             "state": {"version": state.version, "in_force_since": t.in_force_since(), "pending_window_secs": state.pending_window_secs,
-                      "platforms": platforms, "apps": state.apps.len(), "producers": state.producers.len(), "enclaves": state.deployments.len()},
+                      "platforms": platforms, "apps": state.apps.len(), "enclaves": state.deployments.len()},
             "latest_state": t.latest_state().version,
             "pending": pending,
             "proposals": open.iter().map(|p| &p.id).collect::<Vec<_>>(),

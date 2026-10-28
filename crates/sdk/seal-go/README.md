@@ -1,6 +1,6 @@
 # seal.zone/go: the Seal SDK for Go
 
-Use secrets without holding them. A producer seals a secret for named apps; an app starts a
+Use secrets without holding them. Anyone seals a secret for named apps; one of those apps starts a
 session on the sealed blob and gets a stand-in, while the enclave injects the real secret on
 the way to the upstream.
 

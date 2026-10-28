@@ -169,7 +169,7 @@ func WithHardenedOnly() SealOption { return func(o *sealOptions) { o.HardenedOnl
 
 // Seal seals secret so only the named apps can use it, and only with to (https://,
 // postgres://, clickhouse://, rediss://). It returns the portable blob text ("seal1.…"),
-// safe to store anywhere. Needs a producer grant.
+// safe to store anywhere. Anyone may seal: it needs no identity or grant.
 func (c *Client) Seal(ctx context.Context, secret []byte, to string, apps []string, opts ...SealOption) (string, error) {
 	blob, _, err := c.seal(ctx, secret, to, apps, opts, false)
 	return blob, err

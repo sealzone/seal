@@ -64,21 +64,26 @@ released. KDF label strings (`seal_crypto::kdf`) are frozen and need not match t
 
 | Role | Authority | Does not imply |
 | --- | --- | --- |
-| Producer | Supply plaintext, seal for named apps | Permission to start a session |
-| Consumer | Start sessions on blobs for an app matched by its identity and listed in the blob policy | Permission to seal |
-| Admin | Sign tenant roots/state and manage producer/app grants | Runtime producer or consumer authority |
+| Producer | Anyone: supply plaintext, seal for named apps. No grant, no identity | Permission to start a session |
+| Consumer | Start sessions on blobs for an app matched by its identity and listed in the blob policy | Use of a blob that does not list its app |
+| Admin | Sign tenant roots/state and manage app grants | Runtime consumer authority |
 
 - An admin can change grants, but updated grants confer runtime permissions only once
   verified and applied. Storage write credentials alone cannot authorize unsigned changes.
-- A workload may hold both producer and consumer roles only through independent grants.
-- Roles are grants checked by the enclave, not SDK types: one `seal::Client` exposes every
-  operation, and calls the workload is not granted fail with `NotAllowed`.
+- **Sealing is open.** `POST /v1/blobs` carries no proof and the enclave checks no grant:
+  sealing only ever adds a blob, which opens nothing but the secret its sealer supplied, and
+  only for the apps it names. Blobs carry no producer, telemetry records seals without an
+  identity, and the enclave rate-limits seals per connection source. Which blob an app loads
+  is the app's configuration: a blob swapped for another with the same apps (the sealer's own
+  credential, or another destination) is outside what Seal claims.
+- Consumer roles are grants checked by the enclave, not SDK types: one `seal::Client` exposes
+  every operation, and calls the workload is not granted fail with `NotAllowed`.
 
 ## SDK surface (`sealzone` on crates.io and PyPI, used as `seal`)
 
-One client does everything a workload may do. Whether it may seal (producer grant) or start
-sessions (app grant) is decided by the enclave on every call, from the tenant's signed
-grants; the SDK has no role types.
+One client does everything a workload may do. Anyone may seal, with no identity; whether it
+may start sessions (an app grant) is decided by the enclave on every call, from the tenant's
+signed grants; the SDK has no role types.
 
 ```rust
 let seal = seal::Client::from_env().await?;            // or Client::builder()…connect()
@@ -102,14 +107,15 @@ with seal.session(blob) as s:                          # HttpSession or Database
   names. Bad arguments surface as `ClientError::Invalid` (`BadRequest`).
 - **`Client::from_env`** reads `SEAL_ENDPOINT` (the tenant's enclave replicas,
   comma-separated) and `SEAL_TENANT` (`<tenant>` or `<tenant>@<root id>`) and uses the first
-  identity `detect_identity` finds; `Client::builder()` sets any of them explicitly.
+  identity `detect_identity` finds (none is needed to seal: sessions and signals then fail
+  with `NoIdentity`); `Client::builder()` sets any of them explicitly.
   Identity hints: `SEAL_APP_KEY`; `SEAL_AZURE_AUDIENCE` (Azure managed identity, with
   `AZURE_CLIENT_ID`); GitHub's `ACTIONS_ID_TOKEN_REQUEST_*`; `SEAL_KUBERNETES_TOKEN_FILE`
   (default `/var/run/secrets/seal.zone/token`); the GCP metadata server; the AWS credential
   chain (`aws` feature).
   Replicas share keys and template-fixed ports, so a session works on any of them and the
-  SDK fails over to the next one without a load balancer. Producers outside the tenant's
-  network (CI runners, laptops) use Seal's hosted replica for the tenant
+  SDK fails over to the next one without a load balancer. Sealers outside the tenant's
+  network (CI runners, laptops, the console) use Seal's hosted replica for the tenant
   (`<tenant>.enclave.seal.zone`), which also serves sessions; blobs sealed there open in the
   tenant's own replicas, and the other way round. A tenant that wants its apps only on its own
   replicas gives them only those endpoints, or disables Seal's.
@@ -188,7 +194,7 @@ with seal.session(blob) as s:                          # HttpSession or Database
     before it asks for a code. `SEAL_CONSOLE_TOKEN` overrides both; `seal logout` revokes it.
     `seal use TENANT` takes the root id and workspace from `GET /api/v1/tenants/{t}`, and
     verifies the root chain against the trust and the state against the log before saving.
-  - Each change (`seal grant|revoke app|producer|enclave|network …`, `seal settings …`, `seal
+  - Each change (`seal grant|revoke app|enclave|network …`, `seal settings …`, `seal
     deploy azure`'s grant) is drafted on the verified state in force and shown as its classified
     differences. By default it is then proposed with a `submit` control token (`POST
     /api/v1/tenants/{t}/control-token`, five minutes, renewed as needed), its console page
@@ -209,7 +215,7 @@ with seal.session(blob) as s:                          # HttpSession or Database
   - `seal key create [--out F]` writes an Ed25519 key file (the user keeps it; `seal settings
     admins add KEY` or the console's Admins page makes it an admin); `seal key public F`
     prints its public key. Every key the CLI generates (`seal key create`, `seal grant
-    app|producer … key --generate`, `seal settings telemetry-readers add --generate`) is
+    app … key --generate`, `seal settings telemetry-readers add --generate`) is
     written only where asked, never replaces a file, never goes to a terminal, and is shown by
     its public key; grants list app keys by public key.
   - `seal dev init --tenant T --key-file F --registrar-key R` (development registrars; hidden
@@ -266,7 +272,8 @@ session token never leaves the SDK.
   expiry. A `SessionExpired` extend restarts the session on the same blob, `Expired` restarts
   through `reload_with`, and `SessionEnded` or `IntegrityFailed` stop the tunnel for good.
 - **Wire**: `POST /v1/blobs` carries `canonical(SealPayload)` HPKE-sealed to the attested ingest
-  key (info `ingest_info(tenant)`, AAD `canonical(IngestContext)`); the SDK refuses a returned
+  key (info `ingest_info(tenant)`, AAD `canonical(IngestContext)`: the tenant, service key
+  version and TLS key it was sealed for) and nothing else; the SDK refuses a returned
   blob that does not name its tenant, the attested root and exactly the policy it sent. A
   destination whose protocol the image has no adapter for (ClickHouse, until it is built) is
   `BadRequest`. A replica has one port, its endpoint's: the API, and tunnel connections, which offer TLS ALPN
@@ -300,8 +307,8 @@ Seal does not store blobs, so it has no per-blob kill switch. Access ends throug
 
 | Mechanism | Scope | Who |
 | --- | --- | --- |
-| `expires_at` in the sealed policy | One blob, every copy of it | Producer, at seal time |
-| Removing an identity from an app's grants, or a producer from `producers` | Every session that identity starts, or on blobs that producer sealed | Admin (signed tenant state) |
+| `expires_at` in the sealed policy | One blob, every copy of it | Whoever seals it, at seal time |
+| Removing an identity from an app's grants | Every session that identity starts | Admin (signed tenant state) |
 | Removing a deployment from `deployments` | Everything the replicas with that identity serve, but attestation and session ends | Admin (signed tenant state) |
 | Raising `oldest_accepted` | Every blob below that tenant key version | Admin (signed tenant state) |
 | Revoking the credential at the upstream | The secret itself | Whoever owns the upstream account |
@@ -312,7 +319,7 @@ Live sessions are rechecked whenever the tenant's verified state changes
 (`Session::ended`), so a grant removal or a published `SessionEnd` also ends connections
 already established, once a replica has loaded the new state. The admin mechanisms narrow
 access, so they apply as soon as they are logged, whatever the pending window. Rotating means sealing the new value (`seal secret`); revoking the old
-credential at the upstream is the producer's job.
+credential at the upstream is its owner's job.
 
 The admin mechanisms hold against replay: a state is used only with a current
 `StateFreshness` for exactly it, so nobody (a control plane, a host restarting replicas, a
@@ -564,9 +571,10 @@ are already in the Mozilla set. Any other CA needs a custom image.
   neither Seal nor the host can make a replica the tenant did not list serve, or a customer's
   replica idle out.
 - **Hosted replicas exit when idle.** A replica whose matching entry has a `HostedMode` stops
-  once it has had no live session connection, and no `seal`, session, extend, end or signal by
-  an authenticated caller, for `HOSTED_IDLE_SECS` (900); tickets, attestations and requests
-  that fail authentication do not count, since anyone can send them. `SealService::idle_exit`
+  once it has had no live session connection, and no session, extend, end or signal by
+  an authenticated caller, for `HOSTED_IDLE_SECS` (900); seals, tickets, attestations and
+  requests that fail authentication do not count, since anyone can send them (a seal in flight
+  only holds off the drain until it ends). `SealService::idle_exit`
   resolves then and marks the replica draining under the lock that counts work in progress:
   later operations fail with `Unavailable` after authenticating and data-plane connections are
   closed. The binary stops accepting, lets open API requests finish, ships the `last` telemetry
@@ -596,8 +604,9 @@ are already in the Mozilla set. Any other CA needs a custom image.
   `HOSTED_IDLE_SECS` ≥ `SESSION_TOKEN_SECS`, so no token an idle replica issued outlives it.
 - `Cloud::tenant_pin` (a `TenantPin`, `<tenant>@<root id>`, delivered as each cloud allows)
   pins a deployment to one tenant and its root chain. Every other tenant or chain is refused with
-  `NotAllowed` (seal, sessions, extends, ends, signals, session tokens), tickets are issued
-  only for it, and keys are requested only for it. `StateCache` and `TenantStore`
+  `NotAllowed` (sessions, extends, ends, signals, session tokens), a seal upload for another
+  does not decrypt (`BadRequest`), tickets are issued only for it, and keys are requested
+  only for it. `StateCache` and `TenantStore`
   hold this one tenant. The deployer sets it and it is not attested; it can only narrow
   what the enclave serves.
 - **Fail closed**: once the cached state's `fresh_until` passes without a fresh bundle,
@@ -653,7 +662,7 @@ are already in the Mozilla set. Any other CA needs a custom image.
 | `seal-enclave` | Ports (including `Telemetry`), `Components`, `ServiceConfig`, `SealService` (above), `HOSTED_IDLE_SECS`. |
 | `seal-client` | `Client`, `ClientBuilder`, `built_in_trust`, `SealBuilder`, `SessionBuilder`, `HttpSession`, `DatabaseSession`, `Session`, `UNREACHABLE_WAIT_SECS`, `integrity::EndpointReporter`, `admin` (above). |
 | `seal-control` | Untrusted document store (bin) and `client::ControlClient`, one method per endpoint named after its HTTP verb, for the enclave, admin tools and `seal deploy`, carrying one `client::Credential` (an admin key: `SigningKeyCredential`; the enclave's own lives in `seal-enclave`). Read rules and proposals below; enclave-signed documents verify against the telemetry keys of guardian-certified `ServiceKeyCertificate`s, which enclaves post at boot. |
-| `seal-cli`, `seal-py`, `seal-node`, `seal-ffi` (+ Go `seal-go`), `seal-verify-wasm` | `seal` binary, Python, Node (npm `@sealzone/sdk`) and Go (`seal.zone/go`, through the C ABI `seal-ffi`) bindings over `seal-client`, the browser verifier (npm `@sealzone/verify`: `seal-verify` over JSON; `@sealzone/verify/seal`, a module of its own, seals in the browser: it verifies the enclave's attestation, HPKE-seals to its ingest key and proves a producer app key, so a relay carries only ciphertext, while the page sees the secret); no shared types of their own. |
+| `seal-cli`, `seal-py`, `seal-node`, `seal-ffi` (+ Go `seal-go`), `seal-verify-wasm` | `seal` binary, Python, Node (npm `@sealzone/sdk`) and Go (`seal.zone/go`, through the C ABI `seal-ffi`) bindings over `seal-client`, the browser verifier (npm `@sealzone/verify`: `seal-verify` over JSON; `@sealzone/verify/seal`, a module of its own, seals in the browser: it verifies the enclave's attestation, and HPKE-seals to its ingest key, so a relay carries only ciphertext, while the page sees the secret); no shared types of their own. |
 
 ### Control plane (`seal-control`)
 
@@ -680,7 +689,7 @@ Who may read and write a tenant's documents (the crate docs hold the full route 
   policy; `Bearer <write token>`. Missing or invalid is 401; valid but not admitted here, or
   for another tenant or chain, is 403. A tenant without a stored chain answers 401 to signed
   and attested requests.
-- **Producers read nothing** here: they seal through an enclave, whose bundle holds the wrap
+- **Sealing reads nothing** here: it goes through an enclave, whose bundle holds the wrap
   keys. Public is only what sealing and booting need and reveals nothing secret.
 - **Proposals** (`/proposals/{id}`, `Proposal { id, kind, document, created_at, updated_at }`)
   hold an unsigned or partly signed root or state; the id is the lowercase hex of the digest
@@ -747,16 +756,14 @@ or Nonce trait is introduced.
   a replayed `KeyRequest` only gets keys sealed again to the original requester's ephemeral key.
 - `ProofTicket` (`POST /v1/tickets`, for the enclave's tenant) is MAC-authenticated and
   reusable until expiry, not a one-time-execution guarantee.
-- Uploads encrypt with `IngestContext` as AAD before computing the request purpose.
-  `expected_purpose()` commits the seal request's service key version, encapsulation and
-  ciphertext, the full session blob and options, or the extended token and endpoint report. The outer `ProofContext` binds tenant,
+- `expected_purpose()` commits the full session blob and options, the extended token and
+  endpoint report, or the self-signal. Seal uploads carry no proof: their HPKE AAD
+  (`IngestContext`) binds them to the enclave they were sealed for. The outer `ProofContext` binds tenant,
   server TLS key and ticket. OIDC cannot sign this commitment; its bearer/channel
   assurance is recorded as `ProofAssurance::BearerOverAttestedChannel`.
 - Caller authorization intersects the exact originally authenticated matchers with current
   app grants, checks the identity and honors authentication expiry, which preserves Azure
-  audience constraints. Producer removal is principal-based: changing its audience is not
-  a retroactive check of historical producer authentication, and its original JWT expiry
-  does not expire blobs.
+  audience constraints. A caller's original JWT expiry does not expire the blobs it uses.
 - **Control-plane requests** (`seal_proto::control`): a signed or attested request names
   exactly one request, `ControlRequest { tenant, root_id, method, path (with its query, as
   sent), body_sha256, issued_at }` under `CONTROL_REQUEST_LABEL`, accepted within
@@ -851,7 +858,7 @@ or Nonce trait is introduced.
 - **Competing tenant roots.** The registrar (Seal) can log a competing root v1 for an
   existing tenant's name. It gets a different `TenantRootId`, so unrelated keys: it opens
   none of the tenant's blobs, the tenant's pinned deployments refuse it, and SDKs with
-  `root_id` set refuse enclaves serving it. A producer without a pinned root could still be
+  `root_id` set refuse enclaves serving it. A sealer without a pinned root could still be
   steered to an enclave serving it and seal there. `seal status --log` detects it.
 - **Freshness window.** A replayed older state works for at most `STATE_FRESHNESS_SECS`
   (24 h). With the log as the only freshness signer, the log operator (Seal) could sign for

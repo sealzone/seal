@@ -3,7 +3,7 @@ use crate::context::check_context;
 use crate::identity::{IdentityVerifier, ProofVerifier};
 use crate::{AuthenticatedCaller, AuthzError};
 use seal_proto::{
-    api::{ExtendRequest, SealRequest, SessionRequest, SignalRequest},
+    api::{ExtendRequest, SessionRequest, SignalRequest},
     identity::{IdentityMatcher, IdentityProof, ProofContext, ProofPurpose},
     ErrorCode, TrustedTime,
 };
@@ -28,7 +28,7 @@ impl<T> AuthenticatedRequest<T> {
 
 /// Checks a request's proof context against the enclave's tenant (`tenant.state().tenant`),
 /// TLS key and ticket key with the purpose computed from the request, then its identity proof
-/// against the tenant's app and producer matchers.
+/// against the tenant's app matchers.
 pub struct RequestAuthenticator {
     verifier: Box<dyn IdentityVerifier>,
     ticket_key: Arc<seal_crypto::TicketKey>,
@@ -61,8 +61,7 @@ impl RequestAuthenticator {
         let (ctx, proof, purpose) = parts(&request);
         let state = tenant.state();
         check_context(ctx, &state.tenant, &self.tls_spki_sha256, &purpose, &self.ticket_key, time)?;
-        let mut candidates: Vec<IdentityMatcher> =
-            state.apps.values().flatten().chain(state.producers.iter()).cloned().collect();
+        let mut candidates: Vec<IdentityMatcher> = state.apps.values().flatten().cloned().collect();
         candidates.sort();
         candidates.dedup();
         let caller = self.verifier.verify(proof, ctx, &candidates, time).await?;
@@ -71,14 +70,6 @@ impl RequestAuthenticator {
 
     /// Every method checks request.expected_purpose(); callers never supply the expected digest.
     /// App-key proofs bind this request; OIDC proofs retain their bearer/channel limitations.
-    pub async fn seal(
-        &self,
-        request: SealRequest,
-        tenant: &VerifiedTenant,
-        time: &TrustedTime,
-    ) -> Result<AuthenticatedRequest<SealRequest>, AuthzError> {
-        self.authenticate(request, |r| (&r.context, &r.proof, r.expected_purpose()), tenant, time).await
-    }
     pub async fn session(
         &self,
         request: SessionRequest,

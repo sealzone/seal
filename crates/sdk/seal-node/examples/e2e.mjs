@@ -4,7 +4,8 @@
 //
 //   node e2e.mjs sessions <blob>     a session through the local tunnel on an HTTP blob
 //   node e2e.mjs seal <to> <receipts file>
-//                                    seal SEAL_E2E_SECRET as the producer (SEAL_E2E_PRODUCER_KEY)
+//                                    seal SEAL_E2E_SECRET as anyone (SEAL_E2E_STRANGER_KEY, an app
+//                                    key no grant names)
 
 import http from "node:http";
 
@@ -80,17 +81,17 @@ async function sessions(blob) {
 }
 
 async function seal(to, receiptsFile) {
-  const producer = await Client.connect({ identity: new AppKeyIdentity(process.env.SEAL_E2E_PRODUCER_KEY) });
-  const { blob, receipt } = await producer.seal(process.env.SEAL_E2E_SECRET, {
+  const stranger = await Client.connect({ identity: new AppKeyIdentity(process.env.SEAL_E2E_STRANGER_KEY) });
+  const { blob, receipt } = await stranger.seal(process.env.SEAL_E2E_SECRET, {
     to,
     apps: "checkout",
     format: "Bearer {key}",
     withReceipt: true,
   });
   await receipts.append(receiptsFile, [receipt]);
-  // The producer is not one of the blob's apps.
-  const notAllowed = await failure(producer.session(blob));
-  const badPin = await failure(producer.seal("x", { to, apps: ["checkout"], pin: "sha256/nope" }));
+  // Anyone may seal; only the blob's apps may use it.
+  const notAllowed = await failure(stranger.session(blob));
+  const badPin = await failure(stranger.seal("x", { to, apps: ["checkout"], pin: "sha256/nope" }));
 
   // `await using` closes the session on leaving the block (Node 24+); otherwise close it here.
   const app = await Client.fromEnv();

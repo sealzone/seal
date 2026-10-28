@@ -1,7 +1,8 @@
 //! The enclave API operations. Each reads the trusted clock, takes the fresh tenant snapshot
-//! (failing closed), checks the deployment still serves it (`Runtime::serving`), authenticates,
-//! counts as activity for the idle exit from then on, and acts only through its `seal-authz`
-//! permit. Every success and every refusal is one telemetry entry.
+//! (failing closed), checks the deployment still serves it (`Runtime::serving`), authenticates
+//! the caller (all but sealing, which is open), counts as activity for the idle exit from then
+//! on, and acts only through its `seal-authz` permit. Every success and every refusal is one
+//! telemetry entry.
 
 use std::net::IpAddr;
 use std::str::FromStr;
@@ -10,8 +11,8 @@ use std::sync::Arc;
 use seal_authz::{AuthzError, SealPermit, SessionPermit, TenantAuthorizer};
 use seal_crypto::blob::{BlobSealer, OpenedBlob};
 use seal_proto::api::{
-    AttestationResponse, EndRequest, ExtendRequest, ExtendResponse, SealPayload, SealRequest, SealResponse,
-    SessionRequest, SessionResponse, SignalRequest,
+    AttestationResponse, EndRequest, ExtendRequest, ExtendResponse, IngestContext, SealPayload, SealRequest,
+    SealResponse, SessionRequest, SessionResponse, SignalRequest,
 };
 use seal_proto::blob::Blob;
 use seal_proto::freshness::{ProofTicket, ATTESTATION_MAX_AGE_SECS};
@@ -151,28 +152,29 @@ impl Runtime {
 
     async fn seal_refusable(&self, request: SealRequest) -> Result<SealResponse, Refusal> {
         let (time, tenant) = self.serving_now().await?;
-        let authenticated = self.authenticator.seal(request, &tenant, &time).await?;
-        let identity = authenticated.caller().identity().clone();
-        let _busy = self.activity.begin().by(&identity)?;
-        let authorizer = TenantAuthorizer::new(&tenant);
-        let permit = authorizer.seal(&authenticated, &time).by(&identity)?;
-        self.seal_permitted(permit, tenant.state(), &time).by(&identity)
+        let _busy = self.activity.begin_open()?;
+        let permit = TenantAuthorizer::new(&tenant).seal(&time)?;
+        Ok(self.seal_permitted(&request, permit, &time)?)
     }
 
     /// Opens the upload, checks the secret against its policy and the destination's protocol
-    /// against the image's adapters, and seals it with the permit's caller as the producer.
+    /// against the image's adapters, and seals it. Anyone may: the blob names no producer.
     fn seal_permitted(
         &self,
+        request: &SealRequest,
         permit: SealPermit<'_>,
-        state: &TenantState,
         time: &TrustedTime,
     ) -> Result<SealResponse, ServiceError> {
-        let request = permit.request().request();
-        let producer = permit.request().caller().identity().clone();
+        let state = permit.tenant().state();
         if request.service_key_version != self.service_key_version {
             return Err(fail(ErrorCode::BadRequest, "upload sealed to another service key version"));
         }
-        let aad = codec::canonical(&request.ingest_context());
+        let ingest = IngestContext {
+            tenant: self.pin.tenant.clone(),
+            service_key_version: self.service_key_version,
+            tls_spki_sha256: self.service.tls_spki_sha256,
+        };
+        let aad = codec::canonical(&ingest);
         let plaintext = seal_crypto::hpke::open_ingest(
             &self.service.ingest,
             &request.hpke_enc,
@@ -192,10 +194,10 @@ impl Runtime {
         let destination = policy.destination().to_string();
         let apps = policy.apps().clone();
         let blob = BlobSealer::new(&recipients)
-            .and_then(|sealer| sealer.seal(secret.expose(), policy, producer.clone(), time.now, &mut rng()))
+            .and_then(|sealer| sealer.seal(secret.expose(), policy, time.now, &mut rng()))
             .map_err(|e| fail(ErrorCode::BadRequest, format!("seal: {e}")))?;
         let blob_id = blob.header.blob_id;
-        let telemetry = self.record(Some(producer), TelemetryEvent::Seal { blob_id, destination, apps });
+        let telemetry = self.record(None, TelemetryEvent::Seal { blob_id, destination, apps });
         Ok(SealResponse { blob: blob.to_string(), blob_id, telemetry })
     }
 
@@ -304,15 +306,12 @@ impl Runtime {
         })
     }
 
-    /// The opened blob's secret and policy sealed again under the current tenant key version,
-    /// for the same producer.
+    /// The opened blob's secret and policy sealed again under the current tenant key version.
     fn reseal(&self, opened: &OpenedBlob, state: &TenantState, time: &TrustedTime) -> Result<String, ServiceError> {
         let blob = opened.blob();
         let recipients = self.recipients(state, blob.policy.min_platform())?;
         let resealed = BlobSealer::new(&recipients)
-            .and_then(|s| {
-                s.seal(opened.secret(), blob.policy.clone(), blob.header.producer.clone(), time.now, &mut rng())
-            })
+            .and_then(|s| s.seal(opened.secret(), blob.policy.clone(), time.now, &mut rng()))
             .map_err(|e| fail(ErrorCode::Internal, format!("reseal: {e}")))?;
         Ok(resealed.to_string())
     }

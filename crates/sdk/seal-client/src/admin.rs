@@ -1,5 +1,5 @@
 //! Separate administration surface: manages signed tenant roots and grants.
-//! Admin signatures alone do not authorize runtime producer/consumer operations.
+//! Admin signatures alone do not authorize runtime app operations.
 //! Storage write credentials are not tenant-admin signing authority.
 //!
 //! Admin-side clients for the CLI: the control plane (`seal_control::client`) and the
@@ -540,7 +540,6 @@ impl Admin {
             version,
             root_version: 1,
             apps: BTreeMap::new(),
-            producers: BTreeSet::new(),
             tenant_key_versions: TenantKeyVersions {
                 current: TenantKeyVersion(1),
                 oldest_accepted: TenantKeyVersion(1),
@@ -1074,7 +1073,6 @@ pub fn diff(old: &TenantState, new: &TenantState) -> Vec<String> {
             set_changes(&mut out, &format!("app {app}"), matchers, &BTreeSet::new(), describe);
         }
     }
-    set_changes(&mut out, "producer", &old.producers, &new.producers, describe);
     set_changes(&mut out, "deployment", &old.deployments, &new.deployments, describe);
     set_changes(&mut out, "platform", &old.platforms, &new.platforms, |p| platform_name(*p));
     let (o, n) = (old.tenant_key_versions, new.tenant_key_versions);
@@ -1130,7 +1128,6 @@ mod tests {
             version: 1,
             root_version: 1,
             apps: BTreeMap::new(),
-            producers: BTreeSet::new(),
             tenant_key_versions: TenantKeyVersions {
                 current: TenantKeyVersion(1),
                 oldest_accepted: TenantKeyVersion(1),

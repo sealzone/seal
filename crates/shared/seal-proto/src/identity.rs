@@ -1,4 +1,4 @@
-//! Workload identities: who a producer or app is, and how it proves it.
+//! Workload identities: who an app or deployment is, and how it proves it.
 
 use serde::{Deserialize, Serialize};
 
@@ -173,11 +173,6 @@ pub struct ProofContext {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ProofPurpose {
-    /// Binds the complete encrypted upload; computed by SealRequest::expected_purpose.
-    Seal {
-        #[serde(with = "codec::array_b64")]
-        request_digest: [u8; 32],
-    },
     /// Binds the full blob and options; computed by SessionRequest::expected_purpose.
     Session {
         #[serde(with = "codec::array_b64")]

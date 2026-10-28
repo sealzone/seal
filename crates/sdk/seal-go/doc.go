@@ -2,7 +2,7 @@
 //
 //	client, err := seal.FromEnv(ctx)
 //
-//	// Seal (needs a producer grant): required arguments positional, options after.
+//	// Seal (anyone may): required arguments positional, options after.
 //	blob, err := client.Seal(ctx, secret, "https://api.openai.com/v1", []string{"checkout"},
 //		seal.WithHeader("x-api-key"))
 //

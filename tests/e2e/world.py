@@ -10,7 +10,7 @@
 
 and creates tenant `acme` with the `seal` CLI, as an admin would, signing with an admin key file
 (`seal key create`, then `seal dev init`, the development registrar's way): app `checkout`
-(with an app key), a producer, the replica's enclave identity and the `sim` platform. Tests
+(with an app key), the replica's enclave identity and the `sim` platform. Tests
 then add whatever they need: more replicas, Postgres, admin changes.
 
 Every process logs to `<work>/logs/<name>.log`; a failing test prints their tails.
@@ -89,7 +89,6 @@ class World:
                        "--registrar-key", str(w.dir / "registrar.key"), "--yes")
         w.pin = next(line.split("=", 1)[1] for line in init.splitlines() if line.startswith("SEAL_TENANT="))
         w.admin("grant", "app", APP, "key", "--generate", "--out", str(w.dir / "checkout.key"), "--yes")
-        w.admin("grant", "producer", "key", "--public", w.conf["producer_public_key"], "--yes")
         w.admin("grant", "enclave", "sim", json.dumps(w.conf["deployment"]), "--yes")
         w.admin("settings", "platforms", "add", "sim", "--yes")
 
@@ -186,7 +185,7 @@ class World:
         else:
             shutil.rmtree(self.work, ignore_errors=True)
 
-    # ---- acting as the admin, the producer and the app -----------------------------------
+    # ---- acting as the admin, anyone and the app -----------------------------------------
 
     @property
     def admin_key(self) -> Path:
@@ -216,8 +215,8 @@ class World:
         return out.returncode, out.stdout
 
     def seal_with_cli(self, secret: str, to: str, *extra: str, endpoints: Optional[List[str]] = None) -> str:
-        """Seals `secret` for `checkout` with the CLI, as the producer; returns the blob."""
-        env = {"SEAL_APP_KEY": self.producer_key, "SEAL_TENANT": self.pin,
+        """Seals `secret` for `checkout` with the CLI, with no identity (anyone may); returns the blob."""
+        env = {"SEAL_TENANT": self.pin,
                "SEAL_ENDPOINT": ",".join(endpoints or self.endpoints())}
         return self.admin("secret", "--to", to, "--app", APP, *extra, stdin=secret, env=env).strip()
 
@@ -252,8 +251,9 @@ class World:
         return (self.dir / "checkout.key").read_text().strip()
 
     @property
-    def producer_key(self) -> str:
-        return (self.dir / "producer.key").read_text().strip()
+    def stranger_key(self) -> str:
+        """An app key no grant names: it may seal, as anyone may, and use nothing."""
+        return (self.dir / "stranger.key").read_text().strip()
 
     def path(self, name: str) -> Path:
         return self.dir / name

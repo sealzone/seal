@@ -132,26 +132,17 @@ mod js {
     }
 
     #[cfg(feature = "seal")]
-    #[wasm_bindgen(js_name = producerIdentity)]
-    pub fn producer_identity(producer_key: &str) -> Result<String, JsError> {
-        js(api::producer_identity(producer_key))
-    }
-
-    #[cfg(feature = "seal")]
     #[wasm_bindgen(js_name = sealRequest)]
-    #[allow(clippy::too_many_arguments)]
     pub fn seal_request(
         trust: &str,
         tenant: &str,
         root_id: &str,
         attestation: &str,
-        ticket: &str,
-        producer_key: &str,
         secret: &[u8],
         options: &str,
         now: f64,
     ) -> Result<String, JsError> {
-        js(api::seal_request(trust, tenant, root_id, attestation, ticket, producer_key, secret, options, now as u64))
+        js(api::seal_request(trust, tenant, root_id, attestation, secret, options, now as u64))
     }
 
     #[cfg(feature = "seal")]

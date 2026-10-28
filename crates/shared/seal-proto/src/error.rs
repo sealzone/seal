@@ -9,8 +9,7 @@ pub enum ErrorCode {
     /// `oldest_accepted`). SDK: `seal.Expired`.
     Expired,
     /// Caller identity is not in the blob's `apps`, or is from another tenant; or it connects
-    /// from outside its app's networks (`TenantState::app_networks`); or the producer is not
-    /// authorized to seal. SDK: `seal.NotAllowed`.
+    /// from outside its app's networks (`TenantState::app_networks`). SDK: `seal.NotAllowed`.
     NotAllowed,
     /// Session would be weaker than the caller's `min_tier`. SDK: `seal.TierTooLow`.
     TierTooLow,

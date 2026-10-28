@@ -503,7 +503,7 @@ pub(crate) mod tests {
         let sig = seal_proto::signed::Signature { signer: key_id, alg: SigAlg::Ed25519 { sig: signature } };
         seal_crypto::sign::verify(&id.public_key(), PROOF_CONTEXT_LABEL, &ctx, &sig).unwrap();
         // Bound to the context: another purpose does not verify.
-        let other = ProofContext { purpose: ProofPurpose::Seal { request_digest: [4; 32] }, ..ctx };
+        let other = ProofContext { purpose: ProofPurpose::Signal { request_digest: [4; 32] }, ..ctx };
         assert!(seal_crypto::sign::verify(&id.public_key(), PROOF_CONTEXT_LABEL, &other, &sig).is_err());
 
         for bad in ["sealak_", "sealak_AAAAsecret", "sk_x", &format!("sealak_{}", seal_proto::codec::b64url(&[9; 31]))]

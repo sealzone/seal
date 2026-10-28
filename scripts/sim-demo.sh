@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The whole system on the simulator, step by step: a release approved by dev release keys and
 # logged in the dev log, a guardian with a file root behind a TLS proxy, the control plane, a
-# tenant created with the `seal` CLI, an enclave booting from all of them, a producer sealing an
+# tenant created with the `seal` CLI, an enclave booting from all of them, anyone sealing an
 # API key for a local HTTPS upstream, and an app using it through the enclave without ever
 # holding it; then a Postgres password used the same way, and telemetry. Needs Docker or Podman.
 #
@@ -76,7 +76,6 @@ run "$BIN/seal-sim" setup --dir "$D" --enclave-bin "$BIN/seal-enclave" --port-ba
 port() { sed -n "s/.*\"$1\": \([0-9]*\).*/\1/p" "$D/sim.json"; }
 LOG_SEED=$(sed -n 's/.*"log_seed": "\([0-9a-f]*\)".*/\1/p' "$D/sim.json")
 DEPLOYMENT='{"kind":"confidential_space","project_number":1,"service_account":"enclave@sim.seal.zone"}'
-PRODUCER_PUBLIC=$(sed -n 's/.*"producer_public_key": "\([0-9a-f]*\)".*/\1/p' "$D/sim.json")
 WRITE_TOKEN=$(sed -n 's/.*"write_token": "\([0-9a-f]*\)".*/\1/p' "$D/sim.json")
 
 bold "Start the dev log, the guardian (file root) behind a TLS proxy, and the control plane"
@@ -99,7 +98,6 @@ SEAL_CONTROL_TOKEN=$WRITE_TOKEN run "$SEAL" dev init --tenant "$TENANT" --key-fi
     | tee "$WORK/init.out"
 ROOT_ID=$(sed -n "s/^SEAL_TENANT=$TENANT@//p" "$WORK/init.out")
 run "$SEAL" grant app checkout key --generate --out "$D/checkout.key" --key-file "$ADMIN_KEY" --yes
-run "$SEAL" grant producer key --public "$PRODUCER_PUBLIC" --key-file "$ADMIN_KEY" --yes
 run "$SEAL" grant enclave sim "$DEPLOYMENT" --key-file "$ADMIN_KEY" --yes
 run "$SEAL" settings platforms add sim --key-file "$ADMIN_KEY" --yes
 
@@ -115,8 +113,8 @@ start upstream "$BIN/seal-sim" upstream --dir "$D"
 wait_port "$(port upstream)"
 
 export SEAL_ENDPOINT="https://localhost:$(port api)" SEAL_TENANT="$TENANT@$ROOT_ID" SEAL_TRUST="$D/trust.json"
-bold "The producer seals the API key for the upstream (the secret goes only into the enclave)"
-printf '%s' "$SECRET" | SEAL_APP_KEY=$(cat "$D/producer.key") run "$SEAL" secret --to "https://localhost:$(port upstream)/v1" \
+bold "Anyone seals the API key for the upstream, with no identity (the secret goes only into the enclave)"
+printf '%s' "$SECRET" | run "$SEAL" secret --to "https://localhost:$(port upstream)/v1" \
     --app checkout --header authorization --format 'Bearer {key}' > "$WORK/api.blob"
 echo "blob: $(cut -c1-60 "$WORK/api.blob")…"
 
@@ -134,14 +132,14 @@ printf '%s' "$PG_PASSWORD" | "$BIN/seal-sim" postgres --dir "$D" | tee "$WORK/pg
 PG_RUNTIME=$(sed -n 's/^runtime //p' "$WORK/pg.out")
 PG_CONTAINER=$(sed -n 's/^container //p' "$WORK/pg.out")
 PG_DEST=$(sed -n 's/^destination //p' "$WORK/pg.out")
-printf '%s' "$PG_PASSWORD" | SEAL_APP_KEY=$(cat "$D/producer.key") run "$SEAL" secret --to "$PG_DEST" --app checkout \
+printf '%s' "$PG_PASSWORD" | run "$SEAL" secret --to "$PG_DEST" --app checkout \
     > "$WORK/pg.blob"
 SEAL_APP_KEY=$(cat "$D/checkout.key") run "$BIN/seal-sim" app pg --blob-file "$WORK/pg.blob"
 
 if [[ -n "${SEAL_SIM_HOLD:-}" ]]; then
     bold "Holding: everything keeps running until Ctrl-C"
     echo "export SEAL_HOME=$SEAL_HOME SEAL_ENDPOINT=$SEAL_ENDPOINT SEAL_TENANT=$SEAL_TENANT SEAL_TRUST=$SEAL_TRUST"
-    echo "app key: $D/checkout.key   producer key: $D/producer.key   blob: $WORK/api.blob   binaries: $BIN"
+    echo "app key: $D/checkout.key   blob: $WORK/api.blob   binaries: $BIN"
     while :; do sleep 1; done
 fi
 

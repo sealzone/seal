@@ -18,7 +18,7 @@ fn service_keys(v: u32) -> ServiceKeys {
 
 fn blob() -> seal_proto::blob::Blob {
     let recipients = wrap_keys(&[PlatformId::Sim], 1);
-    BlobSealer::new(&recipients).unwrap().seal(b"x", policy(), producer(), 1, &mut sys_rng()).unwrap()
+    BlobSealer::new(&recipients).unwrap().seal(b"x", policy(), 1, &mut sys_rng()).unwrap()
 }
 
 fn raw(token: &str) -> Vec<u8> {

@@ -1,7 +1,7 @@
 # Seal
 
-Use secrets without holding them. A producer seals a secret (an API key, a database password)
-for named apps; an app starts a session on the sealed blob and gets a stand-in, while an
+Use secrets without holding them. Anyone seals a secret (an API key, a database password)
+for named apps; one of those apps starts a session on the sealed blob and gets a stand-in, while an
 attested enclave injects the real secret on the way to the upstream. The app, its host and
 Seal's own control plane never see the secret.
 
@@ -30,7 +30,7 @@ The same flow in Rust is `seal.seal(secret, to, apps).header(..).await?`, then
 ```
 
 - **Enclave**: runs in the customer's network on a confidential-computing platform (or as
-  Seal's hosted replica, for producers outside it), pinned to one tenant. It is the only place a blob is decrypted. It authorizes each workload by its
+  Seal's hosted replica, for sealing from outside it), pinned to one tenant. It is the only place a blob is decrypted. It authorizes each app by its
   cloud identity, then proxies HTTP, Postgres or Redis traffic with the real secret injected.
 - **Guardian**: holds the platform root in its own TEE and releases keys only to enclaves
   whose attested measurement is a release signed by M of N release keys, logged, and past
@@ -84,7 +84,7 @@ Python 3.9+ for the Python SDK and the end-to-end tests. Node.js and Go are need
 those SDKs.
 
 Run the whole system on the simulator: a release, a guardian, the control plane, a tenant
-created with the CLI, an enclave, a producer sealing an API key, and an app using it without
+created with the CLI, an enclave, an API key sealed with no identity, and an app using it without
 ever holding it.
 
 ```sh

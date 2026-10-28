@@ -21,7 +21,8 @@ use crate::transport::{self, ConnectError};
 use crate::verify::{self, Expected, VerifiedEnclave};
 use crate::{BoxFuture, ClientError, IdentityProvider, SessionBuilder, TenantId, TenantRootId, UnixTime};
 
-/// A verified connection to the tenant's enclaves, acting as one workload identity.
+/// A verified connection to the tenant's enclaves, acting as one workload identity (sealing
+/// needs none).
 /// Cheap to clone; clones share the connection.
 #[derive(Clone)]
 pub struct Client {
@@ -31,7 +32,8 @@ pub struct Client {
 struct Inner {
     endpoints: Vec<url::Url>,
     expected: Expected,
-    identity: Arc<dyn IdentityProvider>,
+    /// `Err` (why detection found none) when only sealing is possible.
+    identity: Result<Arc<dyn IdentityProvider>, String>,
     /// The identity is `SEAL_APP_KEY`, found by detection.
     app_key_from_env: bool,
     trust: seal_verify::Trust,
@@ -90,7 +92,8 @@ impl Client {
     }
 
     /// Seal `secret` so only the named `apps` can use it, and only with `to`. Returns the
-    /// portable blob text (`seal1.…`), safe to store anywhere. Needs a producer grant.
+    /// portable blob text (`seal1.…`), safe to store anywhere. Anyone may seal: it needs no
+    /// identity and no grant.
     ///
     /// `to` is the destination URL (`https://`, `postgres://`, `clickhouse://`, `rediss://`).
     /// Options chain before `.await`: `header`, `format`, `pin`, `expires`, `methods`,
@@ -222,7 +225,8 @@ impl Client {
             tls_spki_sha256: *enclave.tls_spki_sha256(),
             ticket,
         };
-        let proof = self.inner.identity.prove(&context).await?;
+        let identity = self.inner.identity.as_ref().map_err(|why| ClientError::NoIdentity(why.clone()))?;
+        let proof = identity.prove(&context).await?;
         Ok((context, proof))
     }
 
@@ -333,7 +337,7 @@ fn decode<R: DeserializeOwned>(path: &str, body: &[u8]) -> Result<R, ClientError
 pub(crate) fn placeholder(tenant: &TenantId) -> (ProofContext, IdentityProof) {
     let context = ProofContext {
         tenant: tenant.clone(),
-        purpose: ProofPurpose::Seal { request_digest: [0; 32] },
+        purpose: ProofPurpose::Session { request_digest: [0; 32] },
         tls_spki_sha256: [0; 32],
         ticket: ProofTicket { value: [0; 32], expires_at: 0, mac: [0; 32] },
     };
@@ -421,8 +425,12 @@ impl ClientBuilder {
         };
         let explicit_identity = self.identity.is_some();
         let identity = match self.identity {
-            Some(i) => i,
-            None => crate::identity::detect_identity(&tenant).await?,
+            Some(i) => Ok(i),
+            None => match crate::identity::detect_identity(&tenant).await {
+                Ok(i) => Ok(i),
+                Err(ClientError::NoIdentity(why)) => Err(why),
+                Err(e) => return Err(e),
+            },
         };
         let expected = Expected { tenant, root_id };
         let verify = || verify_any(&endpoints, 0, &trust, &expected);
@@ -435,7 +443,7 @@ impl ClientBuilder {
         Ok(Client {
             inner: Arc::new(Inner {
                 endpoints,
-                app_key_from_env: !explicit_identity && identity.kind() == "app-key",
+                app_key_from_env: !explicit_identity && identity.as_ref().is_ok_and(|i| i.kind() == "app-key"),
                 expected,
                 identity,
                 trust,
@@ -664,10 +672,7 @@ impl SealBuilder<'_> {
             &mut seal_crypto::UnwrapErr(seal_crypto::SysRng),
         )
         .map_err(|e| ClientError::Verification(format!("the attested ingest key: {e}")))?;
-        let (context, proof) = placeholder(tenant);
-        let mut request =
-            SealRequest { service_key_version: binding.service_key_version, hpke_enc, sealed_payload, context, proof };
-        (request.context, request.proof) = client.prove(&enclave, request.expected_purpose()).await?;
+        let request = SealRequest { service_key_version: binding.service_key_version, hpke_enc, sealed_payload };
         let response: SealResponse = client.call(&enclave, "/v1/blobs", &request).await?;
 
         let blob = seal_proto::blob::Blob::from_str(&response.blob)

@@ -21,7 +21,7 @@ mod tests;
 #[async_trait]
 pub(crate) trait IdentityVerifier: Send + Sync {
     /// Verifies `proof` against `ctx` at `time` (expiry against `time.latest()`). `candidates` are the tenant's
-    /// matchers (apps + producers): app-key proofs need the matching public key,
+    /// app matchers: app-key proofs need the matching public key,
     /// Azure proofs take their audience from it, and OIDC issuers outside them are never fetched.
     async fn verify(
         &self,

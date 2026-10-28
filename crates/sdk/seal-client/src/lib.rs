@@ -17,9 +17,9 @@
 //! # Ok(()) }
 //! ```
 //!
-//! One client does everything a workload may do. Whether it may seal (producer grant) or
-//! start sessions (app grant) is decided by the enclave on every call, from the tenant's
-//! signed grants, never by the SDK. Admin tools live in `admin`.
+//! One client does everything a workload may do. Anyone may seal, with no identity at all;
+//! whether it may start sessions (an app grant) is decided by the enclave on every call, from
+//! the tenant's signed grants, never by the SDK. Admin tools live in `admin`.
 //!
 //! The SDK core. Language bindings (Python, Node/TypeScript, Go) are thin wrappers over this
 //! crate; none re-implements attestation, proofs or tunnels.

@@ -1,5 +1,5 @@
 """The Node SDK (`@sealzone/sdk`, crates/sdk/seal-node) against the same world: an app uses a
-sealed key through a tunnel session, and a producer seals from Node."""
+sealed key through a tunnel session, and anyone seals from Node."""
 
 from __future__ import annotations
 
@@ -60,13 +60,13 @@ def test_an_api_key_is_used_from_node_without_holding_it(world: World, node_sdk:
     assert all(r["authorization"] == f"Bearer {SECRET}" and r["path"] == "/v1/models" for r in seen), seen
 
 
-def test_a_producer_seals_from_node(world: World, node_sdk: Path) -> None:
+def test_anyone_seals_from_node(world: World, node_sdk: Path) -> None:
     receipts = world.path("node-receipts.jsonl")
     out = run_node(world, node_sdk, "seal", world.upstream_url, str(receipts),
-                   env={"SEAL_E2E_SECRET": SECRET, "SEAL_E2E_PRODUCER_KEY": world.producer_key})
+                   env={"SEAL_E2E_SECRET": SECRET, "SEAL_E2E_STRANGER_KEY": world.stranger_key})
     blob = out["blob"]
     assert blob.startswith("seal1.acme.") and SECRET not in blob
-    assert out["notAllowed"] == "NotAllowed:not_allowed", "the producer is not one of the blob's apps"
+    assert out["notAllowed"] == "NotAllowed:not_allowed", "a stranger is not one of the blob's apps"
     assert out["badPin"] == "BadRequest:bad_request", out
     assert out["status"] == 200, "the Node app used the Node-sealed blob"
 

@@ -10,7 +10,7 @@
 //! <dir>/release.json              the release's `ReleaseEvidence`, PUT to the control plane
 //! <dir>/release-keys/{1,2,3}.key  dev release keys (2 of 3 sign)
 //! <dir>/registrar.key             the dev registrar key (`seal dev init --registrar-key`)
-//! <dir>/producer.key              a `SEAL_APP_KEY` for the producer
+//! <dir>/stranger.key              a `SEAL_APP_KEY` no grant names (it may seal, as anyone may)
 //! <dir>/ca.pem                    the test CA, trusted as `extra_roots` everywhere
 //! <dir>/tls-chain.pem, tls-key.pem  a `localhost` certificate and key under it
 //! <dir>/guardian-root, guardian.json   the guardian's root file and `SEAL_GUARDIAN_CONFIG`
@@ -95,7 +95,6 @@ pub struct Sim {
     pub guardian_key: PublicKey,
     /// What `SEAL_SIM_DEPLOYMENT` holds and `seal grant enclave sim` grants.
     pub deployment: WorkloadIdentity,
-    pub producer_public_key: PublicKey,
 }
 
 impl Sim {
@@ -118,7 +117,7 @@ impl Sim {
     pub fn endpoint(&self) -> String {
         format!("https://{HOST}:{}", self.ports.api)
     }
-    /// The test upstream's base URL, what producers seal to.
+    /// The test upstream's base URL, what blobs are sealed to.
     pub fn upstream_url(&self) -> String {
         format!("https://{HOST}:{}/v1", self.ports.upstream)
     }
@@ -126,9 +125,9 @@ impl Sim {
     pub fn deployment_json(&self) -> String {
         serde_json::to_string(&self.deployment).expect("an identity serializes")
     }
-    /// The producer's `SEAL_APP_KEY`.
-    pub fn producer_key(&self) -> anyhow::Result<String> {
-        let path = self.path("producer.key");
+    /// The stranger's `SEAL_APP_KEY`.
+    pub fn stranger_key(&self) -> anyhow::Result<String> {
+        let path = self.path("stranger.key");
         Ok(std::fs::read_to_string(&path).with_context(|| format!("{}", path.display()))?.trim().to_string())
     }
     /// The test CA (PEM).
@@ -324,9 +323,9 @@ pub fn setup_with(dir: &Path, enclave_binary: &Path, ports: Ports, options: Opti
     let guardian_key = PlatformMasterKey::from_root_secret(PlatformId::Sim, &root).guardian_key().public_key();
 
     let registrar = new_key(&dir.join("registrar.key"))?;
-    let producer = SigningKey::generate(&mut rng());
-    let producer_text = format!("sealak_{}\n", seal_proto::codec::b64url(&producer.to_seed()[..]));
-    write_private(&dir.join("producer.key"), producer_text.as_bytes())?;
+    let stranger = SigningKey::generate(&mut rng());
+    let stranger_text = format!("sealak_{}\n", seal_proto::codec::b64url(&stranger.to_seed()[..]));
+    write_private(&dir.join("stranger.key"), stranger_text.as_bytes())?;
     test_pki(&dir)?;
     let write_token = hex(Key32::generate(&mut rng()).expose());
 
@@ -417,7 +416,6 @@ pub fn setup_with(dir: &Path, enclave_binary: &Path, ports: Ports, options: Opti
             project_number: 1,
             service_account: "enclave@sim.seal.zone".into(),
         },
-        producer_public_key: producer.public_key(),
     };
     write_json(&dir.join("sim.json"), &serde_json::to_value(&sim)?)?;
     Ok(sim)

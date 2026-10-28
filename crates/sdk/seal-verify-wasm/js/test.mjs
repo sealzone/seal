@@ -26,14 +26,14 @@ test("the state in force and the pending ones", () => {
     )
   }
   const pending = seal.verifyTenant(v.trust, v.tenant, v.tenant_cases[0].bundle, { now: v.tenant_cases[0].now })
-  assert.deepEqual(kinds(pending.pending[0].differences), ["producer_added"])
+  assert.deepEqual(kinds(pending.pending[0].differences), ["deployment_added"])
   // Older states left out: nothing shows what was in force before.
   const stale = structuredClone(v.tenant_cases[0].bundle)
   stale.states.shift()
   assert.throws(() => seal.verifyTenant(v.trust, v.tenant, stale, { now: v.tenant_cases[0].now }), /cannot tell which state is in force/)
   // A forged signature on the latest state.
   const forged = structuredClone(v.tenant_cases[0].bundle)
-  forged.state.body.producers = []
+  forged.state.body.deployments = []
   assert.throws(() => seal.verifyTenant(v.trust, v.tenant, forged, { now: v.tenant_cases[0].now }))
 })
 
@@ -92,14 +92,7 @@ test("telemetry", () => {
 const sealing = await import(join(pkg, "seal.js"))
 sealing.initSync({ module: readFileSync(join(pkg, "seal", "seal_wasm_bg.wasm")) })
 
-test("sealing: producer keys and refusals before any network", () => {
-  const key = `sealak_${Buffer.alloc(32, 9).toString("base64url")}`
-  const id = sealing.producerIdentity(key)
-  assert.equal(id.kind, "app_key")
-  assert.match(id.key_id, /^[0-9a-f]{64}$/)
-  assert.match(id.public_key, /^[0-9a-f]{64}$/)
-  assert.throws(() => sealing.producerIdentity("sealak_short"), /a producer key is sealak_/)
-  assert.throws(() => sealing.producerIdentity(Buffer.alloc(32, 9).toString("hex")), (e) => !e.message.includes("0909"))
+test("sealing: refusals before any network", () => {
   const root = "11".repeat(32)
   assert.throws(() => sealing.verifyEnclave(v.trust, v.tenant, root, {}, 0), /attestation/)
   assert.throws(() => sealing.checkSealed({ blob: "seal1.x", blob_id: "0", telemetry: {} }, v.tenant, root, {}), /./)

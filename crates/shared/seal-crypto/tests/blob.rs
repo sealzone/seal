@@ -13,7 +13,7 @@ const PLATFORMS: [PlatformId; 3] = [PlatformId::AzureSnpAci, PlatformId::AwsNitr
 
 fn seal(secret: &[u8]) -> Blob {
     let recipients = wrap_keys(&PLATFORMS, 2);
-    BlobSealer::new(&recipients).unwrap().seal(secret, policy(), producer(), 1_900_000_000, &mut sys_rng()).unwrap()
+    BlobSealer::new(&recipients).unwrap().seal(secret, policy(), 1_900_000_000, &mut sys_rng()).unwrap()
 }
 
 fn open_on(platform: PlatformId, blob: &Blob) -> Result<Vec<u8>, CryptoError> {
@@ -24,7 +24,7 @@ fn open_on(platform: PlatformId, blob: &Blob) -> Result<Vec<u8>, CryptoError> {
 #[test]
 fn every_recipient_platform_opens_the_blob() {
     let blob = seal(b"sk-live-123");
-    assert_eq!(blob.header.version, 1);
+    assert_eq!(blob.header.version, seal_proto::blob::BLOB_VERSION);
     assert_eq!(blob.header.tenant, tenant());
     assert_eq!(blob.header.root_id, root_id());
     assert_eq!(blob.header.tenant_key_version, TenantKeyVersion(2));
@@ -97,9 +97,6 @@ fn every_tamper_is_refused() {
     t.header.created_at += 1;
     assert_eq!(open(&t), decrypt);
     let mut t = blob.clone();
-    t.header.producer = seal_proto::identity::WorkloadIdentity::AppKey { key_id: seal_proto::KeyId([0x12; 32]) };
-    assert_eq!(open(&t), decrypt);
-    let mut t = blob.clone();
     t.nonce[0] ^= 1;
     assert_eq!(open(&t), decrypt);
     let mut t = blob.clone();
@@ -136,7 +133,7 @@ fn every_tamper_is_refused() {
     assert_eq!(open(&t), decrypt);
     // Unsupported header version.
     let mut t = blob.clone();
-    t.header.version = 2;
+    t.header.version = 1;
     assert!(matches!(open(&t), Err(CryptoError::Malformed(_))));
 }
 
@@ -158,7 +155,7 @@ fn sealer_validates_recipients() {
     // An unusable (low-order) recipient key.
     let mut low_order = base.clone();
     low_order[0].public_key = seal_proto::PublicKey([0; 32]);
-    let err = BlobSealer::new(&low_order).unwrap().seal(b"x", policy(), producer(), 0, &mut sys_rng()).unwrap_err();
+    let err = BlobSealer::new(&low_order).unwrap().seal(b"x", policy(), 0, &mut sys_rng()).unwrap_err();
     assert!(matches!(err, CryptoError::Malformed(_)));
 }
 
@@ -166,12 +163,12 @@ fn sealer_validates_recipients() {
 fn recipients_below_min_platform_are_refused() {
     let sealed_only = policy().with_min_platform(PlatformTier::Sealed);
     let with_sim = wrap_keys(&[PlatformId::AzureSnpAci, PlatformId::Sim], 1);
-    let err = BlobSealer::new(&with_sim).unwrap().seal(b"x", sealed_only.clone(), producer(), 0, &mut sys_rng());
+    let err = BlobSealer::new(&with_sim).unwrap().seal(b"x", sealed_only.clone(), 0, &mut sys_rng());
     assert!(matches!(err, Err(CryptoError::Malformed(_))));
     let sealed = wrap_keys(&[PlatformId::AzureSnpAci], 1);
-    BlobSealer::new(&sealed).unwrap().seal(b"x", sealed_only, producer(), 0, &mut sys_rng()).unwrap();
+    BlobSealer::new(&sealed).unwrap().seal(b"x", sealed_only, 0, &mut sys_rng()).unwrap();
     // No minimum: any platform.
-    BlobSealer::new(&with_sim).unwrap().seal(b"x", policy(), producer(), 0, &mut sys_rng()).unwrap();
+    BlobSealer::new(&with_sim).unwrap().seal(b"x", policy(), 0, &mut sys_rng()).unwrap();
 }
 
 proptest! {
@@ -182,7 +179,7 @@ proptest! {
         bit in any::<prop::sample::Index>(),
     ) {
         let recipients = wrap_keys(&[PlatformId::Sim], 1);
-        let mut blob = BlobSealer::new(&recipients).unwrap().seal(&secret, policy(), producer(), 7, &mut sys_rng()).unwrap();
+        let mut blob = BlobSealer::new(&recipients).unwrap().seal(&secret, policy(), 7, &mut sys_rng()).unwrap();
         let key = master(PlatformId::Sim).tenant_wrapping_key(&tenant(), &root_id(), TenantKeyVersion(1));
         let opened = BlobCipher::new(&key).open(&blob).unwrap();
         prop_assert_eq!(opened.secret(), &secret[..]);

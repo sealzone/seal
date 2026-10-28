@@ -27,7 +27,7 @@
 //! state it signs for. Public is what sealing and booting need and an attacker learns nothing
 //! secret from:
 //! public keys under guardian certificates, releases, co-signatures of public releases, the
-//! log's checkpoint. Producers read nothing here (they seal through an enclave, whose bundle
+//! log's checkpoint. Sealing reads nothing here (it goes through an enclave, whose bundle
 //! holds the wrap keys). An enclave reads its bundle at boot, before the guardian released the
 //! keys it would sign with, by attesting to the request instead.
 //!

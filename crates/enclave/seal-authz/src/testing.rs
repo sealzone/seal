@@ -91,14 +91,8 @@ pub fn master() -> PlatformMasterKey {
     PlatformMasterKey::from_root_secret(PlatformId::Sim, &Key32::from_bytes([8; 32]))
 }
 
-/// A blob for `apps` sealed by `producer` under `root_id` and tenant key version `v`.
-pub fn blob(
-    root_id: &TenantRootId,
-    v: u32,
-    producer: WorkloadIdentity,
-    apps: &[&str],
-    expires_at: Option<UnixTime>,
-) -> Blob {
+/// A blob for `apps` sealed under `root_id` and tenant key version `v`.
+pub fn blob(root_id: &TenantRootId, v: u32, apps: &[&str], expires_at: Option<UnixTime>) -> Blob {
     let wrap = master().tenant_wrap_key(&acme(), root_id, TenantKeyVersion(v)).body;
     let recipients = [wrap];
     let sealer = seal_crypto::blob::BlobSealer::new(&recipients).unwrap();
@@ -106,23 +100,17 @@ pub fn blob(
     if let Some(e) = expires_at {
         policy = policy.with_expiry(e);
     }
-    sealer.seal(b"sk-test", policy, producer, T, &mut rng()).unwrap()
+    sealer.seal(b"sk-test", policy, T, &mut rng()).unwrap()
 }
 
 /// `blob` with `min_tier` in the sealed policy (the `--hardened-only` floor).
-pub fn hardened_blob(
-    root_id: &TenantRootId,
-    v: u32,
-    producer: WorkloadIdentity,
-    apps: &[&str],
-    min_tier: ConsumerTier,
-) -> Blob {
+pub fn hardened_blob(root_id: &TenantRootId, v: u32, apps: &[&str], min_tier: ConsumerTier) -> Blob {
     let wrap = master().tenant_wrap_key(&acme(), root_id, TenantKeyVersion(v)).body;
     let recipients = [wrap];
     let sealer = seal_crypto::blob::BlobSealer::new(&recipients).unwrap();
     let policy =
         SecretPolicy::new("https://api.example.com/v1", apps.iter().map(|a| app(a))).unwrap().with_min_tier(min_tier);
-    sealer.seal(b"sk-test", policy, producer, T, &mut rng()).unwrap()
+    sealer.seal(b"sk-test", policy, T, &mut rng()).unwrap()
 }
 
 pub fn open(blob: &Blob) -> seal_crypto::blob::OpenedBlob {
@@ -137,7 +125,6 @@ pub fn base_state(version: u64) -> TenantState {
         version,
         root_version: 1,
         apps: Default::default(),
-        producers: Default::default(),
         tenant_key_versions: TenantKeyVersions { current: TenantKeyVersion(1), oldest_accepted: TenantKeyVersion(1) },
         platforms: [PlatformId::Sim].into(),
         integrity: Default::default(),

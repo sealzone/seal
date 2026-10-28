@@ -1,6 +1,6 @@
 """The Go SDK (`seal.zone/go`, a cgo binding over the Rust core through `seal-ffi`): a Go app
-uses a sealed API key through a tunnel session without holding it, and a Go producer
-seals one. The Go side is `crates/sdk/seal-go/examples/e2e`, run as the app or the producer."""
+uses a sealed API key through a tunnel session without holding it, and seals one as anyone may.
+The Go side is `crates/sdk/seal-go/examples/e2e`, run as the app or as a stranger."""
 
 from __future__ import annotations
 
@@ -69,11 +69,11 @@ def test_the_go_sdk_uses_a_sealed_key_and_seals_one(world: World, go_e2e: Path) 
     blob = world.seal_with_cli(SECRET, world.upstream_url, "--format", "Bearer {key}")
     check_sessions(run_go(world, go_e2e, "app", blob, key=world.app_key))
 
-    # A Go producer seals the same key, keeps the receipt, and may not use the blob itself.
+    # A stranger seals the same key from Go, keeps the receipt, and may not use the blob itself.
     receipts = world.path("go-receipts.jsonl")
-    sealed = run_go(world, go_e2e, "seal", world.upstream_url, str(receipts), key=world.producer_key, stdin=SECRET)
+    sealed = run_go(world, go_e2e, "seal", world.upstream_url, str(receipts), key=world.stranger_key, stdin=SECRET)
     assert sealed["blob"].startswith("seal1.acme.") and sealed["tenant"] == "acme"
-    assert sealed["producer_session"] == "not_allowed" and sealed["is_not_allowed"], sealed
+    assert sealed["stranger_session"] == "not_allowed" and sealed["is_not_allowed"], sealed
     assert sealed["bad_seal"] == "bad_request" and sealed["bad_signal_code"] == "bad_request", sealed
     assert sealed["bad_signal_level"] == "bad_request" and sealed["trust_file_missing"], sealed
     lines = [json.loads(line) for line in receipts.read_text().splitlines()]

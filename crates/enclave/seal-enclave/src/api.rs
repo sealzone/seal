@@ -8,9 +8,10 @@
 //! - Errors: `ErrorCode::http_status()` with an `ApiError` body whose message is fixed per code.
 //!   `ServiceError::detail` is logged at debug level and never sent. Unknown paths and methods
 //!   are `BadRequest`.
-//! - `POST /v1/tickets` is rate limited per connection source (the peer's IPv4 address, or its
-//!   IPv6 /64): a bucket of `TICKET_BURST` tickets refilled at `TICKETS_PER_SEC`. Over the
-//!   limit is `BudgetExceeded`.
+//! - `POST /v1/tickets` and `POST /v1/blobs`, which anyone may call, are rate limited per
+//!   connection source (the peer's IPv4 address, or its IPv6 /64): a bucket of `TICKET_BURST`
+//!   tickets refilled at `TICKETS_PER_SEC`, and one of `SEAL_BURST` seals refilled at
+//!   `SEALS_PER_SEC`. Over the limit is `BudgetExceeded`.
 //!
 //! `serve` terminates TLS itself with the enclave's TLS key (`SealService::tls_config`), the
 //! same key the attestation binds, so clients pin it before sending anything. The port is the
@@ -48,7 +49,7 @@ use tokio_rustls::server::TlsStream;
 
 use crate::{SealService, ServiceError};
 
-/// Largest body of `/v1/blobs` and `/v1/sessions` (a sealed secret or a blob, and a proof).
+/// Largest body of `/v1/blobs` and `/v1/sessions` (a sealed secret, or a blob and a proof).
 pub const MAX_REQUEST_BYTES: usize = 1 << 20;
 /// Largest body of `/v1/sessions/extend`, `/v1/sessions/end` and `/v1/signals`.
 pub const MAX_SMALL_REQUEST_BYTES: usize = 64 << 10;
@@ -56,9 +57,13 @@ pub const MAX_SMALL_REQUEST_BYTES: usize = 64 << 10;
 pub const TICKET_BURST: u32 = 20;
 /// Rate at which a source's ticket bucket refills.
 pub const TICKETS_PER_SEC: u32 = 5;
+/// Seals one connection source may make at once.
+pub const SEAL_BURST: u32 = 20;
+/// Rate at which a source's seal bucket refills.
+pub const SEALS_PER_SEC: u32 = 2;
 
-/// Sources tracked at most; past it, sources whose bucket has refilled are forgotten.
-const TICKET_SOURCES: usize = 10_000;
+/// Sources a limiter tracks at most; past it, sources whose bucket has refilled are forgotten.
+const SOURCES: usize = 10_000;
 /// Time from an accepted connection to a finished TLS handshake.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -126,21 +131,37 @@ async fn serve_router(
 
 struct AppState<S> {
     service: Arc<S>,
-    tickets: Arc<RateLimiter>,
+    limits: Limits,
 }
 
 impl<S> Clone for AppState<S> {
     fn clone(&self) -> Self {
-        Self { service: self.service.clone(), tickets: self.tickets.clone() }
+        Self { service: self.service.clone(), limits: self.limits.clone() }
+    }
+}
+
+/// The per-source limits of the open calls.
+#[derive(Clone)]
+struct Limits {
+    tickets: Arc<RateLimiter>,
+    seals: Arc<RateLimiter>,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            tickets: Arc::new(RateLimiter::new(TICKET_BURST, TICKETS_PER_SEC)),
+            seals: Arc::new(RateLimiter::new(SEAL_BURST, SEALS_PER_SEC)),
+        }
     }
 }
 
 fn routes<S: Api>(service: Arc<S>) -> Router {
-    routes_with(service, Arc::new(RateLimiter::new(TICKET_BURST, TICKETS_PER_SEC)))
+    routes_with(service, Limits::default())
 }
 
-fn routes_with<S: Api>(service: Arc<S>, tickets: Arc<RateLimiter>) -> Router {
-    let state = AppState { service, tickets };
+fn routes_with<S: Api>(service: Arc<S>, limits: Limits) -> Router {
+    let state = AppState { service, limits };
     let large = DefaultBodyLimit::max(MAX_REQUEST_BYTES);
     let small = DefaultBodyLimit::max(MAX_SMALL_REQUEST_BYTES);
     Router::new()
@@ -221,18 +242,26 @@ async fn ticket<S: Api>(
     State(state): State<AppState<S>>,
     source: Option<Extension<ConnectInfo<Source>>>,
 ) -> Result<Json<ProofTicket>, Failure> {
-    let source = source.map(|Extension(ConnectInfo(Source(addr)))| bucket_key(addr.ip()));
-    if !state.tickets.allow(source, Instant::now()) {
-        return Err(Failure(crate::fail(ErrorCode::BudgetExceeded, format!("ticket rate limit for {source:?}"))));
-    }
+    limited(&state.limits.tickets, "ticket", source)?;
     Ok(Json(state.service.ticket().await?))
 }
 
 async fn seal<S: Api>(
     State(state): State<AppState<S>>,
+    source: Option<Extension<ConnectInfo<Source>>>,
     JsonBody(request): JsonBody<SealRequest>,
 ) -> Result<Json<SealResponse>, Failure> {
+    limited(&state.limits.seals, "seal", source)?;
     Ok(Json(state.service.seal(request).await?))
+}
+
+/// `BudgetExceeded` once the connection's source is over `limiter`'s rate.
+fn limited(limiter: &RateLimiter, what: &str, source: Option<Extension<ConnectInfo<Source>>>) -> Result<(), Failure> {
+    let source = source.map(|Extension(ConnectInfo(Source(addr)))| bucket_key(addr.ip()));
+    match limiter.allow(source, Instant::now()) {
+        true => Ok(()),
+        false => Err(Failure(crate::fail(ErrorCode::BudgetExceeded, format!("{what} rate limit for {source:?}")))),
+    }
 }
 
 async fn session<S: Api>(
@@ -307,9 +336,9 @@ impl RateLimiter {
     /// Takes one token from `source`'s bucket at `now`, if it has one.
     fn allow(&self, source: Option<IpAddr>, now: Instant) -> bool {
         let mut buckets = crate::lock(&self.buckets);
-        if buckets.len() >= TICKET_SOURCES && !buckets.contains_key(&source) {
+        if buckets.len() >= SOURCES && !buckets.contains_key(&source) {
             buckets.retain(|_, bucket| self.refilled(*bucket, now) < self.burst);
-            if buckets.len() >= TICKET_SOURCES {
+            if buckets.len() >= SOURCES {
                 // Every tracked source is mid-burst: start over rather than grow without bound.
                 buckets.clear();
             }
@@ -548,11 +577,11 @@ pub(crate) mod tests {
 
     /// Serves the routes over `fake` with the test TLS key; an HTTPS client trusting its CA.
     async fn serve_fake(fake: Arc<Fake>) -> HttpsClient {
-        serve_fake_with(fake, Arc::new(RateLimiter::new(TICKET_BURST, TICKETS_PER_SEC))).await
+        serve_fake_with(fake, Limits::default()).await
     }
 
-    async fn serve_fake_with(fake: Arc<Fake>, tickets: Arc<RateLimiter>) -> HttpsClient {
-        serve_tls(routes_with(fake, tickets)).await
+    async fn serve_fake_with(fake: Arc<Fake>, limits: Limits) -> HttpsClient {
+        serve_tls(routes_with(fake, limits)).await
     }
 
     /// A test identity for `HOST` (the runtime builds the real one: `SealService::tls_config`).
@@ -601,7 +630,7 @@ pub(crate) mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let tunnels = Arc::new(FakeTunnels { admit: true.into() });
-        let router = routes_with(Arc::new(Fake::default()), Arc::new(RateLimiter::new(1, 1)));
+        let router = routes_with(Arc::new(Fake::default()), Limits::default());
         let served = tunnels.clone() as Arc<dyn Tunnels>;
         tokio::spawn(serve_router(router, listener, tls_config(&key, &names), served, std::future::pending()));
         let mut roots = rustls::RootCertStore::empty();
@@ -662,7 +691,7 @@ pub(crate) mod tests {
     fn context() -> ProofContext {
         ProofContext {
             tenant: TenantId::new("acme").unwrap(),
-            purpose: ProofPurpose::Seal { request_digest: [5; 32] },
+            purpose: ProofPurpose::Session { request_digest: [5; 32] },
             tls_spki_sha256: [6; 32],
             ticket: ProofTicket { value: [1; 32], expires_at: 99, mac: [2; 32] },
         }
@@ -677,8 +706,6 @@ pub(crate) mod tests {
             service_key_version: ServiceKeyVersion(1),
             hpke_enc: vec![1; 32],
             sealed_payload: vec![2; payload],
-            context: context(),
-            proof: proof(),
         })
         .unwrap()
     }
@@ -796,20 +823,28 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn tickets_are_rate_limited_per_source() {
+    async fn tickets_and_seals_are_rate_limited_per_source() {
         let fake = Arc::new(Fake::default());
-        // No refill, so a slow machine cannot earn the burst another ticket (refill: below).
-        let tickets = Arc::new(RateLimiter::new(TICKET_BURST, 0));
-        let client = serve_fake_with(fake.clone(), tickets.clone()).await;
-        for _ in 0..TICKET_BURST {
+        // No refill, so a slow machine cannot earn the burst another call (refill: below).
+        let limits = Limits { tickets: Arc::new(RateLimiter::new(3, 0)), seals: Arc::new(RateLimiter::new(2, 0)) };
+        let client = serve_fake_with(fake.clone(), limits.clone()).await;
+        for _ in 0..3 {
             assert_eq!(client.post(&url("/v1/tickets"), &[], b"").await.unwrap().0, 200);
         }
         let (status, body) = client.post(&url("/v1/tickets"), &[], b"").await.unwrap();
         assert_eq!((status, api_error(&body).code), (429, ErrorCode::BudgetExceeded));
-        assert_eq!(fake.calls.lock().unwrap().len(), TICKET_BURST as usize);
+        let seal = seal_request(10);
+        for _ in 0..2 {
+            assert_eq!(client.post(&url("/v1/blobs"), &[], &seal).await.unwrap().0, 200);
+        }
+        let (status, body) = client.post(&url("/v1/blobs"), &[], &seal).await.unwrap();
+        assert_eq!((status, api_error(&body).code), (429, ErrorCode::BudgetExceeded));
+        assert_eq!(fake.calls.lock().unwrap().len(), 5);
         // Each request was counted against its connection's source.
-        let sources: Vec<_> = tickets.buckets.lock().unwrap().keys().copied().collect();
-        assert_eq!(sources, [Some(IpAddr::from([127, 0, 0, 1]))]);
+        for limiter in [&limits.tickets, &limits.seals] {
+            let sources: Vec<_> = limiter.buckets.lock().unwrap().keys().copied().collect();
+            assert_eq!(sources, [Some(IpAddr::from([127, 0, 0, 1]))]);
+        }
     }
 
     #[test]

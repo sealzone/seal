@@ -182,7 +182,7 @@ export declare class Client {
   static fromEnv(): Promise<Client>;
   /** The tenant this client serves. */
   readonly tenant: string;
-  /** Seal `secret` so only `apps` can use it, and only with `to`. Needs a producer grant. */
+  /** Seal `secret` so only `apps` can use it, and only with `to`. Anyone may seal. */
   seal(secret: Secret, options: SealOptions & { withReceipt?: false }): Promise<string>;
   seal(secret: Secret, options: SealOptions & { withReceipt: true }): Promise<{ blob: string; receipt: TelemetryReceipt }>;
   /** Start a session on `blob`. Needs an app grant listed in the blob's policy. */

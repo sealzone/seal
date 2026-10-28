@@ -1,6 +1,6 @@
 # @sealzone/sdk: the Seal SDK for Node.js
 
-Use secrets without holding them. A producer seals a secret for named apps; an app starts a
+Use secrets without holding them. Anyone seals a secret for named apps; one of those apps starts a
 session on the sealed blob and gets a stand-in, while the enclave injects the real secret on
 the way to the upstream.
 
@@ -109,5 +109,5 @@ listed as an optional dependency, as napi-rs lays them out. `--release` builds w
 
 `build.sh --test` runs the unit tests in `test/` (`node --test`, no simulator).
 `scripts/e2e.sh -k node` (from the repository root) runs `examples/e2e.mjs` against a whole
-simulated system: a session through the tunnel, sealing as the producer
+simulated system: a session through the tunnel, sealing as anyone
 (`tests/e2e/test_node_sdk.py`).

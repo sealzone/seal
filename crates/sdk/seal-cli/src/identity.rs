@@ -131,7 +131,7 @@ impl Hosted {
     }
 }
 
-/// An identity of an app or a producer, as granted.
+/// An identity of an app, as granted.
 #[derive(Subcommand, Debug, Clone)]
 pub enum Workload {
     /// An Azure managed identity
@@ -148,7 +148,7 @@ pub enum Workload {
     Key(KeyArgs),
 }
 
-/// An identity of an app or a producer, as revoked: by its primary id.
+/// An identity of an app, as revoked: by its primary id.
 #[derive(Subcommand, Debug, Clone)]
 pub enum WorkloadRef {
     /// An Azure managed identity

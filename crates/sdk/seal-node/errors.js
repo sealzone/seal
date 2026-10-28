@@ -41,8 +41,7 @@ class Expired extends SealError {
   static code = ErrorCode.Expired;
 }
 
-/** This identity may not do this (not in the blob's apps, no producer grant), or no workload
- * identity was found. */
+/** This identity may not do this (not in the blob's apps), or no workload identity was found. */
 class NotAllowed extends SealError {
   static code = ErrorCode.NotAllowed;
 }

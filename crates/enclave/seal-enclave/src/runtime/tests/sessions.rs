@@ -13,7 +13,7 @@ use seal_proto::tunnel::TunnelConnect;
 async fn sealing_needs_an_adapter_for_the_destination() {
     let h = Boot::new().start().await.map_err(|(e, _)| e).unwrap();
     let postgres = |_| SecretPolicy::new("postgres://app@db.example.com/orders", [checkout()]).unwrap();
-    let refused = h.seal_with(PRODUCER, postgres).await.unwrap_err();
+    let refused = h.seal_with(postgres).await.unwrap_err();
     assert_eq!(refused.code, ErrorCode::BadRequest);
     assert!(refused.detail.contains("no adapter for Postgres"), "{}", refused.detail);
 }
@@ -21,9 +21,9 @@ async fn sealing_needs_an_adapter_for_the_destination() {
 #[tokio::test]
 async fn seal_session_request_extend_end() {
     let h = Boot::new().start().await.map_err(|(e, _)| e).unwrap();
-    let sealed = h.seal(PRODUCER).await.unwrap();
+    let sealed = h.seal().await.unwrap();
     let blob: seal_proto::blob::Blob = sealed.blob.parse().unwrap();
-    assert_eq!(blob.header.producer, app_identity(PRODUCER));
+    assert_eq!(blob.header.tenant, acme());
     assert_eq!(blob.header.root_id, h.world.root_id);
     assert!(!sealed.blob.contains(SECRET));
 
@@ -97,7 +97,7 @@ async fn seal_session_request_extend_end() {
         .any(|e| matches!(e, TelemetryEvent::Refused { operation: Operation::Extend, code: ErrorCode::NotAllowed })));
     assert_eq!(events.iter().filter(|e| matches!(e, TelemetryEvent::End { .. })).count(), 1);
     let entries = h.telemetry.entries.lock().unwrap().clone();
-    assert_eq!(entries[0].identity, Some(app_identity(PRODUCER)));
+    assert_eq!(entries[0].identity, None, "sealing is open: no identity");
     assert_eq!(entries[1].identity, Some(app_identity(CONSUMER)));
     assert!(entries.iter().all(|e| e.tenant == acme() && e.at.abs_diff(wall()) <= 5));
     assert!(!format!("{entries:?}").contains(SECRET));
@@ -106,12 +106,11 @@ async fn seal_session_request_extend_end() {
 #[tokio::test]
 async fn refuses_callers_without_grants() {
     let h = Boot::new().start().await.map_err(|(e, _)| e).unwrap();
-    // A consumer cannot seal, a stranger cannot start sessions.
-    assert_eq!(h.seal(CONSUMER).await.unwrap_err().code, ErrorCode::NotAllowed);
-    let blob = h.seal(PRODUCER).await.unwrap().blob;
+    // Anyone may seal; a stranger cannot start sessions.
+    let blob = h.seal().await.unwrap().blob;
     assert_eq!(h.start(STRANGER, &blob, None).await.unwrap_err().code, ErrorCode::NotAllowed);
     let events = h.events();
-    assert!(matches!(events[0], TelemetryEvent::Refused { operation: Operation::Seal, code: ErrorCode::NotAllowed }));
+    assert!(matches!(events[0], TelemetryEvent::Seal { .. }));
     assert!(matches!(
         events.last().unwrap(),
         TelemetryEvent::Refused { operation: Operation::Session, code: ErrorCode::NotAllowed }
@@ -121,7 +120,7 @@ async fn refuses_callers_without_grants() {
 #[tokio::test]
 async fn a_blob_without_a_wrap_for_this_platform_needs_a_reseal() {
     let h = Boot::new().start().await.map_err(|(e, _)| e).unwrap();
-    let mut blob: seal_proto::blob::Blob = h.seal(PRODUCER).await.unwrap().blob.parse().unwrap();
+    let mut blob: seal_proto::blob::Blob = h.seal().await.unwrap().blob.parse().unwrap();
     // As if sealed while the tenant enabled only Azure.
     for wrap in &mut blob.wraps {
         let seal_proto::blob::DekWrap::Hpke { platform, .. } = wrap;
@@ -246,8 +245,8 @@ async fn a_suspending_self_signal_ends_the_callers_sessions() {
         (published[0].body.identity.clone(), published[0].body.code.as_str()),
         (app_identity(CONSUMER), "edr-high")
     );
-    // Suspended: no new session, no extend; the producer is unaffected.
-    let blob = h.seal(PRODUCER).await.unwrap().blob;
+    // Suspended: no new session, no extend; sealing is unaffected.
+    let blob = h.seal().await.unwrap().blob;
     assert_eq!(h.start(CONSUMER, &blob, None).await.unwrap_err().code, ErrorCode::IntegrityFailed);
     assert_eq!(h.extend(CONSUMER, &session.token, None).await.unwrap_err().code, ErrorCode::IntegrityFailed);
     let integrity: Vec<_> = h

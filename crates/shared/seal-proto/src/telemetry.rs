@@ -117,7 +117,8 @@ pub struct TelemetryEntry {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TelemetryEvent {
-    /// A producer sealed a blob. `destination` is the policy's `to` (never a password).
+    /// Someone sealed a blob (sealing is open, so no identity). `destination` is the policy's
+    /// `to` (never a password).
     Seal { blob_id: BlobId, destination: String, apps: BTreeSet<AppName> },
     /// A consumer started a session.
     Session {

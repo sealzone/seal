@@ -16,7 +16,7 @@ Node and Go SDK tests also need Node.js and Go, and are skipped without them.
 ## How a test reads
 
 Each test gets its own fresh system, `world`, already booted: tenant `acme` with app
-`checkout`, one producer, one enclave replica, and an HTTPS upstream that records what it
+`checkout`, one enclave replica, and an HTTPS upstream that records what it
 receives. The test adds what it needs and checks what happens.
 
 ```python
@@ -34,8 +34,8 @@ def test_clients_and_live_tunnels_fail_over(world: World) -> None:
 | Call | What it does |
 | --- | --- |
 | `world.admin("revoke", "app", "checkout", "--yes")` | the `seal` CLI as the tenant's admin, signing with its admin key file |
-| `world.seal_with_cli(secret, to)` | seal with the CLI as the producer; returns the blob |
-| `world.client(key=None)` | an SDK client acting as the app (or as `key`) |
+| `world.seal_with_cli(secret, to)` | seal with the CLI, with no identity (anyone may); returns the blob |
+| `world.client(key=None)` | an SDK client acting as the app (or as `key`; `world.stranger_key` is a key no grant names) |
 | `world.start_replica(n)` / `stop_replica(n)` | replica n on 127.0.0.n |
 | `world.stop("control")` / `start_control()` | take the control plane down and back |
 | `world.start_postgres()` / `start_redis()` | a Postgres or Redis upstream in a container; returns what to seal to |
@@ -65,7 +65,7 @@ admin changes show up within a second or two.
 | `test_hosted.py` | `test_a_hosted_replica_serves_idles_out_and_clients_wait_for_it` | Seal's hosted replica: seals and serves sessions, exits when idle; a client keeps retrying until it is back |
 | `test_release.py` | `test_a_replica_boots_after_the_uploaded_release_evidence_goes_stale` | replicas boot on stale release evidence via the log's latest checkpoint |
 | `test_node_sdk.py` | `test_an_api_key_is_used_from_node_without_holding_it` | the Node SDK: a tunnel session, extend, close, typed errors |
-| | `test_a_producer_seals_from_node` | sealing from Node with a receipt; the Python SDK uses that blob |
+| | `test_anyone_seals_from_node` | sealing from Node, as a stranger, with a receipt; the Python SDK uses that blob |
 | `test_go_sdk.py` | `test_the_go_sdk_uses_a_sealed_key_and_seals_one` | the Go SDK: a tunnel session, sealing with a receipt, typed errors, context cancellation |
 
 ## Adding a test

@@ -134,13 +134,12 @@ impl World {
         stdout.into_owned()
     }
 
-    /// Seals with the CLI as the producer.
+    /// Seals with the CLI, with no identity (anyone may).
     fn seal_secret(&self, secret: &str, to: &str, extra: &[&str]) -> String {
-        let producer = self.sim.producer_key().unwrap();
         let mut args = vec!["secret", "--to", to, "--app", "checkout"];
         args.extend_from_slice(extra);
         let endpoint = self.sim.endpoint();
-        let env = [("SEAL_APP_KEY", producer.as_str()), ("SEAL_ENDPOINT", &endpoint), ("SEAL_TENANT", &self.pin)];
+        let env = [("SEAL_ENDPOINT", endpoint.as_str()), ("SEAL_TENANT", &self.pin)];
         self.seal(&args, Some(secret), &env).trim().to_string()
     }
 
@@ -212,8 +211,6 @@ async fn boot(test: &str) -> World {
     world.pin = init.lines().find_map(|l| l.strip_prefix("SEAL_TENANT=")).expect("init prints the pin").to_string();
     let app_key_out = sim.path("checkout.key").display().to_string();
     world.seal(&["grant", "app", "checkout", "key", "--generate", "--out", &app_key_out, "--yes"], None, &[]);
-    let producer = sim.producer_public_key.to_string();
-    world.seal(&["grant", "producer", "key", "--public", &producer, "--yes"], None, &[]);
     world.seal(&["grant", "enclave", "sim", &sim.deployment_json(), "--yes"], None, &[]);
     world.seal(&["settings", "platforms", "add", "sim", "--yes"], None, &[]);
 

@@ -69,7 +69,7 @@ impl Registry {
 /// One connection's session. Its claims start as the token's; an `Extend` preamble moves
 /// their expiry (and authentication scope) forward. It ends, with the reason `ended`
 /// returns, when its expiry passes, when a recheck against the tenant state fails (grant or
-/// producer removed, key version retired, suspension, `SessionEnd` from any replica, a stale
+/// key version retired, suspension, `SessionEnd` from any replica, a stale
 /// state, this replica no longer listed), or when this replica ends the
 /// session.
 pub(crate) struct LiveSession {

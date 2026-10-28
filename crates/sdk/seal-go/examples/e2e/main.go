@@ -2,7 +2,7 @@
 // environment configures the client, as it would an app (SEAL_ENDPOINT, SEAL_TENANT,
 // SEAL_APP_KEY; SEAL_TRUST for a sim build). Prints one JSON object.
 //
-//	e2e seal <to> <receipts file>   as the producer: seal stdin for app checkout
+//	e2e seal <to> <receipts file>   as anyone: seal stdin for app checkout
 //	e2e app <blob>                  as the app: a session on the blob, through the tunnel
 package main
 
@@ -28,7 +28,7 @@ func main() {
 	var err error
 	switch {
 	case len(os.Args) == 4 && os.Args[1] == "seal":
-		out, err = producer(ctx, os.Args[2], os.Args[3])
+		out, err = stranger(ctx, os.Args[2], os.Args[3])
 	case len(os.Args) == 3 && os.Args[1] == "app":
 		out, err = app(ctx, os.Args[2])
 	default:
@@ -41,8 +41,8 @@ func main() {
 	json.NewEncoder(os.Stdout).Encode(out)
 }
 
-// producer seals stdin and keeps the receipt.
-func producer(ctx context.Context, to, receipts string) (any, error) {
+// stranger seals stdin, as anyone may, and keeps the receipt.
+func stranger(ctx context.Context, to, receipts string) (any, error) {
 	secret, err := io.ReadAll(os.Stdin)
 	if err != nil {
 		return nil, err
@@ -59,13 +59,13 @@ func producer(ctx context.Context, to, receipts string) (any, error) {
 	if err := seal.AppendReceipts(receipts, []seal.TelemetryReceipt{receipt}); err != nil {
 		return nil, err
 	}
-	// The producer is not one of the blob's apps.
+	// Anyone may seal; only the blob's apps may use it.
 	_, err = client.Session(ctx, blob)
 	return map[string]any{
 		"tenant":             client.Tenant(),
 		"blob":               blob,
 		"receipt":            receipt,
-		"producer_session":   code(err),
+		"stranger_session":   code(err),
 		"is_not_allowed":     errors.Is(err, seal.ErrNotAllowed),
 		"bad_seal":           code(sealBad(ctx, client, secret, to)),
 		"bad_signal_code":    code(client.Signal(ctx, "Not Valid!", seal.SeverityHigh)),

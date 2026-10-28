@@ -30,7 +30,7 @@ fn signed<B: serde::Serialize>(label: &str, body: B, keys: &[u8]) -> Signed<B> {
     s
 }
 
-fn producer(n: u8) -> IdentityMatcher {
+fn deployment(n: u8) -> IdentityMatcher {
     IdentityMatcher::AppKey { key_id: KeyId([n; 32]), public_key: PublicKey([n; 32]) }
 }
 
@@ -47,7 +47,7 @@ struct Tenant {
 }
 
 impl Tenant {
-    /// Root v1 (admins 31 and 32, threshold 1) and state 1 (producer 1, a one-hour window),
+    /// Root v1 (admins 31 and 32, threshold 1) and state 1 (deployment 1, a one-hour window),
     /// logged at `at`.
     fn new(at: UnixTime) -> Self {
         let mut t = Self { log: Log::new(7), roots: vec![], states: vec![], signers: ADMINS[..1].to_vec() };
@@ -64,14 +64,13 @@ impl Tenant {
             version: 1,
             root_version: 1,
             apps: Default::default(),
-            producers: [producer(1)].into(),
+            deployments: [deployment(1)].into(),
             tenant_key_versions: TenantKeyVersions {
                 current: TenantKeyVersion(1),
                 oldest_accepted: TenantKeyVersion(1),
             },
             platforms: [PlatformId::Sim].into(),
             integrity: Default::default(),
-            deployments: Default::default(),
             freshness_keys: Default::default(),
             telemetry_readers: Default::default(),
             issued_at: at,
@@ -167,10 +166,10 @@ fn the_first_state_applies_at_once() {
 fn a_widening_change_waits_the_window_and_a_narrowing_one_applies_at_once() {
     let mut t = Tenant::new(T);
     t.change(T + 100, None, |s| {
-        s.producers.insert(producer(2));
+        s.deployments.insert(deployment(2));
     });
     let v = t.verify(T + 101);
-    assert_eq!(in_force(&v), 1, "the new producer waits");
+    assert_eq!(in_force(&v), 1, "the new deployment waits");
     assert_eq!(v.latest_state().version, 2);
     let pending = v.pending();
     assert_eq!(pending.len(), 1);
@@ -183,9 +182,9 @@ fn a_widening_change_waits_the_window_and_a_narrowing_one_applies_at_once() {
     assert_eq!(v.in_force_since(), T + 100 + HOUR);
     assert!(v.pending().is_empty());
 
-    // Removing a producer applies as soon as it is public.
+    // Removing a deployment applies as soon as it is public.
     t.change(T + 2 * HOUR, None, |s| {
-        s.producers.remove(&producer(1));
+        s.deployments.remove(&deployment(1));
     });
     let v = t.verify(T + 2 * HOUR);
     assert_eq!(in_force(&v), 3);
@@ -197,7 +196,7 @@ fn superseding_cancels_a_pending_change() {
     let mut t = Tenant::new(T);
     let first = t.latest();
     t.change(T + 100, None, |s| {
-        s.producers.insert(producer(2));
+        s.deployments.insert(deployment(2));
     });
     // The cancel: state 1's contents again, as state 3. It narrows nothing, so it applies.
     t.change(T + 200, Some(&first), |_| {});
@@ -207,17 +206,17 @@ fn superseding_cancels_a_pending_change() {
     // State 2 never takes effect, also once its window has passed.
     let v = t.verify(T + 100 + 2 * HOUR);
     assert_eq!(in_force(&v), 3);
-    assert!(!v.state().producers.contains(&producer(2)));
+    assert!(!v.state().deployments.contains(&deployment(2)));
 }
 
 #[test]
 fn a_newer_widening_state_does_not_cancel() {
     let mut t = Tenant::new(T);
     t.change(T + 100, None, |s| {
-        s.producers.insert(producer(2));
+        s.deployments.insert(deployment(2));
     });
     t.change(T + 200, None, |s| {
-        s.producers.insert(producer(3));
+        s.deployments.insert(deployment(3));
     });
     let v = t.verify(T + 300);
     assert_eq!(in_force(&v), 1);
@@ -238,7 +237,7 @@ fn shortening_the_window_waits_the_old_one() {
     assert_eq!(in_force(&t.verify(T + 100 + HOUR)), 2);
     // With a window of 0, a widening change applies once public.
     t.change(T + 2 * HOUR, None, |s| {
-        s.producers.insert(producer(2));
+        s.deployments.insert(deployment(2));
     });
     assert_eq!(in_force(&t.verify(T + 2 * HOUR)), 3);
     // Lengthening applies at once.
@@ -250,7 +249,7 @@ fn shortening_the_window_waits_the_old_one() {
 fn the_window_is_measured_by_the_logs_witnessed_time() {
     let mut t = Tenant::new(T);
     t.change(T + 100, None, |s| {
-        s.producers.insert(producer(2));
+        s.deployments.insert(deployment(2));
     });
     // The verifier's clock says the window has passed; the log's witnesses do not.
     let bundle = t.bundle_from(0, T + 200);
@@ -318,7 +317,7 @@ fn a_narrowing_root_signed_only_by_keys_not_in_force_waits() {
 fn a_stateless_verifier_needs_states_back_to_an_anchor() {
     let mut t = Tenant::new(T);
     t.change(T + 100, None, |s| {
-        s.producers.remove(&producer(1));
+        s.deployments.remove(&deployment(1));
     });
     // State 2 alone: what was in force before it is unknown.
     assert!(matches!(t.verify_from(1, T + 200), Err(VerifyError::State(_))));
@@ -328,7 +327,7 @@ fn a_stateless_verifier_needs_states_back_to_an_anchor() {
 
     // A state that stayed the latest that long anchors the ones after it.
     t.change(settled + 10, None, |s| {
-        s.producers.insert(producer(2));
+        s.deployments.insert(deployment(2));
     });
     let v = t.verify_from(1, settled + 20).unwrap();
     assert_eq!(in_force(&v), 2);
@@ -346,9 +345,9 @@ fn a_guardian_anchor_bounds_the_states_a_bundle_needs() {
         at += HOUR;
         t.change(at, None, |s| {
             if n % 2 == 0 {
-                s.producers.insert(producer(n + 10));
+                s.deployments.insert(deployment(n + 10));
             } else {
-                s.producers.remove(&producer(n + 9));
+                s.deployments.remove(&deployment(n + 9));
             }
         });
     }
@@ -389,7 +388,7 @@ fn a_guardian_anchor_bounds_the_states_a_bundle_needs() {
 fn an_anchor_vouches_only_up_to_the_bundles_freshness() {
     let mut t = Tenant::new(T);
     t.change(T + 100, None, |s| {
-        s.producers.insert(producer(2));
+        s.deployments.insert(deployment(2));
     });
     // Freshness from before state 2's window ends: the anchor stops there, although the
     // guardian's clock is later.
@@ -405,7 +404,7 @@ fn an_anchor_vouches_only_up_to_the_bundles_freshness() {
 fn a_late_proof_only_makes_a_document_look_later() {
     let mut t = Tenant::new(T);
     t.change(T + 100, None, |s| {
-        s.producers.insert(producer(2));
+        s.deployments.insert(deployment(2));
     });
     // The widening state shown with a proof from an hour later waits an hour longer.
     let mut bundle = t.bundle_from(0, T + 100 + HOUR);
@@ -421,10 +420,10 @@ fn a_late_proof_only_makes_a_document_look_later() {
 fn bundles_with_gaps_reordered_or_mismatched_states_are_refused() {
     let mut t = Tenant::new(T);
     t.change(T + 100, None, |s| {
-        s.producers.insert(producer(2));
+        s.deployments.insert(deployment(2));
     });
     t.change(T + 200, None, |s| {
-        s.producers.insert(producer(3));
+        s.deployments.insert(deployment(3));
     });
     let good = t.bundle_from(0, T + 300);
     let refused = |b: &TenantBundle| {
@@ -454,12 +453,12 @@ fn bundles_with_gaps_reordered_or_mismatched_states_are_refused() {
 fn a_cache_never_goes_back_and_moves_on_by_itself() {
     let mut t = Tenant::new(T);
     t.change(T + 100, None, |s| {
-        s.producers.insert(producer(2));
+        s.deployments.insert(deployment(2));
     });
     let mut cache = t.verify(T + 100 + HOUR);
     assert_eq!(in_force(&cache), 2);
     t.change(T + 2 * HOUR, None, |s| {
-        s.producers.insert(producer(3));
+        s.deployments.insert(deployment(3));
     });
     // A verifier without memory, shown only states 2 and 3 well after, cannot anchor on 2 ...
     assert!(t.verify_from(1, T + 2 * HOUR + 10).is_err());

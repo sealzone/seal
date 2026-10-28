@@ -4,7 +4,7 @@
 //! |--------|---------------------|-----------------------|-----------------------|---------------|
 //! | GET    | /v1/attestation     | (none)                | `AttestationResponse` | nobody (public) |
 //! | POST   | /v1/tickets         | (empty)               | `ProofTicket`         | nobody (public) |
-//! | POST   | /v1/blobs           | `SealRequest`         | `SealResponse`        | identity proof |
+//! | POST   | /v1/blobs           | `SealRequest`         | `SealResponse`        | nobody (public) |
 //! | POST   | /v1/sessions        | `SessionRequest`      | `SessionResponse`     | identity proof |
 //! | POST   | /v1/sessions/extend | `ExtendRequest`       | `ExtendResponse`      | identity proof + token |
 //! | POST   | /v1/sessions/end    | `EndRequest`          | (empty)               | token |
@@ -41,7 +41,7 @@ pub struct AttestationBinding {
     /// SHA-256 of the inbound TLS SubjectPublicKeyInfo DER. Same for every replica of this tenant and service key version.
     #[serde(with = "codec::array_b64")]
     pub tls_spki_sha256: [u8; 32],
-    /// X25519 public key producers HPKE-seal secrets to.
+    /// X25519 public key secrets are HPKE-sealed to.
     pub ingest_public_key: PublicKey,
     /// Telemetry public keys of service key versions 1..=`service_key_version`. A client that
     /// verified this enclave can verify `TelemetryBatch`es and enclave-signed signals with them.
@@ -70,9 +70,10 @@ pub struct SealPayload {
     pub policy: SecretPolicy,
 }
 
-/// `seal()`. HPKE: base mode, DHKEM(X25519, HKDF-SHA256), HKDF-SHA256, AES-256-GCM;
-/// Encrypt first with `canonical(IngestContext)` as AAD, then bind the complete
-/// encrypted request with `expected_purpose()`. This avoids a circular HPKE input.
+/// `seal()`. HPKE: base mode, DHKEM(X25519, HKDF-SHA256), HKDF-SHA256, AES-256-GCM, with
+/// info `ingest_info(tenant)` and `canonical(IngestContext)` as AAD. Anyone may seal: the
+/// request carries no proof, and the enclave decrypts it only if it was sealed for this
+/// enclave's tenant, service key version and TLS key.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SealRequest {
     pub service_key_version: ServiceKeyVersion,
@@ -80,8 +81,6 @@ pub struct SealRequest {
     pub hpke_enc: Vec<u8>,
     #[serde(with = "codec::bytes_b64")]
     pub sealed_payload: Vec<u8>,
-    pub context: ProofContext,
-    pub proof: IdentityProof,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -198,30 +197,14 @@ pub struct ApiError {
     pub message: String,
 }
 
-/// Pre-encryption HPKE AAD. Available before encapsulation/ciphertext exist.
+/// The seal upload's HPKE AAD: the enclave it was sealed for. The enclave computes it from
+/// its own tenant pin, service key version and TLS key.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IngestContext {
     pub tenant: TenantId,
     pub service_key_version: ServiceKeyVersion,
     #[serde(with = "codec::array_b64")]
     pub tls_spki_sha256: [u8; 32],
-}
-impl SealRequest {
-    pub fn ingest_context(&self) -> IngestContext {
-        IngestContext {
-            tenant: self.context.tenant.clone(),
-            service_key_version: self.service_key_version,
-            tls_spki_sha256: self.context.tls_spki_sha256,
-        }
-    }
-    pub fn expected_purpose(&self) -> ProofPurpose {
-        ProofPurpose::Seal {
-            request_digest: codec::labeled_digest(
-                "seal/seal-request/v1",
-                &(self.service_key_version, &self.hpke_enc, &self.sealed_payload),
-            ),
-        }
-    }
 }
 impl SessionRequest {
     pub fn expected_purpose(&self) -> ProofPurpose {

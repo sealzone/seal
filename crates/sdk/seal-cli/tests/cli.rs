@@ -148,18 +148,18 @@ async fn init_grants_settings_and_status_end_to_end() {
     .await;
     assert!(!success && stderr.contains("never replaced"), "{stderr}");
 
-    // A producer key to stdout: the key alone there, everything else on stderr.
+    // An app key to stdout: the key alone there, everything else on stderr.
     let out = seal_command(&home)
-        .args(["grant", "producer", "key", "--generate", "--key-file", key, "--yes"])
+        .args(["grant", "app", "billing", "key", "--generate", "--key-file", key, "--yes"])
         .output()
         .await
         .unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    let producer_key = String::from_utf8(out.stdout).unwrap();
-    assert!(producer_key.starts_with("sealak_") && producer_key.lines().count() == 1, "{producer_key}");
-    let seed = seal_proto::codec::from_b64url(producer_key.trim().strip_prefix("sealak_").unwrap()).unwrap();
-    let producer_public = seal_crypto::sign::SigningKey::from_seed(&seed.try_into().unwrap()).public_key();
-    assert!(String::from_utf8_lossy(&out.stderr).contains(&format!("public key {producer_public}")));
+    let billing_key = String::from_utf8(out.stdout).unwrap();
+    assert!(billing_key.starts_with("sealak_") && billing_key.lines().count() == 1, "{billing_key}");
+    let seed = seal_proto::codec::from_b64url(billing_key.trim().strip_prefix("sealak_").unwrap()).unwrap();
+    let billing_public = seal_crypto::sign::SigningKey::from_seed(&seed.try_into().unwrap()).public_key();
+    assert!(String::from_utf8_lossy(&out.stderr).contains(&format!("public key {billing_public}")));
 
     let deployment = r#"{"kind":"confidential_space","project_number":7,"service_account":"sim@seal.test"}"#;
     ok(&home, &["grant", "enclave", "sim", deployment, "--key-file", key, "--yes"]).await;
@@ -176,15 +176,14 @@ async fn init_grants_settings_and_status_end_to_end() {
         .any(|m| matches!(m, IdentityMatcher::AppKey { public_key, .. } if *public_key == app_public)));
     let identity: WorkloadIdentity = serde_json::from_str(deployment).unwrap();
     assert!(state.deployments.iter().any(|m| m.matches(&identity)));
-    assert!(state
-        .producers
+    assert!(state.apps[&AppName::new("billing").unwrap()]
         .iter()
-        .any(|m| matches!(m, IdentityMatcher::AppKey { public_key, .. } if *public_key == producer_public)));
+        .any(|m| matches!(m, IdentityMatcher::AppKey { public_key, .. } if *public_key == billing_public)));
     assert_eq!(state.platforms, [PlatformId::Sim].into());
 
     let out = ok(&home, &["status", "--log", "--key-file", key]).await;
     assert!(out.contains(&pin.to_string()) && out.contains("version 5 in force"), "{out}");
-    assert!(out.contains("1 app (1 identity) · 1 producer · 1 enclave"), "{out}");
+    assert!(out.contains("2 apps (2 identities) · 1 enclave"), "{out}");
     assert!(out.contains("only one admin key"), "{out}");
     assert!(out.contains("scanned 6 log entries") && out.contains("no roots outside our chain"), "{out}");
     let out = ok(&home, &["status", "--json", "--key-file", key]).await;
@@ -194,11 +193,14 @@ async fn init_grants_settings_and_status_end_to_end() {
     assert!(out.contains("ed25519") && out.contains("(--key-file)") && out.contains("1 of 1 must sign"), "{out}");
 
     // Revoking takes the identity by its primary id; an app without one goes whole.
-    ok(&home, &["revoke", "producer", "key", "--public", &producer_public.to_string(), "--key-file", key, "--yes"])
-        .await;
+    ok(
+        &home,
+        &["revoke", "app", "billing", "key", "--public", &billing_public.to_string(), "--key-file", key, "--yes"],
+    )
+    .await;
     ok(&home, &["revoke", "app", "checkout", "--key-file", key, "--yes"]).await;
     let state = servers.verified().state().clone();
-    assert!(state.producers.is_empty() && state.apps.is_empty());
+    assert!(state.apps.is_empty());
 
     let (success, _, stderr) = seal(&home, &["deploy", "aws"]).await;
     assert!(!success && stderr.contains("not available in this build"), "{stderr}");

@@ -76,8 +76,6 @@ pub fn line(d: &Difference) -> String {
         Item::AppRemoved { app } => format!("- app {app}"),
         Item::IdentityAdded { app, identity } => format!("+ app {app}: {}", describe(identity)),
         Item::IdentityRemoved { app, identity } => format!("- app {app}: {}", describe(identity)),
-        Item::ProducerAdded { identity } => format!("+ producer: {}", describe(identity)),
-        Item::ProducerRemoved { identity } => format!("- producer: {}", describe(identity)),
         Item::DeploymentAdded { identity } => format!("+ deployment: {}", describe(identity)),
         Item::DeploymentRemoved { identity } => format!("- deployment: {}", describe(identity)),
         Item::DeploymentMode { identity, old, new } => {

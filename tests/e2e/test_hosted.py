@@ -22,7 +22,7 @@ def test_a_hosted_replica_serves_idles_out_and_clients_wait_for_it(world: World)
     world.start("hosted", "seal-enclave", env=world.replica_env(config, HOSTED))
     world.wait_for_log("hosted", "serving the API")
 
-    # Producers outside the tenant's network seal there, and apps use it beside the tenant's own
+    # Sealers outside the tenant's network seal there, and apps use it beside the tenant's own
     # replicas: the blob opens on either.
     blob = world.seal_with_cli(SECRET, world.upstream_url, endpoints=[hosted])
     with world.client(endpoints=[hosted]).session(blob, kind="http") as s:

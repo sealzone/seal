@@ -51,8 +51,8 @@ class Expired(SealError):
 
 
 class NotAllowed(SealError):
-    """This identity may not do this (not in the blob's apps, no producer grant), or no
-    workload identity was found."""
+    """This identity may not do this (not in the blob's apps), or no workload identity was
+    found."""
 
     code = ErrorCode.NotAllowed
 

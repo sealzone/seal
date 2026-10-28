@@ -603,20 +603,19 @@ mod tests {
     use super::*;
     use seal_proto::blob::{BlobHeader, DekWrap};
     use seal_proto::codec::labeled_digest;
-    use seal_proto::identity::WorkloadIdentity;
+
     use seal_proto::policy::SecretPolicy;
-    use seal_proto::{AppName, BlobId, KeyId, PlatformId, TenantId, TenantKeyVersion, TenantRootId};
+    use seal_proto::{AppName, BlobId, PlatformId, TenantId, TenantKeyVersion, TenantRootId};
 
     fn blob(to: &str) -> String {
         let policy = SecretPolicy::new(to, [AppName::new("checkout").unwrap()]).unwrap();
         Blob {
             header: BlobHeader {
-                version: 1,
+                version: seal_proto::blob::BLOB_VERSION,
                 tenant: TenantId::new("acme").unwrap(),
                 root_id: TenantRootId([6; 32]),
                 tenant_key_version: TenantKeyVersion(1),
                 blob_id: BlobId([1; 8]),
-                producer: WorkloadIdentity::AppKey { key_id: KeyId([7; 32]) },
                 policy_digest: labeled_digest(seal_proto::blob::POLICY_LABEL, &policy),
                 created_at: 1,
             },

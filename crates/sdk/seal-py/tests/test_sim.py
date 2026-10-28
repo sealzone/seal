@@ -155,8 +155,8 @@ def test_forked_children(app_env: Sim, blob: str) -> None:
 
 
 def test_receipts(app_env: Sim, tmp_path) -> None:
-    producer = seal.Client(identity=seal.AppKeyIdentity(app_env.producer_key))
-    blob, receipt = producer.seal(
+    stranger = seal.Client(identity=seal.AppKeyIdentity(app_env.stranger_key))
+    blob, receipt = stranger.seal(
         b"sk-receipts-0123456789", to=app_env.upstream, apps="checkout", with_receipt=True
     )
     assert blob.startswith("seal1.")
@@ -219,15 +219,14 @@ def test_errors(app_env: Sim, blob: str) -> None:
     with pytest.raises(seal.BadRequest):
         client.session("seal1.garbage")
 
-    # The producer holds no app grant: the enclave refuses, with the protocol's code.
-    producer = seal.Client(identity=seal.AppKeyIdentity(app_env.producer_key))
+    # A stranger holds no app grant: the enclave refuses, with the protocol's code.
+    stranger = seal.Client(identity=seal.AppKeyIdentity(app_env.stranger_key))
     with pytest.raises(seal.NotAllowed) as raised:
-        producer.session(blob)
+        stranger.session(blob)
     assert raised.value.code is seal.ErrorCode.NotAllowed and not raised.value.retryable
 
-    # The app holds no producer grant.
-    with pytest.raises(seal.NotAllowed):
-        client.seal(SECRET, to=app_env.upstream, apps=["checkout"])
+    # Anyone may seal, the app too.
+    assert client.seal(SECRET, to=app_env.upstream, apps=["checkout"]).startswith("seal1.")
 
     with pytest.raises(seal.TierTooLow):
         client.session(blob, min_tier="hardened")
@@ -235,9 +234,9 @@ def test_errors(app_env: Sim, blob: str) -> None:
 
 def test_trust_from_a_file_or_bytes(app_env: Sim, monkeypatch) -> None:
     """Without `SEAL_TRUST` (sim only) a client takes the release trust it is given: a path or
-    the JSON itself; this test build ships none."""
+    the JSON itself; by default the shipped one, seal.zone's, which no sim enclave meets."""
     monkeypatch.delenv("SEAL_TRUST")
-    with pytest.raises(seal.VerificationFailed, match="ships no release trust"):
+    with pytest.raises(seal.VerificationFailed, match="wrong log origin"):
         seal.Client()
     assert seal.Client(trust=app_env.trust).tenant == "acme"
     assert seal.Client(trust=str(app_env.trust)).tenant == "acme"
@@ -268,8 +267,8 @@ def test_trust_from_a_file_or_bytes(app_env: Sim, monkeypatch) -> None:
 def test_asyncio(app_env: Sim, blob: str) -> None:
     async def main() -> Optional[str]:
         client = await seal.AsyncClient.connect()
-        producer = await seal.AsyncClient.connect(identity=seal.AppKeyIdentity(app_env.producer_key))
-        sealed = await producer.seal(SECRET, to=app_env.upstream, apps=["checkout"])
+        stranger = await seal.AsyncClient.connect(identity=seal.AppKeyIdentity(app_env.stranger_key))
+        sealed = await stranger.seal(SECRET, to=app_env.upstream, apps=["checkout"])
 
         async with client.session(sealed, kind="http") as s:
             status, body = await asyncio.get_running_loop().run_in_executor(None, get, s.url, s.key)
@@ -319,8 +318,8 @@ def test_signal(app_env: Sim) -> None:
 
 
 def test_a_hardened_only_blob_refuses_a_base_session(app_env: Sim) -> None:
-    producer = seal.Client(identity=seal.AppKeyIdentity(app_env.producer_key))
-    blob = producer.seal(SECRET, to=app_env.upstream, apps=["checkout"], hardened_only=True)
+    stranger = seal.Client(identity=seal.AppKeyIdentity(app_env.stranger_key))
+    blob = stranger.seal(SECRET, to=app_env.upstream, apps=["checkout"], hardened_only=True)
     with pytest.raises(seal.SealError) as refused:
         seal.session(blob)
     assert refused.value.code is seal.ErrorCode.TierTooLow, refused.value

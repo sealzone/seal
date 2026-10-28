@@ -7,11 +7,11 @@ use serde_json::{json, Value};
 use super::*;
 use crate::request::RequestAuthenticator;
 use crate::testing::*;
-use seal_proto::api::{ExtendRequest, SealRequest, SessionRequest, SignalRequest};
+use seal_proto::api::{ExtendRequest, SessionRequest, SignalRequest};
 use seal_proto::codec::b64url;
 use seal_proto::identity::{GitHubScope, OidcProvider, ProofPurpose};
 use seal_proto::integrity::Severity;
-use seal_proto::{Bearer, ErrorCode, ServiceKeyVersion, UnixTime};
+use seal_proto::{Bearer, ErrorCode, UnixTime};
 
 // ---- keys and tokens ----
 
@@ -678,7 +678,7 @@ async fn sigv4_binding_header_must_be_signed_and_match() {
     )));
     // For another context.
     let mut other = ctx();
-    other.purpose = ProofPurpose::Seal { request_digest: [3; 32] };
+    other.purpose = ProofPurpose::Signal { request_digest: [3; 32] };
     let wrong = hex::encode(codec::labeled_digest(PROOF_CONTEXT_LABEL, &other));
     assert!(is_bad_proof(&refused(
         check(&v, &presigned(BINDING_HOST, "host%3Bx-seal-binding", Some(&wrong)), &grants, T).await
@@ -918,7 +918,7 @@ async fn request_authenticator_computes_the_purpose_itself() {
     let (m, id) = app_key(42);
     let t = verified({
         let mut st = base_state(1);
-        st.producers.insert(m.clone());
+        st.apps.insert(app("checkout"), [m.clone()].into());
         st
     });
     let context = |purpose| ProofContext { tenant: acme(), purpose, tls_spki_sha256: spki, ticket: ticket.clone() };
@@ -926,62 +926,39 @@ async fn request_authenticator_computes_the_purpose_itself() {
         let SigAlg::Ed25519 { sig } = key(42).sign(PROOF_CONTEXT_LABEL, ctx).alg else { unreachable!() };
         IdentityProof::AppKey { key_id: key(42).key_id(), signature: sig }
     };
-    let placeholder = || context(ProofPurpose::Seal { request_digest: [0; 32] });
-    let seal = |payload: Vec<u8>| {
-        let mut r = SealRequest {
-            service_key_version: ServiceKeyVersion(1),
-            hpke_enc: vec![1; 32],
-            sealed_payload: payload,
+    let placeholder = || context(ProofPurpose::Session { request_digest: [0; 32] });
+    let session = |blob: &str| {
+        let mut r = SessionRequest {
+            blob: blob.into(),
             context: placeholder(),
-            proof: IdentityProof::AppKey { key_id: key(42).key_id(), signature: vec![] },
+            proof: prove(&placeholder()),
+            min_tier: None,
+            endpoint: None,
         };
         r.context = context(r.expected_purpose());
         r.proof = prove(&r.context);
         r
     };
-    let ok = auth.seal(seal(vec![7; 64]), &t, &now).await.unwrap();
+    let ok = auth.session(session("seal1.x"), &t, &now).await.unwrap();
     assert_eq!(ok.caller().identity(), &id);
     assert_eq!(ok.caller().scope().matched_grants, vec![m.clone()]);
 
     // The body changed after proving: the purpose the authenticator computes differs.
-    let mut changed = seal(vec![7; 64]);
-    changed.sealed_payload[0] ^= 1;
-    assert_eq!(auth.seal(changed, &t, &now).await.err().unwrap().code(), ErrorCode::NotAllowed);
+    let changed = SessionRequest { blob: "seal1.y".into(), ..session("seal1.x") };
+    assert_eq!(auth.session(changed, &t, &now).await.err().unwrap().code(), ErrorCode::NotAllowed);
     // Another enclave's key, an expired ticket, a stranger.
-    let mut foreign = seal(vec![7; 64]);
+    let mut foreign = session("seal1.x");
     foreign.context.tls_spki_sha256 = [0; 32];
     foreign.proof = prove(&foreign.context);
-    assert_eq!(auth.seal(foreign, &t, &now).await.err().unwrap().code(), ErrorCode::NotAllowed);
+    assert_eq!(auth.session(foreign, &t, &now).await.err().unwrap().code(), ErrorCode::NotAllowed);
     assert_eq!(
-        auth.seal(seal(vec![7; 64]), &t, &at(ticket.expires_at)).await.err().unwrap().code(),
+        auth.session(session("seal1.x"), &t, &at(ticket.expires_at)).await.err().unwrap().code(),
         ErrorCode::NotAllowed
     );
     let stranger = verified(base_state(1));
-    assert_eq!(auth.seal(seal(vec![7; 64]), &stranger, &now).await.err().unwrap().code(), ErrorCode::NotAllowed);
+    assert_eq!(auth.session(session("seal1.x"), &stranger, &now).await.err().unwrap().code(), ErrorCode::NotAllowed);
 
     // The other request kinds bind their own purpose the same way.
-    let mut session = SessionRequest {
-        blob: "seal1.x".into(),
-        context: placeholder(),
-        proof: prove(&placeholder()),
-        min_tier: None,
-        endpoint: None,
-    };
-    session.context = context(session.expected_purpose());
-    session.proof = prove(&session.context);
-    let mut tampered = SessionRequest { blob: "seal1.y".into(), ..session };
-    assert_eq!(auth.session(tampered, &t, &now).await.err().unwrap().code(), ErrorCode::NotAllowed);
-    tampered = SessionRequest {
-        blob: "seal1.x".into(),
-        context: placeholder(),
-        proof: prove(&placeholder()),
-        min_tier: None,
-        endpoint: None,
-    };
-    tampered.context = context(tampered.expected_purpose());
-    tampered.proof = prove(&tampered.context);
-    auth.session(tampered, &t, &now).await.unwrap();
-
     let mut extend = ExtendRequest {
         token: Bearer::new("sealtok_a".into()),
         endpoint: None,

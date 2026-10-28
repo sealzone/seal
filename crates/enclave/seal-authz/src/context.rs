@@ -56,7 +56,7 @@ mod tests {
         denied(check(&ProofContext { tls_spki_sha256: [9; 32], ..ctx.clone() }, &acme(), &spki, &purpose(1), &now));
         // Another request, or another kind of request with the same digest.
         denied(check(&ctx, &acme(), &spki, &purpose(2), &now));
-        denied(check(&ctx, &acme(), &spki, &ProofPurpose::Seal { request_digest: [1; 32] }, &now));
+        denied(check(&ctx, &acme(), &spki, &ProofPurpose::Signal { request_digest: [1; 32] }, &now));
         // Expired ticket (latest end of the interval), forged ticket.
         denied(check(&ctx, &acme(), &spki, &purpose(1), &TrustedTime::exact(ticket.expires_at)));
         denied(check(&ctx, &acme(), &spki, &purpose(1), &TrustedTime { now: ticket.expires_at - 5, radius: 5 }));

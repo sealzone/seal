@@ -11,7 +11,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use seal_proto::api::{AttestationBinding, ExtendRequest, SealRequest, SessionRequest, SignalRequest};
+use seal_proto::api::{AttestationBinding, ExtendRequest, IngestContext, SessionRequest, SignalRequest};
 use seal_proto::blob::{Blob, BlobHeader, DekWrap, POLICY_LABEL};
 use seal_proto::codec::{canonical, labeled_digest};
 use seal_proto::freshness::{GuardianChallenge, ProofTicket};
@@ -234,7 +234,6 @@ fn build() -> Vec<Vector> {
                 },
             ]),
         )]),
-        producers: [IdentityMatcher::AppKey { key_id: KeyId([0x11; 32]), public_key: PublicKey([0x6a; 32]) }].into(),
         tenant_key_versions: TenantKeyVersions { current: TenantKeyVersion(2), oldest_accepted: TenantKeyVersion(1) },
         platforms: [PlatformId::AzureSnpAci, PlatformId::AwsNitro].into(),
         integrity: IntegrityPolicy {
@@ -408,12 +407,11 @@ fn build() -> Vec<Vector> {
     let policy = policy();
     v.signed("blob/policy", POLICY_LABEL, &policy);
     let header = BlobHeader {
-        version: 1,
+        version: seal_proto::blob::BLOB_VERSION,
         tenant: tenant(),
         root_id: pin.root_id,
         tenant_key_version: TenantKeyVersion(2),
         blob_id: BlobId([0xb7, 0xf2, 0, 0, 0, 0, 0, 1]),
-        producer: app_key_id(),
         policy_digest: labeled_digest(POLICY_LABEL, &policy),
         created_at: 1_900_000_000,
     };
@@ -431,17 +429,12 @@ fn build() -> Vec<Vector> {
     v.raw("blob/text", blob.to_string().as_bytes());
 
     // Request bindings: what identity proofs commit to.
-    let ctx = context(ProofPurpose::Seal { request_digest: [0; 32] });
+    let ctx = context(ProofPurpose::Session { request_digest: [0; 32] });
     v.signed("identity/proof-context", PROOF_CONTEXT_LABEL, &ctx);
-    let seal_req = SealRequest {
-        service_key_version: ServiceKeyVersion(1),
-        hpke_enc: vec![0x79; 32],
-        sealed_payload: vec![0x7a; 64],
-        context: ctx.clone(),
-        proof: proof(),
-    };
-    v.cbor("purpose/seal", &seal_req.expected_purpose());
-    v.cbor("purpose/ingest-context", &seal_req.ingest_context());
+    v.cbor(
+        "purpose/ingest-context",
+        &IngestContext { tenant: tenant(), service_key_version: ServiceKeyVersion(1), tls_spki_sha256: [0x46; 32] },
+    );
     let session_req = SessionRequest {
         blob: blob.to_string(),
         context: ctx.clone(),

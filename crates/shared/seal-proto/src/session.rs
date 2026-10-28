@@ -86,9 +86,8 @@ pub struct SessionClaims {
     /// Who started it: re-checked against current grants on every resolve; re-proven on every extend.
     pub caller: WorkloadIdentity,
     pub authentication: crate::identity::AuthenticationScope,
-    /// The exact blob the session was started on. Its header names the producer (re-checked
-    /// against current producers on every resolve), root and tenant key version; its policy
-    /// is the session's policy.
+    /// The exact blob the session was started on. Its header names the root and tenant key
+    /// version; its policy is the session's policy.
     pub blob: Blob,
     pub service_key_version: ServiceKeyVersion,
     pub tier: ConsumerTier,

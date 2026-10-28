@@ -58,7 +58,7 @@ fn telemetry_entry(at: u64) -> TelemetryEntry {
     TelemetryEntry {
         at,
         tenant: tenant(),
-        identity: Some(producer()),
+        identity: Some(workload()),
         event: TelemetryEvent::Refused { operation: Operation::Seal, code: ErrorCode::NotAllowed },
     }
 }
@@ -116,7 +116,7 @@ fn build() -> Vec<Vector> {
     let recipients = wrap_keys(&[PlatformId::AzureSnpAci, PlatformId::Sim], 1);
     let blob = BlobSealer::new(&recipients)
         .unwrap()
-        .seal(b"sk-test-0123456789", policy(), producer(), 1_900_000_000, &mut TestRng::new(3))
+        .seal(b"sk-test-0123456789", policy(), 1_900_000_000, &mut TestRng::new(3))
         .unwrap();
     let wrapping = TenantWrappingKey::from_released(PlatformId::Sim, &tenant_keys).unwrap();
     assert_eq!(BlobCipher::new(&wrapping[0]).open(&blob).unwrap().secret(), b"sk-test-0123456789");
