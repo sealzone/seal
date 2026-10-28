@@ -64,9 +64,9 @@ hkdf
 hmac
 hpke
 http
-httparse
 http-body
 http-body-util
+httparse
 httpdate
 hybrid-array
 hyper

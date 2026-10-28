@@ -19,7 +19,7 @@ cargo deny --locked check
 status=0
 for crate in "${TEE_CRATES[@]}"; do
     current=$(cargo tree --locked -p "$crate" -e normal,build --prefix none --format '{p}' \
-        | cut -d' ' -f1 | grep -vE '^seal(zone)?(-|$)' | sort -u)
+        | cut -d' ' -f1 | grep -vE '^seal(zone)?(-|$)' | LC_ALL=C sort -u)
     if bad=$(grep -E "$NEVER_IN_TEE" <<<"$current"); then
         echo "error: $crate pulls crates that never belong in a TEE: $bad" >&2
         status=1
