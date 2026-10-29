@@ -3,7 +3,7 @@
 //! (`auth`) and rejects junk; it is untrusted, so nothing it serves is believed without
 //! verification.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
 
 use axum::body::Bytes;
@@ -424,10 +424,14 @@ fn parse<T: DeserializeOwned>(body: &[u8]) -> ApiResult<T> {
     serde_json::from_slice(body).map_err(|e| ApiError::bad(format!("malformed body: {e}")))
 }
 
-/// Some signature of `signed` verifies under one of `keys` (Ed25519).
+/// Some signature of `signed` verifies under one of `keys` (Ed25519). Only each signer's first
+/// signature is tried, so repeating a known signer in an unauthenticated post cannot multiply
+/// the digests and verifications it costs.
 fn signed_by_any<T: serde::Serialize>(keys: &[PublicKey], label: &str, signed: &Signed<T>) -> bool {
-    signed.signatures.iter().any(|sig| {
-        keys.iter().find(|k| key_id(k) == sig.signer).is_some_and(|k| verify(k, label, &signed.body, sig).is_ok())
+    let ids: Vec<_> = keys.iter().map(|k| (key_id(k), k)).collect();
+    let mut tried = BTreeSet::new();
+    signed.signatures.iter().filter(|sig| tried.insert(sig.signer)).any(|sig| {
+        ids.iter().find(|(id, _)| *id == sig.signer).is_some_and(|(_, k)| verify(k, label, &signed.body, sig).is_ok())
     })
 }
 
@@ -785,7 +789,14 @@ async fn put_root(
         Chain::of(&tenant, &docs)
     };
     app.authorize(&chain, &docs, &asked, &body, Rule::Submit).await?;
-    app.store_root(&mut e, link)?;
+    if docs.roots.is_empty() {
+        // The tenant's first document goes through the entry kept for its writers.
+        drop(e);
+        let entry = app.store.create_tenant(&tenant)?;
+        app.store_root(&mut *entry.lock().await, link)?;
+    } else {
+        app.store_root(&mut e, link)?;
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -922,10 +933,17 @@ async fn post_service_key_certificate(
     Path(tenant): Path<TenantId>,
     body: Bytes,
 ) -> ApiResult<StatusCode> {
-    let certificate: SignedServiceKeyCertificate = parse(&body)?;
+    let mut certificate: SignedServiceKeyCertificate = parse(&body)?;
     same_tenant(&tenant, &certificate.body.tenant)?;
+    // One try per signer, and only the guardian's signature is kept: the same certificate
+    // posted again with other signatures stores nothing new.
+    let mut signers = BTreeSet::new();
+    certificate.signatures.retain(|sig| signers.insert(sig.signer));
     seal_verify::verify_service_certificate(&app.guardians, &certificate)
         .map_err(|e| ApiError::forbidden(e.to_string()))?;
+    if let Some(guardian) = app.guardians.get(&certificate.body.platform).map(key_id) {
+        certificate.signatures.retain(|sig| sig.signer == guardian);
+    }
     let entry = app.store.tenant(&tenant)?;
     let mut e = entry.lock().await;
     let root_id = chain_root_id(&e.docs).ok_or_else(|| ApiError::conflict("the tenant has no root chain"))?;

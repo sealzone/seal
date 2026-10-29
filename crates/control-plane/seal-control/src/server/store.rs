@@ -240,16 +240,31 @@ impl Store {
     }
 
     /// The tenant's entry, loaded from disk on first use. Lock it to read or write; writers
-    /// hold the lock until their files are written.
+    /// hold the lock until their files are written. A tenant with nothing stored gets an empty
+    /// entry that is not kept, so requests naming made-up tenants hold no memory; only
+    /// `create_tenant` writes to one.
     pub fn tenant(&self, tenant: &TenantId) -> io::Result<Arc<tokio::sync::Mutex<TenantEntry>>> {
+        self.entry(tenant, false)
+    }
+
+    /// The tenant's entry, kept from now on even while nothing is stored: for writing its
+    /// first document, serialized with any other writer.
+    pub fn create_tenant(&self, tenant: &TenantId) -> io::Result<Arc<tokio::sync::Mutex<TenantEntry>>> {
+        self.entry(tenant, true)
+    }
+
+    fn entry(&self, tenant: &TenantId, create: bool) -> io::Result<Arc<tokio::sync::Mutex<TenantEntry>>> {
         let mut tenants = self.tenants.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(entry) = tenants.get(tenant) {
             return Ok(entry.clone());
         }
         // Tenant names are `[a-z0-9-]`, so they are safe directory names.
-        let entry =
-            Arc::new(tokio::sync::Mutex::new(TenantEntry::load(self.dir.join("tenants").join(tenant.as_str()))?));
-        tenants.insert(tenant.clone(), entry.clone());
+        let dir = self.dir.join("tenants").join(tenant.as_str());
+        let keep = create || dir.try_exists()?;
+        let entry = Arc::new(tokio::sync::Mutex::new(TenantEntry::load(dir)?));
+        if keep {
+            tenants.insert(tenant.clone(), entry.clone());
+        }
         Ok(entry)
     }
 
@@ -368,6 +383,31 @@ mod tests {
         let names: Vec<_> = std::fs::read_dir(dir.join("a")).unwrap().map(|e| e.unwrap().file_name()).collect();
         assert_eq!(names, vec![std::ffi::OsString::from("doc.json")]);
         assert_eq!(read_json::<Vec<u8>>(&dir.join("missing.json")).unwrap(), None);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn only_stored_or_created_tenants_are_kept_in_memory() {
+        let dir = std::env::temp_dir().join(format!("seal-control-store-tenants-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = Store::open(&dir).unwrap();
+        let cached = || store.tenants.lock().unwrap().len();
+        for n in 0..100 {
+            store.tenant(&TenantId::new(format!("ghost-{n}")).unwrap()).unwrap();
+        }
+        assert_eq!(cached(), 0, "made-up tenants hold no memory");
+        assert!(!dir.join("tenants").join("ghost-0").exists(), "nor disk");
+
+        let acme = TenantId::new("acme").unwrap();
+        let created = store.create_tenant(&acme).unwrap();
+        assert!(Arc::ptr_eq(&created, &store.tenant(&acme).unwrap()), "one lock for its writers");
+        assert_eq!(cached(), 1);
+
+        let stored = TenantId::new("stored").unwrap();
+        store.tenant(&stored).unwrap().try_lock().unwrap().set_roots(Vec::new()).unwrap();
+        let reopened = Store::open(&dir).unwrap();
+        reopened.tenant(&stored).unwrap();
+        assert_eq!(reopened.tenants.lock().unwrap().len(), 1, "a tenant on disk is kept once loaded");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

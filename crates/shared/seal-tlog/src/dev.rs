@@ -17,7 +17,10 @@
 //! appends a leaf only for a state signed by `threshold` admin keys of the tenant's latest
 //! logged root, with a version above every one logged for the tenant. The log keeps no other
 //! tenant data. `/freshness` signs for the latest logged state only, at the time of the call.
-//! `GET /v1/checkpoint` signs and cosigns a new checkpoint over the current tree.
+//! `GET /v1/checkpoint` serves the latest checkpoint while it covers the whole tree and is
+//! younger than `CHECKPOINT_REUSE_SECS`, and otherwise signs and cosigns a new one, so callers
+//! (browsers on the transparency page among them) cannot make the log sign on every request.
+//! Entries are at most `MAX_ENTRY_BYTES`.
 //!
 //! Tests shift witness timestamps with `DevLog::set_clock_offset` to cross time locks.
 //!
@@ -48,8 +51,14 @@ use seal_proto::{KeyId, TenantId, UnixTime};
 
 use crate::{leaf_hash, merkle, policy_not_loosened, verify_consistency, TlogTrust};
 
+/// How long `GET /v1/checkpoint` serves one checkpoint for an unchanged tree
+/// (`DevLog::recent_checkpoint`); witnessed time lags by at most this much more.
+pub const CHECKPOINT_REUSE_SECS: u64 = 5;
 /// The dev log's origin unless `open_with_origin` names another.
 pub const ORIGIN: &str = "dev.log.seal.zone/v1";
+/// The largest entry (`canonical(LogEntry)`) the log appends; anyone can append, so this bounds
+/// what one request adds to the log's disk and memory.
+pub const MAX_ENTRY_BYTES: usize = 64 * 1024;
 
 pub struct DevLog {
     dir: PathBuf,
@@ -117,12 +126,14 @@ fn invalid(msg: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, msg.into())
 }
 
-/// `threshold` distinct admin keys of `root` signed `state`.
+/// `threshold` distinct admin keys of `root` signed `state`. Each signer's first signature is
+/// the only one tried, so repeating a signer cannot hold the log's lock for longer.
 fn admins_signed(root: &TenantRoot, state: &SignedTenantState) -> bool {
     let need = usize::from(root.threshold);
     let mut counted = BTreeSet::new();
+    let mut tried = BTreeSet::new();
     for sig in &state.signatures {
-        if counted.contains(&sig.signer) {
+        if !tried.insert(sig.signer) {
             continue;
         }
         let Some(key) = root.admin_keys.iter().find(|k| admin_key_id(k) == sig.signer) else {
@@ -285,6 +296,9 @@ impl DevLog {
 
     fn push(&mut self, entry: LogEntry) -> io::Result<u64> {
         let body = codec::canonical(&entry);
+        if body.len() > MAX_ENTRY_BYTES {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "entry too large"));
+        }
         let len =
             u32::try_from(body.len()).map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "entry too large"))?;
         let mut file = fs::OpenOptions::new().create(true).append(true).open(self.entries_path())?;
@@ -322,6 +336,23 @@ impl DevLog {
         self.latest = Some(cp.clone());
         self.persist().expect("dev log: cannot write its state");
         cp
+    }
+
+    /// The latest checkpoint while it covers every entry under the current policy and its
+    /// witnesses stamped it at most `max_age` seconds ago, else a new one (`checkpoint`).
+    pub fn recent_checkpoint(&mut self, max_age: u64) -> SignedCheckpoint {
+        let now = self.now();
+        let recent = self.latest.as_ref().filter(|cp| {
+            let stamped = cp.cosignatures.iter().map(|c| c.timestamp).min();
+            cp.checkpoint.size == self.size()
+                && cp.checkpoint.policy == self.policy
+                && cp.cosignatures.len() >= self.quorum
+                && stamped.is_some_and(|at| at <= now && now < at.saturating_add(max_age))
+        });
+        match recent {
+            Some(cp) => cp.clone(),
+            None => self.checkpoint(),
+        }
     }
 
     /// Inclusion proof against the latest checkpoint (cosigning a new one if needed).

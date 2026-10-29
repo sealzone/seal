@@ -71,7 +71,7 @@ async fn proof(State(log): State<Log>, Path(index): Path<u64>) -> Response {
 }
 
 async fn checkpoint(State(log): State<Log>) -> Response {
-    Json(lock(&log).checkpoint()).into_response()
+    Json(lock(&log).recent_checkpoint(seal_tlog::dev::CHECKPOINT_REUSE_SECS)).into_response()
 }
 
 async fn policy(State(log): State<Log>, Json(policy): Json<ReleaseConstraints>) -> Response {

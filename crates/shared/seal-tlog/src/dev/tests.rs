@@ -266,6 +266,39 @@ fn clock_offset_moves_witness_and_freshness_time() {
 }
 
 #[test]
+fn checkpoints_are_reused_while_the_tree_policy_and_witness_time_hold() {
+    let dir = TempDir::new();
+    let mut log = DevLog::open(&dir.0, [7; 32], 2, 2).unwrap();
+    log.append(manifest(1)).unwrap();
+    let first = log.recent_checkpoint(CHECKPOINT_REUSE_SECS);
+    assert_eq!(log.recent_checkpoint(CHECKPOINT_REUSE_SECS), first, "reused");
+    log.set_clock_offset(CHECKPOINT_REUSE_SECS as i64);
+    let later = log.recent_checkpoint(CHECKPOINT_REUSE_SECS);
+    assert_ne!(later, first, "re-signed once older than the reuse window");
+    log.append(manifest(2)).unwrap();
+    assert_eq!(log.recent_checkpoint(CHECKPOINT_REUSE_SECS).checkpoint.size, 2, "re-signed for a new entry");
+    let policy = ReleaseConstraints {
+        min_service_key_version: [(PlatformId::Sim, ServiceKeyVersion(2))].into(),
+        ..Default::default()
+    };
+    log.set_policy(policy.clone()).unwrap();
+    assert_eq!(log.recent_checkpoint(CHECKPOINT_REUSE_SECS).checkpoint.policy, policy, "re-signed for a new policy");
+    log.set_clock_offset(-1_000);
+    let earlier = log.recent_checkpoint(CHECKPOINT_REUSE_SECS);
+    assert!(earlier.cosignatures.iter().all(|c| c.timestamp <= wall_now() - 1_000), "never stamped ahead of the clock");
+}
+
+#[test]
+fn entries_are_bounded() {
+    let dir = TempDir::new();
+    let mut log = DevLog::open(&dir.0, [7; 32], 1, 1).unwrap();
+    let LogEntry::Release(mut big) = manifest(1) else { panic!() };
+    big.version = "x".repeat(MAX_ENTRY_BYTES);
+    assert_eq!(log.append(LogEntry::Release(big)).unwrap_err().kind(), io::ErrorKind::InvalidInput);
+    assert_eq!(log.size(), 0);
+}
+
+#[test]
 fn entries_refuse_tenant_states() {
     let dir = TempDir::new();
     let mut log = DevLog::open(&dir.0, [7; 32], 1, 1).unwrap();
@@ -295,6 +328,13 @@ fn states_need_the_latest_roots_threshold_and_a_higher_version() {
     let mut forged = signed_by(state(1, 1), &[1]);
     forged.signatures.push(admin(2).sign(TENANT_STATE_LABEL, &state(2, 1)));
     assert!(log.append_state(&forged).is_err());
+
+    // A bad signature first counts that admin out, however many good ones follow.
+    let mut bad_first = signed_by(state(1, 1), &[1, 2]);
+    let mut bad = bad_first.signatures[0].clone();
+    bad.alg = admin(9).sign(TENANT_STATE_LABEL, &state(1, 1)).alg;
+    bad_first.signatures.insert(0, bad);
+    assert!(log.append_state(&bad_first).is_err());
 
     let index = log.append_state(&signed_by(state(1, 1), &[1, 2])).unwrap();
     let LogEntry::TenantState(leaf) = &log.entries[index as usize] else { panic!() };

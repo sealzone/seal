@@ -194,8 +194,12 @@ impl App {
             }
             "Bearer" => self.check_write_token(value).map(|()| Caller::Operator),
             SIGNED_SCHEME => {
-                let signed: SignedControlRequest = decode(value)?;
+                let mut signed: SignedControlRequest = decode(value)?;
                 check_request(asked, body, &signed.body, &time)?;
+                // Each signer's first signature only: a known key id repeated in the header
+                // costs one verification per key, not one per copy.
+                let mut signers = std::collections::BTreeSet::new();
+                signed.signatures.retain(|sig| signers.insert(sig.signer));
                 let admin = chain.admins.and_then(|root| {
                     signed.signatures.iter().find(|sig| {
                         let key = root.admin_keys.iter().find(|k| admin_key_id(k) == sig.signer);

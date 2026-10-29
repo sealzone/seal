@@ -852,6 +852,35 @@ async fn service_key_certificates_need_the_platforms_guardian() {
     assert!(none.is_empty());
 }
 
+/// Anyone can post certificates and telemetry, so neither extra nor repeated signatures may cost
+/// the server more: a certificate posted again with signatures added is the one already stored,
+/// and only each signer's first signature is tried.
+#[tokio::test]
+async fn posted_documents_get_one_try_per_signer_and_store_only_what_verifies() {
+    let env = Env::new().await;
+    env.ready().await;
+    let cert = env.keys.certificate.clone();
+    let mut padded = cert.clone();
+    let mut junk = cert.signatures[0].clone();
+    junk.signer = KeyId([5; 32]);
+    padded.signatures.push(junk);
+    assert_eq!(env.post("/v1/tenants/acme/service-key-certificates", &padded).await, 204);
+    let stored: Vec<SignedServiceKeyCertificate> = env.get_json("/v1/tenants/acme/service-key-certificates").await;
+    assert_eq!(stored, vec![cert.clone()], "stored once, with the guardian's signature alone");
+
+    let mut bad_first = cert.clone();
+    let mut bad = cert.signatures[0].clone();
+    bad.alg = key(STRANGER).sign(SERVICE_KEY_CERTIFICATE_LABEL, &cert.body).alg;
+    bad_first.signatures.insert(0, bad.clone());
+    assert_eq!(env.post("/v1/tenants/acme/service-key-certificates", &bad_first).await, 403);
+
+    let mut signed = env.telemetry_signer().sign_into(TELEMETRY_BATCH_LABEL, batch(1, 0, env.now()));
+    let mut bad = signed.signatures[0].clone();
+    bad.alg = key(STRANGER).sign(TELEMETRY_BATCH_LABEL, &signed.body).alg;
+    signed.signatures = std::iter::repeat_n(bad, 100).chain(signed.signatures).collect();
+    assert_eq!(env.post("/v1/tenants/acme/telemetry", &signed).await, 403, "the signer's first signature is bad");
+}
+
 /// A service key version below the log's `min_service_key_version` for its platform signs no
 /// signal, session end or telemetry batch the control plane takes, though newer certificates
 /// still list its key.
