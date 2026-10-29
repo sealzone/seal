@@ -7,7 +7,7 @@ dependency rules and topology are in [ARCHITECTURE.md](ARCHITECTURE.md). The cod
 source of truth. If this file and a crate's public signatures disagree, the code wins and
 this file gets corrected.
 
-**Status.** Pre-release, so interfaces may still change.
+**Status.** Released. Until 1.0, minor versions may still change the SDK and CLI interfaces; wire format v1 is frozen.
 [ARCHITECTURE.md](ARCHITECTURE.md#scope) lists what is built and what is only specified.
 
 **Wire format v1 is frozen.** Every type that is signed, hashed, used as associated data or

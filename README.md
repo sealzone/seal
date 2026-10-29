@@ -4,7 +4,9 @@
 
 <p align="center">
   <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-f2ede6?style=flat-square&labelColor=1d1a18"></a>
-  <a href="#status"><img alt="Status: pre-release" src="https://img.shields.io/badge/status-pre--release-b9b1a7?style=flat-square&labelColor=1d1a18"></a>
+  <a href="https://crates.io/crates/sealzone"><img alt="crates.io" src="https://img.shields.io/crates/v/sealzone?style=flat-square&label=crates.io&color=b9b1a7&labelColor=1d1a18"></a>
+  <a href="https://pypi.org/project/sealzone/"><img alt="PyPI" src="https://img.shields.io/pypi/v/sealzone?style=flat-square&label=pypi&color=b9b1a7&labelColor=1d1a18"></a>
+  <a href="https://www.npmjs.com/package/@sealzone/sdk"><img alt="npm" src="https://img.shields.io/npm/v/@sealzone/sdk?style=flat-square&label=npm&color=b9b1a7&labelColor=1d1a18"></a>
   <a href="https://seal.zone/challenge"><img alt="Steal our key: $5,000" src="https://img.shields.io/badge/steal%20our%20key-%245%2C000-e5402f?style=flat-square&labelColor=1d1a18"></a>
 </p>
 
@@ -113,9 +115,19 @@ any request the credential allows. It just can't take the credential with it.
 The full model is in [ARCHITECTURE.md](docs/ARCHITECTURE.md). The public interface (roles,
 SDK surface, wire format, known limits) is in [CONTRACT.md](docs/CONTRACT.md).
 
+## Install
+
+```sh
+pip install sealzone                 # Python: import seal (also installs the `seal` command)
+npm install @sealzone/sdk            # Node/TypeScript: import { Client } from "@sealzone/sdk"
+go get seal.zone/go                  # Go: import seal "seal.zone/go"
+cargo add sealzone                   # Rust: use seal::Client
+cargo install sealzone-cli           # the `seal` command on its own
+```
+
 ## Status
 
-Pre-release. Interfaces may still change.
+The SDKs and the CLI are released. Until 1.0, minor versions may still change interfaces.
 
 | Built | Designed, not built yet |
 | --- | --- |
@@ -125,11 +137,10 @@ Pre-release. Interfaces may still change.
 | Signed tenant state, network rules, telemetry | |
 | The `seal` CLI; Rust, Python, Node/TypeScript and Go SDKs; the local simulator | |
 
-The SDKs and the CLI aren't on crates.io, PyPI or npm yet, and `seal.zone/go` doesn't serve
-the Go module yet. Install them from source (below). Accepted limits and open items are in
+Accepted limits and open items are in
 [CONTRACT.md](docs/CONTRACT.md#known-limits-and-unresolved-items).
 
-## Getting started
+## Run it locally
 
 You need:
 
@@ -154,18 +165,13 @@ scripts/e2e.sh                      # end-to-end tests on the simulator (tests/e
 scripts/py-test.sh                  # the Python SDK against the simulator
 ```
 
-Install the SDKs and the CLI from source:
+To build the SDKs and the CLI from this checkout instead of the registries:
 
 ```sh
-pip install ./crates/sdk/seal-py                # Python: import seal
-crates/sdk/seal-node/build.sh --release         # Node/TypeScript: import { Client } from "@sealzone/sdk"
-crates/sdk/seal-go/build.sh                     # Go: import seal "seal.zone/go"
-cargo install --path crates/sdk/seal-cli        # the `seal` command
-```
-
-```toml
-# Rust: use seal::Client
-seal = { package = "sealzone", git = "https://github.com/sealzone/seal" }
+pip install ./crates/sdk/seal-py
+crates/sdk/seal-node/build.sh --release
+crates/sdk/seal-go/build.sh
+cargo install --path crates/sdk/seal-cli
 ```
 
 ## The `seal` CLI
