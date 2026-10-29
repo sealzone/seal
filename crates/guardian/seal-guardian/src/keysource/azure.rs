@@ -47,7 +47,7 @@
 //!     --enable-rbac-authorization true --enable-purge-protection true --retention-days 90
 //! seal-release kv-release-policy --host-data <host_data> > policy.json
 //! az keyvault key create --vault-name <vault> -n <key> --kty RSA-HSM --size 3072 \
-//!     --exportable true --immutable true --policy @policy.json --ops encrypt decrypt
+//!     --exportable true --immutable true --policy @policy.json --ops encrypt
 //! az role assignment create --role "Key Vault Crypto Service Release User" \
 //!     --assignee-object-id <mi> --assignee-principal-type ServicePrincipal \
 //!     --scope "$(az keyvault show -n <vault> --query id -o tsv)/keys/<key>"

@@ -1,8 +1,10 @@
-//! CORS for the console's web UI, and for no other origin. A request whose `Origin` is the
+//! CORS for the console's web UI, and for public reads. A request whose `Origin` is the
 //! configured one gets `Access-Control-Allow-Origin` with that origin, and its preflight is
-//! answered here; requests from any other origin get no CORS headers, so browsers refuse
-//! them, and their preflights reach the router (405). Credentials travel in `Authorization`,
-//! never in cookies, so credentialed CORS is not allowed.
+//! answered here. A `GET` of release evidence (`/v1/releases/...`), public to everyone, gets
+//! `*` from any origin, so a page anywhere can verify releases (seal.zone/transparency); it
+//! needs no preflight. Other requests from other origins get no CORS headers, so browsers
+//! refuse them, and their preflights reach the router (405). Credentials travel in
+//! `Authorization`, never in cookies, so credentialed CORS is not allowed.
 
 use std::sync::Arc;
 
@@ -17,8 +19,15 @@ const ALLOW_HEADERS: &str = "authorization, content-type";
 const MAX_AGE_SECS: &str = "600";
 
 pub async fn cors(State(origin): State<Option<Arc<str>>>, request: Request, next: Next) -> Response {
-    let Some(origin) = origin else {
-        return next.run(request).await;
+    let public_read = request.method() == Method::GET && request.uri().path().starts_with("/v1/releases/");
+    let Some(origin) = origin.filter(|o| {
+        !public_read || request.headers().get(header::ORIGIN).is_some_and(|got| got.as_bytes() == o.as_bytes())
+    }) else {
+        let mut response = next.run(request).await;
+        if public_read {
+            response.headers_mut().insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, HeaderValue::from_static("*"));
+        }
+        return response;
     };
     let from_console = request.headers().get(header::ORIGIN).is_some_and(|o| o.as_bytes() == origin.as_bytes());
     let allow = HeaderValue::from_str(&origin).ok().filter(|_| from_console);

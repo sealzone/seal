@@ -1544,6 +1544,23 @@ async fn cors_admits_the_console_origin_only() {
 }
 
 #[tokio::test]
+async fn release_evidence_is_readable_from_any_origin() {
+    let env = Env::new().await;
+    env.ready().await;
+    let page = [("origin", "https://seal.zone")];
+    let (status, headers, _) = env.send("GET", "/v1/releases/sim", Auth::None, &page, vec![]).await;
+    assert_eq!(status, 200);
+    assert_eq!(headers["access-control-allow-origin"], "*");
+    // The console still gets its own origin, and nothing else is opened up.
+    let (_, headers, _) = env.send("GET", "/v1/releases/sim", Auth::None, &[("origin", CONSOLE_ORIGIN)], vec![]).await;
+    assert_eq!(headers["access-control-allow-origin"], CONSOLE_ORIGIN);
+    let (_, headers, _) = env.send("PUT", "/v1/releases/sim/00", Auth::None, &page, vec![]).await;
+    assert!(!headers.contains_key("access-control-allow-origin"));
+    let (_, headers, _) = env.send("GET", "/v1/tenants/acme/bundle", Auth::Key(V1_ADMINS[0]), &page, vec![]).await;
+    assert!(!headers.contains_key("access-control-allow-origin"));
+}
+
+#[tokio::test]
 async fn the_tls_certificate_is_reloaded_when_its_files_change() {
     let dir = fresh_dir("tls");
     std::fs::create_dir_all(&dir).unwrap();
