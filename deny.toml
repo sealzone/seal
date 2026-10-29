@@ -53,7 +53,9 @@ deny = [
     { name = "native-tls", reason = "native TLS; Seal uses rustls" },
     { name = "reqwest", reason = "hyper-util with Seal's pinned rustls config is enough" },
     { name = "jsonwebtoken", reason = "pulls a second crypto generation; JWS verification is hand-rolled per issuer" },
-    { name = "x509-parser", reason = "use x509-cert (same ecosystem as the crypto)" },
+    # ctap-hid-fido2 (the CLI's security-key signing) parses attestation certificates with it;
+    # assertions never reach that code, and no TEE crate pulls ctap-hid-fido2.
+    { name = "x509-parser", wrappers = ["ctap-hid-fido2"], reason = "use x509-cert (same ecosystem as the crypto)" },
     { name = "webauthn-rs", reason = "heavy, OpenSSL; ES256 assertions are checked with p256" },
     { name = "azure_identity", reason = "one IMDS GET does not need an SDK" },
     { name = "aws-nitro-enclaves-cose", reason = "OpenSSL; use coset" },

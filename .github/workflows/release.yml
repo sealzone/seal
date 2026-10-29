@@ -42,6 +42,8 @@ jobs:
           [[ "$node_version" == "$version" ]] || { echo "package.json is $node_version, Cargo.toml $version"; exit 1; }
           echo "version=$version" >> "$GITHUB_OUTPUT"
       - uses: ./.github/actions/release-trust
+      # `seal changes sign --passkey` (sealzone-cli's default `passkey` feature) builds C hidapi.
+      - run: sudo apt-get update -q && sudo apt-get install -y -q libudev-dev
       - name: The crates package and build as crates.io will see them
         run: cargo publish --workspace --dry-run --locked
       - name: Their docs build cleanly, as docs.rs will
@@ -69,8 +71,9 @@ jobs:
           - { runner: ubuntu-24.04-arm, target: aarch64, manylinux: "2_28" }
           - { runner: ubuntu-latest, target: x86_64, manylinux: musllinux_1_2 }
           - { runner: ubuntu-24.04-arm, target: aarch64, manylinux: musllinux_1_2 }
-          - { runner: macos-15-intel, target: x86_64 }
-          - { runner: macos-14, target: aarch64 }
+          # macOS reaches security keys through IOKit, so its wheels sign with passkeys too.
+          - { runner: macos-15-intel, target: x86_64, features: passkey }
+          - { runner: macos-14, target: aarch64, features: passkey }
     steps:
       - uses: actions/checkout@v4
       - uses: PyO3/maturin-action@v1
@@ -78,7 +81,7 @@ jobs:
           working-directory: crates/sdk/seal-py
           target: ${{ matrix.target }}
           manylinux: ${{ matrix.manylinux || 'auto' }}
-          args: --release --locked --out dist
+          args: --release --locked --out dist ${{ matrix.features && format('--features {0}', matrix.features) || '' }}
       - uses: actions/upload-artifact@v4
         with:
           name: wheel-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.manylinux || 'native' }}
@@ -151,6 +154,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/release-trust
+      # `seal changes sign --passkey` (sealzone-cli's default `passkey` feature) builds C hidapi.
+      - run: sudo apt-get update -q && sudo apt-get install -y -q libudev-dev
       - if: env.PUBLISH == 'true'
         id: auth
         uses: rust-lang/crates-io-auth-action@v1

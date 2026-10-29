@@ -12,6 +12,8 @@ crate-type = ["cdylib", "rlib"]
 
 [features]
 sim = ["seal-client/sim", "seal-cli/sim"]
+# `seal changes sign --passkey` in the wheel's seal command (the macOS wheels).
+passkey = ["seal-cli/passkey"]
 # AWS workload identity (`seal.AwsIdentity`, and AWS in detection). A large tree.
 aws = ["seal-client/aws"]
 

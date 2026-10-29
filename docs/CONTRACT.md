@@ -207,7 +207,11 @@ with seal.session(blob) as s:                          # HttpSession or Database
     the login (or a `--key-file` key) and take `--json`.
   - `seal changes` lists open proposals and logged states not yet in force; `seal changes
     show|sign|submit|cancel ID` act on one (an id prefix will do); `sign` with `--key-file`
-    submits a state that reaches the threshold. `seal changes --watch [--once] [--interval D]
+    submits a state that reaches the threshold. `sign --passkey` signs with an admin passkey
+    on a USB security key (CTAP2; the `passkey` feature, on by default for the `seal` binary and
+    in the macOS wheels): the assertion a browser would make, `clientDataJSON` with the labeled
+    digest as challenge and origin `https://<rp_id>`, a PIN when the key has one (for UV), and
+    kept only when it verifies under one of the root's passkeys. `seal changes --watch [--once] [--interval D]
     [--json]` follows pending roots and states, verified locally (with the log's own
     freshness statement, so a control plane hiding a newer state fails it); `--once` exits 0
     when nothing is pending and 3 when something is. `seal status --log` also scans the log for

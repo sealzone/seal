@@ -38,6 +38,8 @@ mod console;
 mod deploy;
 mod grants;
 mod identity;
+#[cfg(feature = "passkey")]
+mod passkey;
 mod settings;
 mod sign;
 mod status;

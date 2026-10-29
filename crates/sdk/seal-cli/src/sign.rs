@@ -3,12 +3,14 @@
 //! Every change is built here on the verified state in force (`Admin::draft`), shown as its
 //! classified differences, and then:
 //!
-//! - signed here with the `--key-file` keys and published when they meet the root's threshold;
+//! - signed here with the `--key-file` keys (or, in `seal changes sign --passkey`, an admin
+//!   passkey on a security key: `crate::passkey`) and published when they meet the root's
+//!   threshold;
 //! - otherwise proposed on the control plane (with whatever signatures the keys gave), its
 //!   console page opened for the admins' passkeys, and followed until it is logged: the CLI
 //!   submits it itself once the threshold of signatures is there. Ctrl-C leaves it pending.
 //!
-//! The CLI holds no admin key of its own: without `--key-file` it signs nothing.
+//! The CLI holds no admin key of its own: without `--key-file` or `--passkey` it signs nothing.
 
 use std::io::IsTerminal as _;
 use std::time::{Duration, Instant};
@@ -166,6 +168,20 @@ fn published(state: &TenantState, index: u64, change: Change, window: u64) {
             watch::at(at)
         );
     }
+}
+
+/// The security key's signature on `document` (`crate::passkey`).
+#[cfg(feature = "passkey")]
+async fn sign_with_passkey(root: &TenantRoot, document: &mut Proposed) -> anyhow::Result<()> {
+    match document {
+        Proposed::State(s) => crate::passkey::cosign(root, TENANT_STATE_LABEL, s).await,
+        Proposed::Root(r) => crate::passkey::cosign(root, TENANT_ROOT_LABEL, r).await,
+    }
+}
+
+#[cfg(not(feature = "passkey"))]
+async fn sign_with_passkey(_: &TenantRoot, _: &mut Proposed) -> anyhow::Result<()> {
+    bail!("this seal was built without passkey support (the `passkey` feature): sign with --key-file or in the console")
 }
 
 fn signature_count(document: &Proposed) -> usize {
@@ -400,10 +416,13 @@ pub enum ChangesCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Add your signatures: with --key-file here, else in the console (your passkey)
+    /// Add your signatures: with --key-file or --passkey here, else in the console
     Sign {
         /// The proposal id, or enough of its start to name it
         id: String,
+        /// Sign with your admin passkey on a security key plugged in over USB
+        #[arg(long)]
+        passkey: bool,
     },
     /// Submit a proposal that has its signatures (a root goes with the state proposed under it)
     Submit {
@@ -517,7 +536,7 @@ pub async fn run(env: &Env, args: ChangesArgs) -> anyhow::Result<()> {
     match args.cmd {
         None => list(env, args.json).await,
         Some(ChangesCmd::Show { id, json }) => show(env, &id, json).await,
-        Some(ChangesCmd::Sign { id }) => sign(env, &id).await,
+        Some(ChangesCmd::Sign { id, passkey }) => sign(env, &id, passkey).await,
         Some(ChangesCmd::Submit { id }) => submit(env, &id).await,
         Some(ChangesCmd::Cancel { id }) => {
             let admin = env.admin(Scope::Submit).await?;
@@ -636,7 +655,7 @@ async fn show(env: &Env, id: &str, json: bool) -> anyhow::Result<()> {
 
 /// `seal changes sign ID`: with `--key-file`, adds those signatures (and submits a state that
 /// reaches the threshold); without, follows it while the admins sign in the console.
-async fn sign(env: &Env, id: &str) -> anyhow::Result<()> {
+async fn sign(env: &Env, id: &str, passkey: bool) -> anyhow::Result<()> {
     let admin = env.admin(Scope::Submit).await?;
     let time = time();
     let current = admin.fetch(&time).await?;
@@ -651,7 +670,7 @@ async fn sign(env: &Env, id: &str) -> anyhow::Result<()> {
         Proposed::Root(_) => Change::Widening,
     };
     let keys = env.keys()?;
-    if keys.is_empty() {
+    if keys.is_empty() && !passkey {
         say!("{}", ui::bold(&format!("{}: {}", admin.tenant(), what(&proposal.document))));
         for line in &changes {
             say!("  {}", ui::diff_line(line));
@@ -660,7 +679,7 @@ async fn sign(env: &Env, id: &str) -> anyhow::Result<()> {
         return Ok(());
     }
     let keys = admin_keys_given(env, &root)?;
-    let (document, title) = match &proposal.document {
+    let (mut document, title) = match &proposal.document {
         Proposed::State(s) => (
             Proposed::State(cosign(&root, TENANT_STATE_LABEL, s.clone(), &keys)),
             format!("{}: state version {} → {}", admin.tenant(), current.tenant.state().version, s.body.version),
@@ -670,10 +689,13 @@ async fn sign(env: &Env, id: &str) -> anyhow::Result<()> {
             format!("{}: root version {} → {}", admin.tenant(), root.version, r.body.version),
         ),
     };
-    if signature_count(&document) == signature_count(&proposal.document) {
+    if !passkey && signature_count(&document) == signature_count(&proposal.document) {
         bail!("your keys have signed proposal {} already", short(&proposal.id));
     }
     confirm(env, &title, &changes, "Sign")?;
+    if passkey {
+        sign_with_passkey(&root, &mut document).await?;
+    }
     let stored = admin.propose_document(&document).await?;
     match &stored.document {
         Proposed::State(s) if s.body.root_version == root.version && meets_threshold(&root, TENANT_STATE_LABEL, s) => {

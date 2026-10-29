@@ -41,7 +41,8 @@ seal-adapter-pg = { path = "crates/enclave/adapters/seal-adapter-pg", version = 
 seal-adapter-redis = { path = "crates/enclave/adapters/seal-adapter-redis", version = "0.2.1" }
 seal-adapter-clickhouse = { path = "crates/enclave/adapters/seal-adapter-clickhouse", version = "0.2.1" }
 seal-client = { path = "crates/sdk/seal-client", version = "0.2.1", package = "sealzone" }
-seal-cli = { path = "crates/sdk/seal-cli", version = "0.2.1", package = "sealzone-cli" }
+# Without `passkey` (libudev on Linux): seal-py turns it on where it builds without it.
+seal-cli = { path = "crates/sdk/seal-cli", version = "0.2.1", package = "sealzone-cli", default-features = false }
 seal-sim = { path = "crates/sim/seal-sim", version = "0.2.1" }
 # external. Every crate takes versions from here. Read docs/DEPS.md before adding or upgrading.
 async-trait = "0.1"
@@ -106,6 +107,8 @@ anstyle = "1"
 # Windows Credential Manager).
 keyring = "4"
 rpassword = "7"
+# `seal changes sign --passkey`: a security key over USB (CTAP2 over HID).
+ctap-hid-fido2 = "3.6"
 anyhow = "1"
 jiff = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

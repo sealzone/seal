@@ -19,7 +19,11 @@ name = "seal"
 path = "src/main.rs"
 
 [features]
+default = ["passkey"]
 sim = ["seal-client/sim"]
+# Signing with a security key (`seal changes sign --passkey`); on Linux it builds against
+# libudev (libudev-dev, systemd-devel or eudev-dev).
+passkey = ["dep:ctap-hid-fido2"]
 
 [dependencies]
 seal-proto.workspace = true
@@ -36,6 +40,7 @@ anstyle.workspace = true
 keyring.workspace = true
 async-trait.workspace = true
 rpassword.workspace = true
+ctap-hid-fido2 = { workspace = true, optional = true }
 anyhow.workspace = true
 jiff.workspace = true
 tracing-subscriber.workspace = true
@@ -45,6 +50,8 @@ sha2.workspace = true
 base64.workspace = true
 
 [dev-dependencies]
+# A software passkey for the security-key signing tests.
+p256.workspace = true
 # In-process dev log and a fake control plane behind TLS for the end-to-end tests.
 seal-tlog = { workspace = true, features = ["dev"] }
 axum.workspace = true
