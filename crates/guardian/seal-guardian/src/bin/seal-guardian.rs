@@ -574,7 +574,12 @@ mod production {
         if attestor.platform() != config.runs_on {
             return Err(format!("this build runs on {:?}, not {:?}", config.runs_on, attestor.platform()));
         }
-        let https = Arc::new(HttpsClient::new(Arc::new(BakedRootsConnector::new(Arc::new(TcpDialer)))));
+        // A first trusted reading: every certificate below, ceremony and succession included, is
+        // checked at trusted time.
+        let clock = boot::roughtime();
+        clock.now().await.map_err(|e| format!("clock: {e}"))?;
+        let connector = BakedRootsConnector::new(Arc::new(TcpDialer)).with_time(seal_tee::tls_time());
+        let https = Arc::new(HttpsClient::new(Arc::new(connector)));
         let key_source = match (release.gcp_kms, release.key_vault) {
             (Some((identity, keys)), _) => {
                 let kms = GcpKms::new(config.platform, identity, https.clone()).map_err(|e| e.to_string())?;
@@ -600,7 +605,7 @@ mod production {
             }
             (None, None) => return Err(format!("this build has no key source for a guardian on {:?}", config.runs_on)),
         };
-        let components = GuardianComponents { key_source, attestor, clock: boot::roughtime() };
+        let components = GuardianComponents { key_source, attestor, clock };
         boot::boot_and_serve(config, components, compiled::LISTEN).await
     }
 }

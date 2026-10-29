@@ -13,7 +13,10 @@ use serde_json::json;
 use seal::admin::{cosign, meets_threshold, Admin, Current, Proposed};
 use seal_proto::integrity::{ArtifactHash, Clearance, IntegrityAction, Severity};
 use seal_proto::signed::Signed;
-use seal_proto::state::{AdminKey, MAX_PENDING_WINDOW_SECS, TENANT_ROOT_LABEL, TENANT_STATE_LABEL};
+use seal_proto::state::{
+    AdminKey, MAX_PENDING_WINDOW_SECS, MIN_STATE_FRESHNESS_SECS, STATE_FRESHNESS_SECS, TENANT_ROOT_LABEL,
+    TENANT_STATE_LABEL,
+};
 use seal_proto::{AppName, KeyId, Measurement, PlatformId, PublicKey, TenantId, TenantKeyVersion};
 
 use crate::sign::{confirm, edit_state, follow, root_changes, sign_freshness_if_held};
@@ -39,7 +42,8 @@ pub enum SettingsCmd {
     Integrity(IntegrityArgs),
     /// The X25519 keys telemetry is encrypted to (none: telemetry is kept in the clear)
     TelemetryReaders(ReadersArgs),
-    /// Tenant-run freshness signers (none: the log alone vouches for the latest state)
+    /// Tenant-run freshness signers (none: the log alone vouches for the latest state), and
+    /// how long a freshness statement keeps the state usable
     Freshness(FreshnessArgs),
     /// The tenant key version new blobs are sealed under
     TenantKey(TenantKeyArgs),
@@ -223,8 +227,44 @@ pub enum FreshnessCmd {
     #[command(subcommand)]
     Key(FreshnessKeyCmd),
     /// Sign one statement that the latest state is current, with --freshness-key; run it from
-    /// cron, at least daily
+    /// cron, well within the freshness window (daily by default)
     Sign,
+    /// How long a freshness statement keeps the latest state usable, which bounds how long a
+    /// replayed older state works and how long an unreachable log is survived
+    Window {
+        /// The new window: seconds or a duration from 5m up to 24h, or `default` (24h);
+        /// shortening it applies at once, lengthening it waits the pending window; without
+        /// it, the window in force
+        #[arg(value_parser = parse_freshness_window)]
+        window: Option<FreshnessWindow>,
+        /// JSON instead of text
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+/// A freshness window as given: a duration, or the 24-hour default.
+#[derive(Clone, Copy, Debug)]
+pub enum FreshnessWindow {
+    Default,
+    Secs(u64),
+}
+
+/// `default`, or a duration within `MIN_STATE_FRESHNESS_SECS..=STATE_FRESHNESS_SECS` (the
+/// longest is the default).
+fn parse_freshness_window(s: &str) -> Result<FreshnessWindow, String> {
+    if s == "default" {
+        return Ok(FreshnessWindow::Default);
+    }
+    let secs = parse_duration(s)?;
+    if !(MIN_STATE_FRESHNESS_SECS..=STATE_FRESHNESS_SECS).contains(&secs) {
+        return Err(format!(
+            "{s}: the freshness window is {} to {}",
+            watch::span(MIN_STATE_FRESHNESS_SECS),
+            watch::span(STATE_FRESHNESS_SECS)
+        ));
+    }
+    Ok(if secs == STATE_FRESHNESS_SECS { FreshnessWindow::Default } else { FreshnessWindow::Secs(secs) })
 }
 
 #[derive(Subcommand, Debug)]
@@ -516,11 +556,13 @@ pub async fn run(env: &Env, cmd: SettingsCmd) -> anyhow::Result<()> {
         }
         SettingsCmd::Freshness(FreshnessArgs { cmd: None, json }) => {
             let (_, current) = current(env).await?;
-            let keys: Vec<String> = current.tenant.state().freshness_keys.iter().map(ToString::to_string).collect();
+            let state = current.tenant.state();
+            let keys: Vec<String> = state.freshness_keys.iter().map(ToString::to_string).collect();
             if json {
-                println!("{}", json!({ "freshness_keys": keys }));
+                println!("{}", json!({ "freshness_keys": keys, "freshness_secs": state.freshness_window() }));
             } else {
                 list("Freshness signers (none: the log alone vouches for the latest state)", keys);
+                say!("freshness window {}", watch::span(state.freshness_window()));
             }
             Ok(())
         }
@@ -726,6 +768,27 @@ async fn freshness(env: &Env, cmd: FreshnessCmd) -> anyhow::Result<()> {
         }
         FreshnessCmd::Key(FreshnessKeyCmd::Rm { key }) => {
             edit_state(env, |s| changed(s.freshness_keys.remove(&key))).await.map(|_| ())
+        }
+        FreshnessCmd::Window { window: None, json } => {
+            let (_, current) = current(env).await?;
+            let window = current.tenant.state().freshness_window();
+            if json {
+                println!("{}", json!({ "freshness_secs": window }));
+            } else {
+                say!(
+                    "freshness window {}: a replayed older state works this long at most, and the tenant survives \
+                     an unreachable log this long",
+                    watch::span(window)
+                );
+            }
+            Ok(())
+        }
+        FreshnessCmd::Window { window: Some(window), .. } => {
+            let secs = match window {
+                FreshnessWindow::Default => None,
+                FreshnessWindow::Secs(secs) => Some(secs),
+            };
+            edit_state(env, |s| changed(std::mem::replace(&mut s.freshness_secs, secs) != secs)).await.map(|_| ())
         }
         FreshnessCmd::Sign => {
             let path = env

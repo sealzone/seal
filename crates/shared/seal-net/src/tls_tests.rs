@@ -11,7 +11,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 
-use crate::test_pki::{dns, intermediate, ip, leaf, root, Issued, Life};
+use crate::test_pki::{dns, intermediate, intermediate_living, ip, leaf, root, root_living, Issued, Life};
 use crate::*;
 
 const SSL_REQUEST: [u8; 8] = [0, 0, 0, 8, 0x04, 0xd2, 0x16, 0x2f];
@@ -249,6 +249,46 @@ async fn expired_is_refused() {
     let p = pki("expired", vec![dns("api.example.test")], Life::Expired);
     let addr = Server::new(&p.leaf, &[&p.inter]).spawn().await;
     assert_tls(connector(addr, &[&p.root]).connect(&https("api.example.test"), &no_pins()).await);
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs()
+}
+
+#[test]
+fn trusted_time_is_none_until_recorded() {
+    use rustls::time_provider::TimeProvider;
+    let time = TrustedTlsTime::new();
+    assert!(time.current_time().is_none());
+    time.record(1_000);
+    let now = time.current_time().unwrap().as_secs();
+    assert!((1_000..=1_002).contains(&now), "{now}");
+}
+
+#[tokio::test]
+async fn trusted_time_decides_validity() {
+    const DAY: u64 = 86_400;
+    // A whole chain valid from 3 days ago until yesterday.
+    let root = root_living("trusted root", Life::Expired);
+    let inter = intermediate_living(&root, "trusted inter", Life::Expired);
+    let p = Pki { leaf: leaf(&inter, "trusted leaf", vec![dns("api.example.test")], Life::Expired), inter, root };
+    let addr = Server::new(&p.leaf, &[&p.inter]).spawn().await;
+    let time = Arc::new(TrustedTlsTime::new());
+    let c = connector(addr, &[&p.root]).with_time(time.clone());
+    // No reading yet: refused, never the system clock.
+    match c.connect(&https("api.example.test"), &no_pins()).await {
+        Err(NetError::Tls { reason, .. }) => assert!(reason.contains("current time"), "{reason}"),
+        other => panic!("expected a TLS error, got {:?}", other.err()),
+    }
+    // While the leaf was valid: accepted, pins included, although it has expired by the system clock.
+    time.record(unix_now() - 2 * DAY);
+    let stream = c.connect(&https("api.example.test"), &pins(&[p.inter.pin()])).await.unwrap();
+    assert_eq!(read_all(stream).await, b"hello");
+    // After it expired, and before it was valid.
+    time.record(unix_now());
+    assert_tls(c.connect(&https("api.example.test"), &no_pins()).await);
+    time.record(unix_now() - 4 * DAY);
+    assert_tls(c.connect(&https("api.example.test"), &no_pins()).await);
 }
 
 #[tokio::test]

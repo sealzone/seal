@@ -11,7 +11,9 @@
 //!   Without this, a VCEK of older firmware would pass `min_tcb`.
 //! - Guest policy debug bit off; VMPL exactly 0.
 //! - `tcb` from REPORTED_TCB by family: Milan/Genoa byte 0 `bootloader`, 1 `tee`, 6 `snp`,
-//!   7 `microcode`; Turin byte 0 `fmc`, 1 `bootloader`, 2 `tee`, 3 `snp`, 7 `microcode`.
+//!   7 `microcode`; Turin byte 0 `fmc`, 1 `bootloader`, 2 `tee`, 3 `snp`, 7 `microcode`. Each
+//!   is named after the family (`milan.snp`, `genoa.snp`, `turin.snp`), since each family
+//!   numbers its firmware on its own scale: a floor for one family never applies to another.
 //! - `report_data[0..32]` = Seal's binding, bytes 32..64 zero.
 //!
 //! Microsoft's UVM endorsement (COSE_Sign1, PS384), in either live format:
@@ -74,6 +76,14 @@ pub(crate) fn verify(
 /// signed it. Checks only the signature: `verify` does the rest.
 pub fn amd_chain_pem(vcek_der: &[u8]) -> Option<&'static str> {
     report::chain_pem_for(vcek_der)
+}
+
+/// Every `Tcb` component Azure evidence can carry: `uvm_svn` and each family's
+/// `family.component`.
+pub(crate) fn tcb_components() -> Vec<String> {
+    let mut names = report::tcb_components();
+    names.push("uvm_svn".to_owned());
+    names
 }
 
 /// `Measurement` for a confidential-container policy hash (`host_data`).

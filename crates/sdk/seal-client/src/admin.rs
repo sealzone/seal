@@ -552,6 +552,7 @@ impl Admin {
             issued_at: time.now,
             pending_window_secs,
             app_networks: Default::default(),
+            freshness_secs: None,
         };
         let state = admin_sign(
             &format!("state version {version}"),
@@ -1096,6 +1097,9 @@ pub fn diff(old: &TenantState, new: &TenantState) -> Vec<String> {
     if old.pending_window_secs != new.pending_window_secs {
         out.push(format!("~ pending window: {}s -> {}s", old.pending_window_secs, new.pending_window_secs));
     }
+    if old.freshness_secs != new.freshness_secs {
+        out.push(format!("~ freshness window: {}s -> {}s", old.freshness_window(), new.freshness_window()));
+    }
     let (oi, ni) = (&old.integrity, &new.integrity);
     let empty = BTreeSet::new();
     let apps: BTreeSet<_> = oi.artifacts.keys().chain(ni.artifacts.keys()).collect();
@@ -1149,6 +1153,7 @@ mod tests {
             issued_at: 0,
             pending_window_secs: 0,
             app_networks: Default::default(),
+            freshness_secs: None,
         }
     }
 
@@ -1169,6 +1174,8 @@ mod tests {
         assert_eq!(lines[2], "+ platform: sim");
         assert_eq!(lines[3], "~ tenant key version: 1 -> 2");
         assert!(diff(&new, &old).iter().any(|l| l == "- app checkout (1 identities)"));
+        let short = TenantState { freshness_secs: Some(600), ..old.clone() };
+        assert_eq!(diff(&old, &short), ["~ freshness window: 86400s -> 600s"]);
     }
 
     #[test]

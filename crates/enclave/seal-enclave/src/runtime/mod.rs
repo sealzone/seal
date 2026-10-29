@@ -213,8 +213,8 @@ impl Runtime {
         let bundle = c.tenants.load().await?;
         let tenant = state::verify_bundle(&config.trust, platform, &pin, &bundle, Vec::new(), &time)?;
 
-        let https =
-            Arc::new(seal_net::HttpsClient::new(Arc::new(seal_net::BakedRootsConnector::new(c.cloud.dialer()))));
+        let connector = seal_net::BakedRootsConnector::new(c.cloud.dialer()).with_time(seal_tee::tls_time());
+        let https = Arc::new(seal_net::HttpsClient::new(Arc::new(connector)));
         let proof = c
             .cloud
             .deployment(&tenant.state().deployments)

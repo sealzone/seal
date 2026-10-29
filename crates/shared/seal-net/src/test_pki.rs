@@ -135,18 +135,28 @@ fn build(profile: Profile, label: &str, life: Life, subject_key: SigningKey, sig
 
 /// A self-signed CA.
 pub fn root(label: &str) -> Issued {
+    root_living(label, Life::Valid)
+}
+
+/// A self-signed CA with this lifetime.
+pub fn root_living(label: &str, life: Life) -> Issued {
     let subject = Name::from_str(&format!("CN={label},O=Seal Test,C=US")).expect("name");
     let k = key(label);
-    build(Profile { issuer: subject.clone(), subject, ca: true, sans: vec![] }, label, Life::Valid, k.clone(), &k)
+    build(Profile { issuer: subject.clone(), subject, ca: true, sans: vec![] }, label, life, k.clone(), &k)
 }
 
 /// An intermediate CA under `issuer`.
 pub fn intermediate(issuer: &Issued, label: &str) -> Issued {
+    intermediate_living(issuer, label, Life::Valid)
+}
+
+/// An intermediate CA under `issuer` with this lifetime.
+pub fn intermediate_living(issuer: &Issued, label: &str, life: Life) -> Issued {
     let subject = Name::from_str(&format!("CN={label},O=Seal Test,C=US")).expect("name");
     build(
         Profile { issuer: issuer.name.clone(), subject, ca: true, sans: vec![] },
         label,
-        Life::Valid,
+        life,
         key(label),
         &issuer.key,
     )

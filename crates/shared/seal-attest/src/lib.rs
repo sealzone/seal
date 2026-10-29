@@ -42,7 +42,7 @@ pub struct VerifiedEvidence {
     pub platform: PlatformId,
     pub measurement: Measurement,
     /// Platform TCB as named components, checked against `ReleaseConstraints::min_tcb` with
-    /// `Tcb::meets` (components per platform: `seal_proto::release::Tcb`).
+    /// `Tcb::passes` (components per platform: `seal_proto::release::Tcb`).
     pub tcb: seal_proto::release::Tcb,
     /// The 32 bytes the TEE committed to (an `AttestationBinding`, `KeyRequestBinding` or
     /// guardian identity digest).
@@ -65,5 +65,24 @@ pub fn verify(evidence: &Evidence, time: &TrustedTime) -> Result<VerifiedEvidenc
         Evidence::Sim { document } => sim::verify(document),
         #[cfg(not(feature = "sim"))]
         Evidence::Sim { .. } => Err(AttestError::Unsupported(PlatformId::Sim)),
+    }
+}
+
+/// Checks a `ReleaseConstraints::min_tcb` floor for `platform` before it is published: every
+/// component it names is one this platform's evidence carries (`seal_proto::release::Tcb`).
+/// Floors only rise, so a misspelled component, or one without its family on Azure, would
+/// refuse that platform's evidence for good. Simulator floors may name anything.
+pub fn check_floor(platform: PlatformId, floor: &seal_proto::release::Tcb) -> Result<(), String> {
+    let known: Vec<String> = match platform {
+        PlatformId::AzureSnpAci => azure::tcb_components(),
+        PlatformId::GcpConfidentialSpace => gcp::TCB_COMPONENTS.iter().map(|name| (*name).to_owned()).collect(),
+        PlatformId::AwsNitro => Vec::new(),
+        PlatformId::Sim => return Ok(()),
+    };
+    let unknown: Vec<&str> = floor.0.keys().filter(|name| !known.contains(name)).map(String::as_str).collect();
+    if unknown.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("{platform:?} evidence has no {}; it has {}", unknown.join(", "), known.join(", ")))
     }
 }

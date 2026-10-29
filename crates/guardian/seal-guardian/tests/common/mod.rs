@@ -195,6 +195,7 @@ impl World {
             issued_at: self.now - DAY,
             pending_window_secs: 0,
             app_networks: Default::default(),
+            freshness_secs: None,
         };
         let state = signed(TENANT_STATE_LABEL, state, &ADMINS[..1]);
         let issued = self.now - DAY;

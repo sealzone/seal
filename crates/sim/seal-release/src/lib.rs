@@ -9,6 +9,9 @@
 //!   release keys, appended to the log and published to the control plane; an Azure enclave
 //!   release also publishes its template (the `aci` output) for `seal deploy`.
 //! - `identity`: a booted guardian's key, checked against its attested `GET /v1/identity`.
+//! - `policy`: the log's checkpoint policy (`ReleaseConstraints`), checked before it is set:
+//!   TCB floors name only components their platform's evidence carries, per chip family on
+//!   Azure, and the policy does not loosen the log's current one.
 //!
 //! The `seal-release` binary exposes each step, plus an SDK app (`app`, the simulator's flows
 //! over a production SDK client) to exercise a live deployment.
@@ -18,5 +21,6 @@ extern crate seal_client as seal;
 
 pub mod aci;
 pub mod identity;
+pub mod policy;
 pub mod release;
 pub mod trust;

@@ -3475,6 +3475,7 @@ dependencies = [
  "hex",
  "proptest",
  "rand",
+ "rustls",
  "sealzone-attest",
  "sealzone-crypto",
  "sealzone-net",

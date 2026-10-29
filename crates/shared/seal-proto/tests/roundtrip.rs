@@ -263,6 +263,7 @@ fn app_networks_are_omitted_until_used() {
         issued_at: 1,
         pending_window_secs: 0,
         app_networks: Default::default(),
+        freshness_secs: None,
     };
     // States that use no network rule keep their encoding (and so their digest): the key
     // is in neither the canonical CBOR nor the JSON.
@@ -292,6 +293,7 @@ fn a_pending_window_has_one_encoding() {
         issued_at: 1,
         pending_window_secs: 0,
         app_networks: Default::default(),
+        freshness_secs: None,
     };
     let mut json = serde_json::to_value(&state).unwrap();
     assert!(json.get("pending_window_secs").is_none(), "no window is the omitted field");
@@ -300,4 +302,43 @@ fn a_pending_window_has_one_encoding() {
         json["pending_window_secs"] = secs.into();
         assert_eq!(serde_json::from_value::<TenantState>(json.clone()).is_ok(), decodes, "{secs}");
     }
+}
+
+#[test]
+fn a_freshness_window_has_one_encoding_within_its_bounds() {
+    use seal_proto::state::{MIN_STATE_FRESHNESS_SECS, STATE_FRESHNESS_SECS};
+    let state = TenantState {
+        tenant: TenantId::new("acme").unwrap(),
+        version: 2,
+        root_version: 1,
+        apps: Default::default(),
+        tenant_key_versions: TenantKeyVersions { current: TenantKeyVersion(1), oldest_accepted: TenantKeyVersion(1) },
+        platforms: Default::default(),
+        integrity: Default::default(),
+        deployments: Default::default(),
+        freshness_keys: Default::default(),
+        telemetry_readers: Default::default(),
+        issued_at: 1,
+        pending_window_secs: 0,
+        app_networks: Default::default(),
+        freshness_secs: None,
+    };
+    let mut json = serde_json::to_value(&state).unwrap();
+    assert!(json.get("freshness_secs").is_none(), "the default window is the omitted field");
+    assert_eq!(state.freshness_window(), STATE_FRESHNESS_SECS);
+    let (min, max) = (MIN_STATE_FRESHNESS_SECS, STATE_FRESHNESS_SECS);
+    for (secs, decodes) in [(0, false), (min - 1, false), (min, true), (max - 1, true), (max, false), (max + 1, false)]
+    {
+        json["freshness_secs"] = secs.into();
+        let decoded = serde_json::from_value::<TenantState>(json.clone());
+        assert_eq!(decoded.is_ok(), decodes, "{secs}");
+        if let Ok(decoded) = decoded {
+            assert_eq!(decoded.freshness_window(), secs);
+            let bytes = seal_proto::codec::canonical(&decoded);
+            assert_eq!(seal_proto::codec::from_canonical::<TenantState>(&bytes).unwrap(), decoded);
+        }
+    }
+    // Built in memory outside the bounds, the window is clamped to them.
+    assert_eq!(TenantState { freshness_secs: Some(1), ..state.clone() }.freshness_window(), min);
+    assert_eq!(TenantState { freshness_secs: Some(u64::MAX), ..state }.freshness_window(), max);
 }

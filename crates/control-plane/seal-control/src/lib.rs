@@ -1,7 +1,8 @@
 //! Seal's control plane: an untrusted store of signed documents.
 //!
 //! HTTP API (JSON). Untrusted by design: it cannot forge anything verifiers accept, and it
-//! cannot roll a tenant back for longer than `STATE_FRESHNESS_SECS`, because verifiers need
+//! cannot roll a tenant back for longer than the state's freshness window (at most
+//! `STATE_FRESHNESS_SECS`, `TenantState::freshness_window`), because verifiers need
 //! a current `StateFreshness` from the log for exactly the state they get. Withholding a newer
 //! state makes the tenant unavailable after that window, never quietly stale. It still
 //! rejects obvious junk (shape, non-increasing versions, states the log has not recorded, roots

@@ -70,6 +70,7 @@ fn state(version: u64, root_version: u64) -> TenantState {
         issued_at: 1,
         pending_window_secs: 0,
         app_networks: Default::default(),
+        freshness_secs: None,
     }
 }
 

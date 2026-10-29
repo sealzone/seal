@@ -164,6 +164,7 @@ mod tests {
             issued_at: 0,
             pending_window_secs: window,
             app_networks: Default::default(),
+            freshness_secs: None,
         }
     }
 

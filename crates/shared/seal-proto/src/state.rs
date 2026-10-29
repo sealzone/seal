@@ -116,6 +116,17 @@ pub struct TenantState {
     /// address, so there a rule cannot tell callers apart. Omitted when empty.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub app_networks: BTreeMap<AppName, BTreeSet<crate::net::Cidr>>,
+    /// How long a freshness statement keeps this state usable, in seconds, for the log's
+    /// statement and the tenant signers' alike: `MIN_STATE_FRESHNESS_SECS` up to (not
+    /// including) `STATE_FRESHNESS_SECS`. Omitted = `STATE_FRESHNESS_SECS`. A shorter window
+    /// bounds how long a replayed older state (one from before a revocation) keeps working,
+    /// at the cost of surviving an unreachable log, or a missed tenant signature, only that
+    /// long. Shortening it narrows access and lengthening it widens (`seal_verify::change`);
+    /// verifiers apply the shorter of the latest state's and the state in force's window. A
+    /// value outside the bounds, or a written `STATE_FRESHNESS_SECS`, does not decode, so each
+    /// window has one signed encoding.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "freshness_window")]
+    pub freshness_secs: Option<u64>,
 }
 pub const TENANT_STATE_LABEL: &str = "seal/tenant-state/v1";
 
@@ -138,7 +149,32 @@ fn pending_window<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u64, D::Erro
     Ok(secs)
 }
 
+/// The shortest `TenantState::freshness_secs`: below it, a log or tenant signer that is a
+/// few minutes late would stop the tenant.
+pub const MIN_STATE_FRESHNESS_SECS: u64 = 300;
+
+/// `freshness_secs` as written: `MIN_STATE_FRESHNESS_SECS` to `STATE_FRESHNESS_SECS - 1`
+/// (`STATE_FRESHNESS_SECS` is the omitted field).
+fn freshness_window<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<u64>, D::Error> {
+    let secs = <u64 as serde::Deserialize>::deserialize(d)?;
+    if !(MIN_STATE_FRESHNESS_SECS..STATE_FRESHNESS_SECS).contains(&secs) {
+        return Err(serde::de::Error::custom(format!(
+            "freshness_secs: {MIN_STATE_FRESHNESS_SECS} to {} (omit it for {STATE_FRESHNESS_SECS})",
+            STATE_FRESHNESS_SECS - 1
+        )));
+    }
+    Ok(Some(secs))
+}
+
 impl TenantState {
+    /// How long a freshness statement for this state keeps it usable: `freshness_secs` within
+    /// `MIN_STATE_FRESHNESS_SECS..=STATE_FRESHNESS_SECS` (a value built in memory outside the
+    /// bounds is clamped to them), else `STATE_FRESHNESS_SECS`.
+    pub fn freshness_window(&self) -> u64 {
+        self.freshness_secs
+            .map_or(STATE_FRESHNESS_SECS, |secs| secs.clamp(MIN_STATE_FRESHNESS_SECS, STATE_FRESHNESS_SECS))
+    }
+
     /// Whether `app` may hold a session from `source` (`app_networks`): any address when the
     /// app has no network rule; otherwise only an address in one of its networks, and never
     /// an unknown one.
@@ -174,8 +210,8 @@ pub type SignedTenantAnchor = Signed<TenantAnchor>;
 /// Signed by the transparency log (`TlogTrust::log_key`), which holds every state as a
 /// `LogEntry::TenantState` leaf, and by a tenant-run signer when the state names
 /// `freshness_keys`. Verifiers accept a state only with statements for exactly it that are
-/// less than `STATE_FRESHNESS_SECS` old, so a replayed older state stops working within that
-/// window. A log statement for an older version than one it had already logged is a
+/// younger than its window (`TenantState::freshness_window`, at most `STATE_FRESHNESS_SECS`),
+/// so a replayed older state stops working within that window. A log statement for an older version than one it had already logged is a
 /// signed, provable lie.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StateFreshness {
@@ -189,8 +225,9 @@ pub struct StateFreshness {
 pub const STATE_FRESHNESS_LABEL: &str = "seal/state-freshness/v1";
 pub type SignedStateFreshness = Signed<StateFreshness>;
 
-/// How long a freshness statement keeps its state usable: the most a rollback can buy, and
-/// how long a tenant survives an unreachable log before its enclaves refuse service.
+/// How long a freshness statement keeps its state usable, unless the state sets a shorter
+/// `freshness_secs`: the most a rollback can buy, and how long a tenant survives an
+/// unreachable log before its enclaves refuse service.
 pub const STATE_FRESHNESS_SECS: u64 = 86_400;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

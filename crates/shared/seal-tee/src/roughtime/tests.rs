@@ -687,6 +687,35 @@ async fn round_trips_over_the_cap_are_discarded() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn readings_carried_past_the_cap_are_discarded() {
+    // A host that jumps the monotonic clock forward after the replies arrive shifts every
+    // reading alike; the carry bounds how far.
+    let sent = Instant::now();
+    let reading = |at: Duration| Reading { sent, received: sent + at, sample: Sample { midp: NOW_US, radius: 1 } };
+    let readings = vec![("a".to_owned(), reading(Duration::from_millis(10)))];
+    assert_eq!(carry(&readings, sent + MAX_CARRY).len(), 1);
+    assert!(carry(&readings, sent + MAX_CARRY + Duration::from_millis(1)).is_empty());
+    assert!(carry(&readings, sent + Duration::from_secs(3_600)).is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_slow_transport_ends_at_the_query_timeout() {
+    use RoughtimeVersion::*;
+    // A transport that ignores its timeout cannot hold the call open, or stretch the carry of
+    // the servers that answered.
+    let (result, truth) = Setup::new()
+        .honest("a", Rfc10049)
+        .add("b", Draft12, |f| {
+            f.delay = Duration::from_secs(3_600);
+            f.no_timeout = true;
+        })
+        .run(1)
+        .await;
+    let t = result.unwrap();
+    assert!(contains(&t, truth) && t.radius <= 2, "{t:?}");
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_greased_reply_is_retried() {
     use RoughtimeVersion::*;
     let (result, _) = Setup::new().add("a", Rfc10049, |f| f.spoiled = 1).run(1).await;

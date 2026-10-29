@@ -17,7 +17,10 @@
 //!   carries the packets can drop them, or delay them within the cap, which only widens the
 //!   interval; it can never rewind or forge, since replies are signed over our nonce.
 //!   Intervals are carried to one common instant with the monotonic clock, never the host's
-//!   wall clock.
+//!   wall clock. Each server's query ends within `ATTEMPTS` round trips, so a reading carried
+//!   longer than `MAX_CARRY` means the monotonic clock jumped (a host can move it on SEV-SNP
+//!   without Secure TSC) and is discarded: a jump after the replies arrive cannot shift the
+//!   result by more than `MAX_CARRY`.
 //! - Agreement is counted per operator: at least `min_agreeing` distinct operators whose
 //!   intervals overlap, and they must be a strict majority of the operators that answered
 //!   validly, so a signed but wrong server is outvoted. The result is the intersection of the
@@ -46,6 +49,12 @@ pub const MAX_RTT: Duration = Duration::from_secs(5);
 
 /// Tries per server and `now` call.
 const ATTEMPTS: usize = 2;
+
+/// The whole of one server's query: `ATTEMPTS` round trips.
+const QUERY_TIMEOUT: Duration = Duration::from_secs(MAX_RTT.as_secs() * ATTEMPTS as u64);
+
+/// Readings carried longer than this to the common instant are discarded (module docs).
+const MAX_CARRY: Duration = Duration::from_secs(QUERY_TIMEOUT.as_secs() + 1);
 
 /// The wire profile a server speaks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -127,7 +136,9 @@ impl RoughtimeClock {
         for server in self.servers.iter().cloned() {
             let datagrams = self.datagrams.clone();
             queries.spawn(async move {
-                let reading = query(&server, &*datagrams).await;
+                let reading = tokio::time::timeout(QUERY_TIMEOUT, query(&server, &*datagrams))
+                    .await
+                    .unwrap_or_else(|_| Err(format!("no reply within {} s", QUERY_TIMEOUT.as_secs())));
                 (server, reading)
             });
         }
@@ -141,19 +152,30 @@ impl RoughtimeClock {
                 Err(e) => tracing::warn!(error = %e, "roughtime query task failed"),
             }
         }
-        // Carry every interval to this one instant: offsets on the monotonic clock only.
-        let end = Instant::now();
-        let intervals: Vec<Interval> = readings
-            .iter()
-            .map(|(operator, r)| Interval {
-                lo: r.sample.midp - r.sample.radius + micros(end - r.received),
-                hi: r.sample.midp + r.sample.radius + micros(end - r.sent),
-                operator,
-            })
-            .collect();
+        let intervals = carry(&readings, Instant::now());
         let (lo, hi) = agree(&intervals, self.min_agreeing).map_err(TeeError::Unavailable)?;
         to_trusted_time(lo, hi).map_err(TeeError::Unavailable)
     }
+}
+
+/// Every reading's interval carried to the instant `end`, with offsets on the monotonic clock
+/// only; readings carried longer than `MAX_CARRY` are discarded.
+fn carry<'a>(readings: &'a [(String, Reading)], end: Instant) -> Vec<Interval<'a>> {
+    readings
+        .iter()
+        .filter(|(operator, r)| {
+            let carried = end.saturating_duration_since(r.sent);
+            if carried > MAX_CARRY {
+                tracing::warn!(operator, carried_ms = carried.as_millis(), "roughtime reading carried too long");
+            }
+            carried <= MAX_CARRY
+        })
+        .map(|(operator, r)| Interval {
+            lo: r.sample.midp - r.sample.radius + micros(end - r.received),
+            hi: r.sample.midp + r.sample.radius + micros(end - r.sent),
+            operator,
+        })
+        .collect()
 }
 
 fn micros(d: Duration) -> i128 {

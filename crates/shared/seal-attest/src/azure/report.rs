@@ -16,6 +16,8 @@ const REPORT_LEN: usize = 0x4A0;
 const SIGNED_LEN: usize = 0x2A0;
 /// Guest policy bit 19: debugging allowed.
 const POLICY_DEBUG: u64 = 1 << 19;
+/// Guest policy bit 18: a migration agent may be associated, and could export guest memory.
+const POLICY_MIGRATE_MA: u64 = 1 << 18;
 /// `sig_algo` 1: ECDSA P-384 with SHA-384.
 const SIG_ALGO_ECDSA_P384_SHA384: u32 = 1;
 
@@ -50,6 +52,16 @@ impl Family {
         }
     }
 
+    /// The family part of its `Tcb` component names (`milan.snp`): each family numbers its
+    /// firmware on its own scale, so floors are per family.
+    fn name(self) -> &'static str {
+        match self {
+            Family::Milan => "milan",
+            Family::Genoa => "genoa",
+            Family::Turin => "turin",
+        }
+    }
+
     /// Length of the VCEK's hwID: the whole 64-byte CHIP_ID before Turin, 8 bytes from Turin
     /// on (the rest of CHIP_ID is zero).
     fn hwid_len(self) -> usize {
@@ -59,8 +71,8 @@ impl Family {
         }
     }
 
-    /// REPORTED_TCB as named components with their VCEK extension. Never compared as a packed
-    /// integer: AMD reorders the bytes between generations.
+    /// REPORTED_TCB as named components with their VCEK extension (`verify` prefixes the
+    /// family). Never compared as a packed integer: AMD reorders the bytes between generations.
     fn decode_tcb(self, raw: u64) -> Vec<(&'static str, u64, ObjectIdentifier)> {
         let b = raw.to_le_bytes().map(u64::from);
         match self {
@@ -157,6 +169,7 @@ pub(crate) struct Hardware {
     pub measurement: [u8; 48],
     pub host_data: [u8; 32],
     pub report_data: [u8; 32],
+    /// REPORTED_TCB, named `family.component` (`milan.snp`).
     pub tcb: BTreeMap<String, u64>,
 }
 
@@ -178,6 +191,9 @@ pub(crate) fn verify(report: &[u8], vcek_der: &[u8], earliest: u64, latest: u64)
     }
     if r.policy() & POLICY_DEBUG != 0 {
         return Err(AttestError::DebugMode);
+    }
+    if r.policy() & POLICY_MIGRATE_MA != 0 {
+        return Err(reject("report policy allows a migration agent"));
     }
     if r.vmpl() != 0 {
         return Err(reject(format!("report VMPL is {}, expected 0", r.vmpl())));
@@ -236,8 +252,16 @@ pub(crate) fn verify(report: &[u8], vcek_der: &[u8], earliest: u64, latest: u64)
         measurement: r.measurement(),
         host_data: r.host_data(),
         report_data: report_data[..32].try_into().expect("32 bytes"),
-        tcb: components.into_iter().map(|(name, value, _)| (name.to_owned(), value)).collect(),
+        tcb: components.into_iter().map(|(name, value, _)| (format!("{}.{name}", family.name()), value)).collect(),
     })
+}
+
+/// Every `family.component` a verified report of a baked family can name.
+pub(crate) fn tcb_components() -> Vec<String> {
+    FAMILIES
+        .into_iter()
+        .flat_map(|family| family.decode_tcb(0).into_iter().map(move |(name, ..)| format!("{}.{name}", family.name())))
+        .collect()
 }
 
 /// (ARK, ASK) for `family`. The PEM is baked, so a parse failure is a build defect.

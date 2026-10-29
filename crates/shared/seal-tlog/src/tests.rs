@@ -492,6 +492,21 @@ fn policy_may_stay_or_tighten() {
 }
 
 #[test]
+fn family_floors_rise_per_family_and_new_families_may_join() {
+    let with = |floor: &[(&str, u64)]| {
+        let mut p = ReleaseConstraints::default();
+        p.min_tcb.insert(PlatformId::AzureSnpAci, tcb(floor));
+        p
+    };
+    let old = with(&[("milan.snp", 24), ("genoa.snp", 23)]);
+    assert!(policy_not_loosened(&old, &with(&[("milan.snp", 25), ("genoa.snp", 23)])));
+    // Admitting a family the floor did not list takes an explicit floor for it.
+    assert!(policy_not_loosened(&old, &with(&[("milan.snp", 24), ("genoa.snp", 23), ("turin.snp", 4)])));
+    assert!(!policy_not_loosened(&old, &with(&[("milan.snp", 23), ("genoa.snp", 23)])));
+    assert!(!policy_not_loosened(&old, &with(&[("genoa.snp", 23)])), "a family floor removed");
+}
+
+#[test]
 fn policy_may_not_loosen_anything() {
     let old = base_policy();
     type Change = Box<dyn Fn(&mut ReleaseConstraints)>;

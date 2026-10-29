@@ -6,9 +6,12 @@
 //! - the upstream request's `Host` is the destination's host and port, whatever the client sent;
 //! - redirects are relayed to the client as responses, never followed, so a `3xx` cannot
 //!   carry the injected header to another origin;
-//! - `Upgrade` (WebSocket, h2c) is refused.
+//! - `Upgrade` (WebSocket, h2c) is refused, and so is a header that some servers read as the
+//!   real method or path (`OVERRIDE_HEADERS`), since the policy checks the request line;
 //! - the upstream request's `Accept-Encoding` is `identity`, whatever the client sent, so
-//!   responses reach the scrubber uncompressed; a response that is encoded anyway is refused.
+//!   responses reach the scrubber uncompressed; a response that is encoded anyway is refused;
+//! - `Range` and `If-Range` are dropped, so an echo of the secret comes back whole, never in
+//!   slices the scrubber cannot match.
 //!
 //! One inbound connection is one keep-alive HTTP/1.1 server. Its first request must carry a
 //! local key (`seal_proto::tunnel::find_local_key`, searched in every header value; at most
@@ -72,6 +75,10 @@ const DRAIN_MAX_BYTES: usize = 1 << 20;
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 /// `Completion::action` keeps at most this many bytes of the path.
 const ACTION_PATH_MAX: usize = 128;
+/// Headers some servers and frameworks take as the request's method (`methods` policy) or
+/// path (prefix policy) in place of the request line's. A request carrying one is refused.
+const OVERRIDE_HEADERS: [&str; 5] =
+    ["x-http-method-override", "x-http-method", "x-method-override", "x-original-url", "x-rewrite-url"];
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 type RespBody = BoxBody<Bytes, BoxError>;
@@ -451,7 +458,7 @@ fn request_credential(headers: &HeaderMap) -> Result<Option<(HeaderName, Zeroizi
     Ok(found)
 }
 
-/// Request form, `Upgrade`, path syntax and the blob's HTTP policy.
+/// Request form, `Upgrade`, override headers, path syntax and the blob's HTTP policy.
 fn check_request(session: &dyn Session, req: &Request<Incoming>) -> Result<(), ErrorCode> {
     let uri = req.uri();
     if req.method() == Method::CONNECT || uri.scheme().is_some() || uri.authority().is_some() {
@@ -459,7 +466,7 @@ fn check_request(session: &dyn Session, req: &Request<Incoming>) -> Result<(), E
     }
     let upgrade = req.headers().contains_key(header::UPGRADE)
         || header_tokens(req.headers(), &header::CONNECTION).any(|t| t.eq_ignore_ascii_case("upgrade"));
-    if upgrade {
+    if upgrade || OVERRIDE_HEADERS.iter().any(|h| req.headers().contains_key(*h)) {
         return Err(ErrorCode::PolicyDenied);
     }
     let path = HttpPath::parse(uri.path()).map_err(|_| ErrorCode::PolicyDenied)?;
@@ -490,6 +497,8 @@ fn upstream_request(
     headers.remove(&credential_header);
     headers.remove(&injection_header);
     headers.remove(header::EXPECT);
+    headers.remove(header::RANGE);
+    headers.remove(header::IF_RANGE);
     headers.insert(injection_header, value);
     headers.insert(header::HOST, host);
     headers.insert(header::ACCEPT_ENCODING, HeaderValue::from_static("identity"));

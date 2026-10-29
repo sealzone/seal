@@ -370,3 +370,22 @@ fn tcb_is_checked_against_the_platform_minimum() {
     );
     assert_eq!(ReleaseVerifier::check_tcb(&policy, platform, &tcb(&[("snp", 99)])), Err(VerifyError::TcbTooLow));
 }
+
+#[test]
+fn tcb_floors_are_per_family() {
+    let tcb = |parts: &[(&str, u64)]| Tcb(parts.iter().map(|(k, v)| (k.to_string(), *v)).collect());
+    let platform = PlatformId::AzureSnpAci;
+    let mut policy = ReleaseConstraints::default();
+    policy.min_tcb.insert(
+        platform,
+        tcb(&[("milan.snp", 24), ("genoa.snp", 23), ("turin.fmc", 1), ("turin.snp", 4), ("uvm_svn", 100)]),
+    );
+    let check = |have: &[(&str, u64)]| ReleaseVerifier::check_tcb(&policy, platform, &tcb(have));
+    check(&[("milan.snp", 24), ("milan.microcode", 219), ("uvm_svn", 100)]).unwrap();
+    check(&[("genoa.snp", 23), ("genoa.microcode", 84), ("uvm_svn", 104)]).unwrap();
+    check(&[("turin.fmc", 1), ("turin.snp", 4), ("uvm_svn", 100)]).unwrap();
+    // Genoa's floor of 23 never admits a Milan at 23.
+    assert_eq!(check(&[("milan.snp", 23), ("uvm_svn", 100)]), Err(VerifyError::TcbTooLow));
+    // A family without a floor is refused once the platform has any family floor.
+    assert_eq!(check(&[("venice.snp", 99), ("uvm_svn", 100)]), Err(VerifyError::TcbTooLow));
+}

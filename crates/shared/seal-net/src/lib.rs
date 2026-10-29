@@ -19,6 +19,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
+use rustls::time_provider::TimeProvider;
 use seal_proto::policy::{Destination, SpkiPin};
 use tokio::io::{AsyncRead, AsyncWrite};
 
@@ -235,6 +236,35 @@ impl Datagrams for UdpDatagrams {
     }
 }
 
+/// Certificate time from a trusted clock, for `BakedRootsConnector::with_time`: the latest
+/// recorded reading advanced by the monotonic clock, rounded up, plus 1 s per 1000 s of drift,
+/// so it never runs behind the reading. `None` until a first `record`, so handshakes fail
+/// (`FailedToGetCurrentTime`) rather than fall back to the system clock.
+#[derive(Debug, Default)]
+pub struct TrustedTlsTime {
+    anchor: std::sync::Mutex<Option<(std::time::Instant, u64)>>,
+}
+
+impl TrustedTlsTime {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// A fresh trusted reading (unix seconds) becomes the anchor.
+    pub fn record(&self, unix_secs: u64) {
+        *self.anchor.lock().unwrap_or_else(|e| e.into_inner()) = Some((std::time::Instant::now(), unix_secs));
+    }
+}
+
+impl TimeProvider for TrustedTlsTime {
+    fn current_time(&self) -> Option<rustls::pki_types::UnixTime> {
+        let (at, secs) = (*self.anchor.lock().unwrap_or_else(|e| e.into_inner()))?;
+        let elapsed = at.elapsed().as_secs();
+        let now = secs.saturating_add(elapsed).saturating_add(1).saturating_add(elapsed / 1000);
+        Some(rustls::pki_types::UnixTime::since_unix_epoch(Duration::from_secs(now)))
+    }
+}
+
 /// Production connector: `dialer`, then TLS (1.2 or 1.3, `ring`, no session resumption)
 /// against `baked_roots()`. A pinned key counts only on a path that verifies: the leaf's own
 /// key, or an intermediate or root the leaf chains to; a pinned certificate merely sent along
@@ -244,6 +274,8 @@ pub struct BakedRootsConnector {
     dialer: Arc<dyn Dialer>,
     roots: Arc<rustls::RootCertStore>,
     algs: rustls::crypto::WebPkiSupportedAlgorithms,
+    /// The time certificates are checked at: the system clock unless `with_time` replaced it.
+    time: Arc<dyn TimeProvider>,
     /// ALPN `http/1.1`, for `Https`.
     http: Arc<rustls::ClientConfig>,
     /// No ALPN, for the database protocols.
@@ -253,6 +285,12 @@ pub struct BakedRootsConnector {
 impl BakedRootsConnector {
     pub fn new(dialer: Arc<dyn Dialer>) -> Self {
         Self::from_roots(dialer, baked_roots()).expect("baked roots build a verifier")
+    }
+
+    /// The same connector checking certificate validity (in the handshake and for pins) at
+    /// `time` instead of the system clock. A handshake while `time` has none fails.
+    pub fn with_time(self, time: Arc<dyn TimeProvider>) -> Self {
+        Self::build(self.dialer, self.roots, time).expect("these roots already built a verifier")
     }
 
     /// Sim builds only: also trust these PEM roots.
@@ -272,14 +310,21 @@ impl BakedRootsConnector {
         Self::from_roots(dialer, roots)
     }
 
-    /// A connector trusting exactly `roots`.
+    /// A connector trusting exactly `roots`, at the system clock.
     fn from_roots(dialer: Arc<dyn Dialer>, roots: rustls::RootCertStore) -> Result<Self, NetError> {
+        Self::build(dialer, Arc::new(roots), Arc::new(rustls::time_provider::DefaultTimeProvider))
+    }
+
+    fn build(
+        dialer: Arc<dyn Dialer>,
+        roots: Arc<rustls::RootCertStore>,
+        time: Arc<dyn TimeProvider>,
+    ) -> Result<Self, NetError> {
         let bad = |reason: String| NetError::Tls { host: "trust anchors".into(), reason };
         let provider = Arc::new(rustls::crypto::ring::default_provider());
         let algs = provider.signature_verification_algorithms;
-        let roots = Arc::new(roots);
         let verifier = verify::SealVerifier::new(roots.clone(), provider.clone()).map_err(bad)?;
-        let mut plain = rustls::ClientConfig::builder_with_provider(provider)
+        let mut plain = rustls::ClientConfig::builder_with_details(provider, time.clone())
             .with_protocol_versions(&[&rustls::version::TLS13, &rustls::version::TLS12])
             .map_err(|e| bad(e.to_string()))?
             .dangerous()
@@ -289,7 +334,7 @@ impl BakedRootsConnector {
         plain.resumption = rustls::client::Resumption::disabled();
         let mut http = plain.clone();
         http.alpn_protocols = vec![b"http/1.1".to_vec()];
-        Ok(Self { dialer, roots, algs, http: Arc::new(http), plain: Arc::new(plain) })
+        Ok(Self { dialer, roots, algs, time, http: Arc::new(http), plain: Arc::new(plain) })
     }
 
     async fn handshake(
@@ -357,7 +402,10 @@ impl UpstreamConnector for BakedRootsConnector {
         let (_, conn) = tls.get_ref();
         if !pins.is_empty() {
             let presented = conn.peer_certificates().unwrap_or_default();
-            let now = rustls::pki_types::UnixTime::now();
+            let now = self.time.current_time().ok_or_else(|| NetError::Tls {
+                host: host.to_string(),
+                reason: rustls::Error::FailedToGetCurrentTime.to_string(),
+            })?;
             if !verify::chain_has_pin(presented, &self.roots, pins, &self.algs, now) {
                 tracing::warn!(host, "upstream chain carries no pinned key");
                 return Err(NetError::PinMismatch { host: host.to_string() });

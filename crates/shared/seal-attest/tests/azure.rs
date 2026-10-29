@@ -18,6 +18,12 @@ fn tcb(entries: &[(&str, u64)]) -> Tcb {
     Tcb(entries.iter().map(|(k, v)| (k.to_string(), *v)).collect())
 }
 
+/// One floor for both real chips: a Milan floor above the ACI Milan sample's `snp` 8, and a
+/// Genoa floor the Genoa capture meets.
+fn floor() -> Tcb {
+    tcb(&[("milan.snp", 9), ("milan.microcode", 115), ("genoa.snp", 23), ("genoa.microcode", 84)])
+}
+
 /// A confidential container group from production Azure (microsoft/confidential-sidecar-containers):
 /// the SNP report, the `vcekCert` of `host-amd-cert-base64`, `reference-info-base64` and the
 /// security policy.
@@ -79,7 +85,13 @@ fn aci_sample_verifies() {
     let expected = VerifiedEvidence {
         platform: PlatformId::AzureSnpAci,
         measurement: azure::measurement(&host_data),
-        tcb: tcb(&[("bootloader", 3), ("tee", 0), ("snp", 8), ("microcode", 115), ("uvm_svn", 22)]),
+        tcb: tcb(&[
+            ("milan.bootloader", 3),
+            ("milan.tee", 0),
+            ("milan.snp", 8),
+            ("milan.microcode", 115),
+            ("uvm_svn", 22),
+        ]),
         report_data: hex::decode("ee986ff2bd7e3f22e29f640918627816cf8e23b9d9c312767168eab68c861c71")
             .unwrap()
             .try_into()
@@ -87,6 +99,16 @@ fn aci_sample_verifies() {
         deployment: None,
     };
     assert_eq!(verify(&evidence, &NOW).unwrap(), expected);
+    // Its own family's floor refuses it; Genoa's floor (`genoa.snp` 23) is never applied to it.
+    assert!(!expected.tcb.passes(&floor()));
+    assert!(expected.tcb.passes(&tcb(&[("milan.snp", 8), ("genoa.snp", 23), ("genoa.microcode", 84)])));
+    assert!(!expected.tcb.passes(&tcb(&[("genoa.snp", 0)])), "a family the floor does not list");
+    seal_attest::check_floor(PlatformId::AzureSnpAci, &floor()).unwrap();
+    seal_attest::check_floor(PlatformId::AzureSnpAci, &tcb(&[("turin.fmc", 1), ("uvm_svn", 100)])).unwrap();
+    // Without its family, or misspelled, a component would refuse every chip for good.
+    assert!(seal_attest::check_floor(PlatformId::AzureSnpAci, &tcb(&[("snp", 24)])).is_err());
+    assert!(seal_attest::check_floor(PlatformId::AzureSnpAci, &tcb(&[("milan.fmc", 1)])).is_err());
+    assert!(seal_attest::check_floor(PlatformId::AwsNitro, &tcb(&[("uvm_svn", 100)])).is_err());
     assert_eq!(
         expected.measurement.to_string(),
         "69d6cfe598d6bbdcc21d5c65b9633784225593c20875776d9135c88a5effa87eeb614361e7808b28742607e3571b366b"
@@ -100,7 +122,10 @@ fn ccf_v2_sample_verifies() {
     let v = verify(&ccf_v2_sample(), &NOW).unwrap();
     assert_eq!(v.platform, PlatformId::AzureSnpAci);
     assert_eq!(v.measurement, azure::measurement(&host_data));
-    assert_eq!(v.tcb, tcb(&[("bootloader", 3), ("tee", 0), ("snp", 8), ("microcode", 115), ("uvm_svn", 100)]));
+    assert_eq!(
+        v.tcb,
+        tcb(&[("milan.bootloader", 3), ("milan.tee", 0), ("milan.snp", 8), ("milan.microcode", 115), ("uvm_svn", 100)])
+    );
     assert_eq!(hex::encode(v.report_data), "7a6a68c0a2b85b8aae00ca04f644831680222f44167e5558a9e072b70c60e958");
     assert_eq!(v.deployment, None);
 }
@@ -198,8 +223,16 @@ fn aci_genoa_capture_verifies_with_either_endorsement() {
         assert_eq!(verified.measurement, azure::measurement(&host_data));
         assert_eq!(
             verified.tcb,
-            tcb(&[("bootloader", 10), ("tee", 0), ("snp", 23), ("microcode", 84), ("uvm_svn", 104)])
+            tcb(&[
+                ("genoa.bootloader", 10),
+                ("genoa.tee", 0),
+                ("genoa.snp", 23),
+                ("genoa.microcode", 84),
+                ("uvm_svn", 104)
+            ])
         );
+        assert!(verified.tcb.passes(&floor()));
+        seal_attest::check_floor(PlatformId::AzureSnpAci, &verified.tcb).unwrap();
         assert_eq!(
             hex::encode(verified.report_data),
             "682c0b3fca09ca8346a9861d9bd2dc917e9c1a007872e197a9d22ebd25516218"

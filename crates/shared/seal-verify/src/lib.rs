@@ -21,8 +21,7 @@ use seal_proto::session::{SessionEnd, SignedSessionEnd, SESSION_END_LABEL};
 use seal_proto::signed::Signed;
 use seal_proto::state::{
     LoggedRoot, LoggedState, SignedStateFreshness, SignedTenantAnchor, TenantAnchor, TenantBundle, TenantRoot,
-    TenantState, STATE_FRESHNESS_LABEL, STATE_FRESHNESS_SECS, TENANT_ANCHOR_LABEL, TENANT_ROOT_LABEL,
-    TENANT_STATE_LABEL,
+    TenantState, STATE_FRESHNESS_LABEL, TENANT_ANCHOR_LABEL, TENANT_ROOT_LABEL, TENANT_STATE_LABEL,
 };
 use seal_proto::{PlatformId, PublicKey, TenantId, TenantRootId, TrustedTime, UnixTime};
 use seal_tlog::{policy_not_loosened, LogVerifier, TlogError};
@@ -227,8 +226,9 @@ pub(crate) fn lock_time(time: &TrustedTime, witnessed_at: UnixTime) -> UnixTime 
     time.earliest().min(witnessed_at)
 }
 
-/// Evidence TCB meets the policy's minimum for `platform` component by component
-/// (`Tcb::meets`; absent minimum = accept).
+/// Evidence TCB passes the policy's minimum for `platform` component by component, a family's
+/// floor only for that family, and a family the floor does not list refused (`Tcb::passes`;
+/// absent minimum = accept).
 impl ReleaseVerifier {
     pub fn check_tcb(
         policy: &ReleaseConstraints,
@@ -236,7 +236,7 @@ impl ReleaseVerifier {
         tcb: &seal_proto::release::Tcb,
     ) -> Result<(), VerifyError> {
         match policy.min_tcb.get(&platform) {
-            Some(min) if !tcb.meets(min) => Err(VerifyError::TcbTooLow),
+            Some(min) if !tcb.passes(min) => Err(VerifyError::TcbTooLow),
             _ => Ok(()),
         }
     }
@@ -258,7 +258,8 @@ pub struct TenantTrust {
 #[derive(Clone, Debug)]
 pub struct VerifiedTenant {
     root_id: TenantRootId,
-    /// When the earliest-expiring required freshness statement for the latest state runs out.
+    /// When the earliest-expiring required freshness statement for the latest state runs out,
+    /// by the shorter window of the latest state and the state in force.
     fresh_until: UnixTime,
     /// The chain, versions 1..=N.
     roots: Vec<Public<TenantRoot>>,
@@ -445,7 +446,8 @@ impl VerifiedTenant {
 /// `state.root_version == latest.version`; freshness: a `StateFreshness` for exactly the latest
 /// state (version and digest) signed by the log key, and, when `state.freshness_keys` is
 /// non-empty, one signed by one of them, each with `signed_at <= time.latest() < signed_at +
-/// STATE_FRESHNESS_SECS` (`StateNotFresh` otherwise, which also stops a truncated root chain,
+/// window`, the window being the shorter `TenantState::freshness_window` of the latest state
+/// and the state in force (`StateNotFresh` otherwise, which also stops a truncated root chain,
 /// since the latest state names the latest root); the bundle's `states`: consecutive versions
 /// ending with the latest, each for `tenant`, signed by the root it names (no older than the
 /// previous state's), logged in version order under this chain's root id; then the state in
@@ -490,7 +492,7 @@ impl TenantVerifier {
 
     /// The `TenantAnchor` for `bundle` that `platform`'s guardian signs: `verify`, with the state
     /// in force worked out no later than the bundle is known to be complete, when the freshness
-    /// statements were signed (`fresh_until - STATE_FRESHNESS_SECS`): a newer state logged after
+    /// statements were signed (`fresh_since`): a newer state logged after
     /// that, which the bundle cannot show, must not be missing from what the anchor vouches for.
     pub fn anchor(
         &self,
@@ -499,8 +501,8 @@ impl TenantVerifier {
         bundle: &TenantBundle,
         time: &TrustedTime,
     ) -> Result<TenantAnchor, VerifyError> {
-        let complete = freshness(&self.trust.tlog.log_key, &bundle.state.body, &bundle.freshness, time)?
-            .saturating_sub(STATE_FRESHNESS_SECS);
+        let state = &bundle.state.body;
+        let complete = fresh_since(&self.trust.tlog.log_key, state, &bundle.freshness, state.freshness_window(), time)?;
         let v = self.verify_until(tenant, bundle, time, complete)?;
         Ok(TenantAnchor {
             platform,
@@ -539,7 +541,9 @@ impl TenantVerifier {
             )));
         }
         Self::verify_admin_signed(latest_root, TENANT_STATE_LABEL, signed_state)?;
-        let fresh_until = freshness(&self.trust.tlog.log_key, state, &bundle.freshness, time)?;
+        // The latest state's own window first; the state in force may shorten it below.
+        let fresh_since =
+            fresh_since(&self.trust.tlog.log_key, state, &bundle.freshness, state.freshness_window(), time)?;
 
         let states = match bundle.states.last() {
             // Without log proofs only a first state, which applies at once, can be in force.
@@ -570,6 +574,13 @@ impl TenantVerifier {
                 )
             })?;
         let (in_force, in_force_since) = window::advance(&roots, &states, anchor, since, checked_at);
+        // A longer window widens access, so it waits like any widening change: until the state
+        // that sets it is in force, the shorter window of the one in force applies.
+        let window = state.freshness_window().min(states[in_force].body().freshness_window());
+        let fresh_until = fresh_since.saturating_add(window);
+        if time.latest() >= fresh_until {
+            return Err(VerifyError::StateNotFresh);
+        }
 
         let signals = self.signals(tenant, states[in_force].body(), &bundle.signals);
         Ok(VerifiedTenant {
@@ -850,17 +861,19 @@ fn signed_by_any<T: serde::Serialize>(keys: &[PublicKey], label: &str, signed: &
     })
 }
 
-/// When the earliest-expiring required statement for `state` runs out: the log's, and a
-/// tenant-run signer's when the state names `freshness_keys`. For each requirement the
-/// latest valid statement counts.
-fn freshness(
+/// When the required statements for `state` last vouched for it, the earlier of: the log's
+/// latest, and a tenant-run signer's latest when the state names `freshness_keys`. Each must
+/// be younger than `window` (`StateNotFresh` otherwise); the state is fresh until this plus
+/// `window`.
+fn fresh_since(
     log_key: &PublicKey,
     state: &TenantState,
     statements: &[SignedStateFreshness],
+    window: u64,
     time: &TrustedTime,
 ) -> Result<UnixTime, VerifyError> {
     let digest = labeled_digest(TENANT_STATE_LABEL, state);
-    let expiry = |keys: &[PublicKey]| -> Option<UnixTime> {
+    let latest = |keys: &[PublicKey]| -> Option<UnixTime> {
         statements
             .iter()
             .filter(|f| f.body.tenant == state.tenant && f.body.version == state.version && f.body.digest == digest)
@@ -868,16 +881,16 @@ fn freshness(
             // A statement dated after now could only have been signed in advance, to keep a
             // state alive past its replacement: it never counts.
             .filter(|f| f.body.signed_at <= time.latest())
-            .map(|f| f.body.signed_at.saturating_add(STATE_FRESHNESS_SECS))
-            .filter(|&until| time.latest() < until)
+            .map(|f| f.body.signed_at)
+            .filter(|&at| time.latest() < at.saturating_add(window))
             .max()
     };
-    let log = expiry(std::slice::from_ref(log_key)).ok_or(VerifyError::StateNotFresh)?;
+    let log = latest(std::slice::from_ref(log_key)).ok_or(VerifyError::StateNotFresh)?;
     if state.freshness_keys.is_empty() {
         return Ok(log);
     }
     let tenant_keys: Vec<PublicKey> = state.freshness_keys.iter().copied().collect();
-    let tenant = expiry(&tenant_keys).ok_or(VerifyError::StateNotFresh)?;
+    let tenant = latest(&tenant_keys).ok_or(VerifyError::StateNotFresh)?;
     Ok(log.min(tenant))
 }
 

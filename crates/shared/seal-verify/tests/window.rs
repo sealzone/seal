@@ -76,6 +76,7 @@ impl Tenant {
             issued_at: at,
             pending_window_secs: HOUR,
             app_networks: Default::default(),
+            freshness_secs: None,
         };
         t.log_state(first, at);
         t
@@ -243,6 +244,50 @@ fn shortening_the_window_waits_the_old_one() {
     // Lengthening applies at once.
     t.change(T + 3 * HOUR, None, |s| s.pending_window_secs = 2 * HOUR);
     assert_eq!(in_force(&t.verify(T + 3 * HOUR)), 4);
+}
+
+#[test]
+fn a_replayed_state_lasts_only_its_freshness_window() {
+    const WINDOW: u64 = 600;
+    let mut t = Tenant::new(T);
+    // Shortening the freshness window narrows: it applies at once.
+    t.change(T + 100, None, |s| s.freshness_secs = Some(WINDOW));
+    let v = t.verify(T + 101);
+    assert_eq!((in_force(&v), v.fresh_until()), (2, T + 101 + WINDOW));
+    // The bundle a host keeps, then a revocation.
+    let kept = t.bundle_from(0, T + 200);
+    t.change(T + 300, None, |s| {
+        s.deployments.remove(&deployment(1));
+    });
+    assert_eq!(in_force(&t.verify(T + 300)), 3);
+
+    // Replayed to a verifier without memory (a restarted enclave), the old bundle still works
+    // within its statement's window, and not after it.
+    let replay = |now| TenantVerifier::new(t.trust(), vec![]).verify(&acme(), &kept, &TrustedTime::exact(now));
+    let v = replay(T + 200 + WINDOW - 1).unwrap();
+    assert!(v.state().deployments.contains(&deployment(1)));
+    assert_eq!(replay(T + 200 + WINDOW).unwrap_err(), VerifyError::StateNotFresh);
+
+    // Under the default window the same replay would have worked for a day.
+    let mut d = Tenant::new(T);
+    let kept = d.bundle_from(0, T + 200);
+    d.change(T + 300, None, |s| {
+        s.deployments.remove(&deployment(1));
+    });
+    let replay = TenantVerifier::new(d.trust(), vec![]).verify(&acme(), &kept, &TrustedTime::exact(T + 200 + WINDOW));
+    assert_eq!(replay.unwrap().fresh_until(), T + 200 + seal_proto::state::STATE_FRESHNESS_SECS);
+}
+
+#[test]
+fn lengthening_the_freshness_window_waits_the_pending_window() {
+    let mut t = Tenant::new(T);
+    t.change(T + 100, None, |s| s.freshness_secs = Some(600));
+    t.change(T + 200, None, |s| s.freshness_secs = None);
+    // While the longer window is pending, the shorter one in force bounds the latest state.
+    let v = t.verify(T + 300);
+    assert_eq!((in_force(&v), v.latest_state().version, v.fresh_until()), (2, 3, T + 900));
+    let v = t.verify(T + 200 + HOUR);
+    assert_eq!((in_force(&v), v.fresh_until()), (3, T + 200 + HOUR + seal_proto::state::STATE_FRESHNESS_SECS));
 }
 
 #[test]

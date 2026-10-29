@@ -74,6 +74,7 @@ fn state(version: u64, root_version: u64) -> TenantState {
         issued_at: T,
         pending_window_secs: 0,
         app_networks: Default::default(),
+        freshness_secs: None,
     }
 }
 
@@ -421,6 +422,30 @@ fn a_state_with_freshness_keys_also_needs_a_tenant_statement() {
     key(TENANT_FRESHNESS).cosign(STATE_FRESHNESS_LABEL, &mut cosigned);
     let both = TenantBundle { freshness: vec![cosigned], ..log_only.clone() };
     assert_eq!(v.verify(&acme(), &both, &now).unwrap().fresh_until(), T + SECS);
+}
+
+#[test]
+fn a_tenants_freshness_window_applies_to_the_log_and_tenant_statements() {
+    const WINDOW: u64 = 600;
+    let mut t = Tenant::with(5, |s| {
+        s.freshness_secs = Some(WINDOW);
+        s.freshness_keys.insert(key(TENANT_FRESHNESS).public_key());
+    });
+    let mut bundle = t.bundle();
+    bundle.freshness.push(tenant_statement(&t, TENANT_FRESHNESS, T));
+    let v = t.verifier();
+    assert_eq!(v.verify(&acme(), &bundle, &at(T + WINDOW - 1)).unwrap().fresh_until(), T + WINDOW);
+    // Statements older than the window, though well within 24 h, keep nothing alive.
+    assert_eq!(v.verify(&acme(), &bundle, &at(T + WINDOW)).unwrap_err(), VerifyError::StateNotFresh);
+
+    // A fresh log statement, as the log signs on demand, with a tenant one past the window.
+    let log_now = t.log.freshness_at(&acme(), T + 3 * WINDOW);
+    let stale_tenant = TenantBundle { freshness: vec![log_now.clone(), bundle.freshness[1].clone()], ..bundle.clone() };
+    assert_eq!(v.verify(&acme(), &stale_tenant, &at(T + 3 * WINDOW)).unwrap_err(), VerifyError::StateNotFresh);
+    let tenant_now = tenant_statement(&t, TENANT_FRESHNESS, T + 3 * WINDOW - 100);
+    let fresh = TenantBundle { freshness: vec![log_now, tenant_now], ..bundle };
+    let ok = v.verify(&acme(), &fresh, &at(T + 3 * WINDOW)).unwrap();
+    assert_eq!(ok.fresh_until(), T + 4 * WINDOW - 100, "the earlier of the two, by the tenant's window");
 }
 
 fn signal(tenant: TenantId, source: SignalSource, code: &str, n: u8) -> IntegritySignal {

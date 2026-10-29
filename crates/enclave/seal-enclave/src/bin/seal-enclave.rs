@@ -187,16 +187,19 @@ async fn run() -> Result<(), String> {
     Ok(())
 }
 
-/// Outbound TLS for the guardian, the control plane and upstreams, through the cloud's dialer.
+/// Outbound TLS for the guardian, the control plane and upstreams, through the cloud's dialer, with
+/// certificates checked at trusted time (`seal_tee::tls_time`, first read by `SealService::boot`).
 fn connector(config: &Config, dialer: Arc<dyn seal_net::Dialer>) -> Result<BakedRootsConnector, String> {
     #[cfg(feature = "sim")]
     if let Some(pem) = &config.extra_roots {
-        return BakedRootsConnector::with_extra_roots(dialer, pem).map_err(|e| format!("extra roots: {e}"));
+        return BakedRootsConnector::with_extra_roots(dialer, pem)
+            .map(|c| c.with_time(seal_tee::tls_time()))
+            .map_err(|e| format!("extra roots: {e}"));
     }
     if config.extra_roots.is_some() {
         return Err("extra roots are for sim builds only".into());
     }
-    Ok(BakedRootsConnector::new(dialer))
+    Ok(BakedRootsConnector::new(dialer).with_time(seal_tee::tls_time()))
 }
 
 async fn bind(addr: SocketAddr) -> Result<TcpListener, String> {

@@ -108,6 +108,7 @@ fn state(version: u64, root_version: u64) -> TenantState {
         issued_at: wall_clock(),
         pending_window_secs: 0,
         app_networks: Default::default(),
+        freshness_secs: None,
     }
 }
 
@@ -693,6 +694,27 @@ async fn the_log_statement_is_refreshed_hourly_and_kept_while_the_log_is_down() 
     env.advance(LOG_FRESHNESS_REFRESH_SECS as i64);
     let bundle = env.bundle().await;
     assert_eq!(bundle.freshness, vec![second], "the cached statement while the log is unreachable");
+}
+
+#[tokio::test]
+async fn a_short_freshness_window_refreshes_the_log_statement_sooner() {
+    assert_eq!(log_freshness_refresh(seal_proto::state::STATE_FRESHNESS_SECS), LOG_FRESHNESS_REFRESH_SECS);
+    let env = Env::new().await;
+    env.ready().await;
+    let mut body = state(2, 1);
+    body.freshness_secs = Some(400);
+    let s2 = env.log_state(body);
+    assert_eq!(env.put("/v1/tenants/acme/state", &s2).await, 204);
+    let first = env.bundle().await.freshness[0].clone();
+    assert_eq!(first.body.version, 2);
+    env.advance(50);
+    assert_eq!(env.bundle().await.freshness[0], first, "not due yet");
+
+    env.advance(50);
+    let bundle = env.bundle().await;
+    assert!(bundle.freshness[0].body.signed_at > first.body.signed_at, "due after a quarter of the window");
+    let verified = env.verifier().verify(&acme(), &bundle, &TrustedTime::exact(env.now())).unwrap();
+    assert_eq!(verified.fresh_until(), bundle.freshness[0].body.signed_at + 400);
 }
 
 #[tokio::test]

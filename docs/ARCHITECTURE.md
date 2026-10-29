@@ -277,7 +277,8 @@ so Seal-hosted replicas of every tenant run one release.
 
 `seal-release` turns a build into a release: the measurement (the image digest on GCP, the
 `host_data` of the rewritten `az confcom` policy on Azure), 2-of-3 signatures, the log entry and
-the upload. It also checks a booted guardian's attested key before that key enters the trust.
+the upload. It also checks a booted guardian's attested key before that key enters the trust,
+and a checkpoint policy before the log takes it (`seal-release policy`).
 
 ### Guardians and keys
 
@@ -289,7 +290,8 @@ guardian's security rests on attestation and HPKE-sealed responses, so it holds 
 Seal runs the guardians, control plane and log, with one guardian per enclave platform, each
 with its own platform root, reached over the network. Running enclaves keep keys in memory, so a
 Seal or cloud outage blocks enclave boots and first-time tenant key fetches at once, and
-running enclaves only after `STATE_FRESHNESS_SECS` (24 h) without a fresh state statement.
+running enclaves only after the tenant's freshness window (`STATE_FRESHNESS_SECS`, 24 h, unless
+the state sets a shorter one) without a fresh state statement.
 
 Seal's guardian runs on ACI with its root behind Key Vault Premium. It generated the root in
 its TEE at the ceremony and keeps it only RSA-OAEP-wrapped under an exportable `RSA-HSM` key
@@ -418,10 +420,15 @@ how the code is built.
   added. The guardian requires a checkpoint less than 24 h old. Witnesses are run by parties
   other than Seal, and their timestamps measure the release time lock.
 - Azure TCB minimums are per component (`Tcb`), never packed integers, because AMD reorders the
-  packed fields between CPU generations. The floors live in checkpoint policy and the guardian
-  enforces them, so they rise without touching an immutable release policy. Azure's
-  `Measurement` is the hash of the container-policy `host_data`, which Key Vault pins, not the
-  UVM.
+  packed fields between CPU generations. They are also per chip family (`milan.snp`,
+  `genoa.snp`, `turin.fmc`), because each family numbers its firmware on its own scale: a
+  family's floor applies only to that family's reports, and once a floor names any family, a
+  family it does not name is refused, so new hardware needs a floor of its own before it is
+  accepted. `uvm_svn` has no family and applies to all. The floors live in checkpoint policy
+  and the guardian enforces them, so they rise without touching an immutable release policy.
+  `seal-release policy` (`seal_attest::check_floor`) refuses a floor naming a component the
+  platform's evidence lacks, which would refuse that platform for good. Azure's `Measurement`
+  is the hash of the container-policy `host_data`, which Key Vault pins, not the UVM.
 - Service keys (token, ingest, telemetry, TLS, ticket) are per tenant root and
   `ServiceKeyVersion`, derived identically by that version's enclaves. The TLS chain (a CA and
   the leaf it signs) is deterministic, so clients can pin the key or trust the CA. The guardian

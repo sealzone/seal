@@ -151,7 +151,8 @@ async fn genoa_capture_assembles_verifiable_evidence() {
     let verified = seal_attest::verify(&evidence, &CAPTURED_AT).unwrap();
     assert_eq!(verified.measurement, attestor.measurement());
     assert_eq!(verified.report_data, capture_report_data());
-    let tcb = [("bootloader", 10), ("tee", 0), ("snp", 23), ("microcode", 84), ("uvm_svn", 104)];
+    let tcb =
+        [("genoa.bootloader", 10), ("genoa.tee", 0), ("genoa.snp", 23), ("genoa.microcode", 84), ("uvm_svn", 104)];
     assert_eq!(verified.tcb.0, tcb.into_iter().map(|(k, v)| (k.to_owned(), v)).collect());
     assert!(dialer.0.lock().unwrap().is_empty());
 

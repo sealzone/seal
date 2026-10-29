@@ -110,14 +110,25 @@ pub enum Clock {
 }
 
 impl Clock {
+    /// A fresh reading. Its latest end also becomes `tls_time()`'s anchor.
     pub async fn now(&self) -> Result<TrustedTime, TeeError> {
-        match self {
+        let time = match self {
             Clock::Roughtime(c) => c.now().await,
             Clock::Nitro(clock) => clock.now().await,
             #[cfg(feature = "sim")]
             Clock::System(c) => c.now(),
-        }
+        }?;
+        tls_time().record(time.latest());
+        Ok(time)
     }
+}
+
+/// The time this process checks certificates at, for `seal_net::BakedRootsConnector::with_time`:
+/// every `Clock::now` reading feeds it, and it has none before the first. One per process, like
+/// the clock.
+pub fn tls_time() -> std::sync::Arc<seal_net::TrustedTlsTime> {
+    static TIME: std::sync::OnceLock<std::sync::Arc<seal_net::TrustedTlsTime>> = std::sync::OnceLock::new();
+    TIME.get_or_init(Default::default).clone()
 }
 
 mod detect {

@@ -78,6 +78,9 @@ const MEASUREMENT_LABEL: &[u8] = b"gcp-confidential-space";
 const NBF_SKEW_SECS: u64 = 60;
 
 const HARDWARE_MODELS: [&str; 2] = ["GCP_INTEL_TDX", "GCP_AMD_SEV_SNP"];
+/// Every `Tcb` component a token can carry (the last two from TDX only).
+pub(crate) const TCB_COMPONENTS: [&str; 4] =
+    ["cs_version", "cs_stable", "tdx_tcb_status", "tdx_tcb_evaluation_data_number"];
 
 pub(crate) fn verify(token: &str, time: &TrustedTime) -> Result<VerifiedEvidence, AttestError> {
     verify_with_root(token, time, &baked_root()?)

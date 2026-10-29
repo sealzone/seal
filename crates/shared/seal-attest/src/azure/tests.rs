@@ -80,7 +80,7 @@ const CCF_HOST_DATA: &str = "4f4448c67f3c8dfc8de8a5e37125d807dadcc41f06cf23f615d
 #[test]
 fn milan_report() {
     let h = hw(MILAN, &milan_vcek()).unwrap();
-    assert_eq!(h.tcb, tcb(&[("bootloader", 4), ("tee", 0), ("snp", 24), ("microcode", 219)]));
+    assert_eq!(h.tcb, tcb(&[("milan.bootloader", 4), ("milan.tee", 0), ("milan.snp", 24), ("milan.microcode", 219)]));
     assert_eq!(
         h.measurement,
         hex48("5feee30d6d7e1a29f403d70a4198237ddfb13051a2d6976439487c609388ed7f98189887920ab2fa0096903a0c23fca1")
@@ -92,14 +92,17 @@ fn milan_report() {
 #[test]
 fn genoa_report() {
     let h = hw(GENOA, &genoa_vcek()).unwrap();
-    assert_eq!(h.tcb, tcb(&[("bootloader", 10), ("tee", 0), ("snp", 23), ("microcode", 84)]));
+    assert_eq!(h.tcb, tcb(&[("genoa.bootloader", 10), ("genoa.tee", 0), ("genoa.snp", 23), ("genoa.microcode", 84)]));
     assert_eq!(h.host_data, hex32(CCF_HOST_DATA));
 }
 
 #[test]
 fn turin_report() {
     let h = hw(TURIN, &turin_vcek()).unwrap();
-    assert_eq!(h.tcb, tcb(&[("fmc", 1), ("bootloader", 1), ("tee", 1), ("snp", 4), ("microcode", 81)]));
+    assert_eq!(
+        h.tcb,
+        tcb(&[("turin.fmc", 1), ("turin.bootloader", 1), ("turin.tee", 1), ("turin.snp", 4), ("turin.microcode", 81)])
+    );
     assert_eq!(
         h.measurement,
         hex48("6d6c354511d6f7c6d7504668903dc5bdc066a048b651840d8d03fb85299ebfa142fccf1d1b0baca496841bdf243619d4")
@@ -111,7 +114,7 @@ fn turin_report() {
 fn version_2_report_without_cpuid() {
     let h = hw(MILAN_V2, MILAN_V2_VCEK).unwrap();
     // CURRENT_TCB differs (microcode 0xD2); REPORTED_TCB is what the VCEK certifies.
-    assert_eq!(h.tcb, tcb(&[("bootloader", 3), ("tee", 0), ("snp", 8), ("microcode", 115)]));
+    assert_eq!(h.tcb, tcb(&[("milan.bootloader", 3), ("milan.tee", 0), ("milan.snp", 8), ("milan.microcode", 115)]));
     assert_eq!(h.report_data, hex32("7a6a68c0a2b85b8aae00ca04f644831680222f44167e5558a9e072b70c60e958"));
 }
 
@@ -194,6 +197,12 @@ fn tampered_report_is_rejected() {
 fn debug_policy_is_refused() {
     let r = tampered(MILAN, |r| r[0x0A] |= 0x08);
     assert!(matches!(hw(&r, &milan_vcek()), Err(AttestError::DebugMode)));
+}
+
+#[test]
+fn migration_agent_policy_is_refused() {
+    let r = tampered(MILAN, |r| r[0x0A] |= 0x04);
+    assert_rejected(hw(&r, &milan_vcek()), "migration agent");
 }
 
 #[test]

@@ -11,17 +11,25 @@ impl HttpPolicy {
     /// - the destination is `Https`;
     /// - `method` is in `HttpRules::methods` (exact, case-sensitive), or that set is empty;
     /// - `path` is inside the destination's `path_prefix`;
-    /// - `path` is inside none of `HttpRules::deny_path_prefixes`.
+    /// - `path` is inside none of `HttpRules::deny_path_prefixes`;
+    /// - when the policy restricts paths (a destination prefix other than `/`, or a denied
+    ///   prefix), `path` has no `;` after the destination prefix.
     ///
-    /// "Inside a prefix" compares the literal bytes on a segment boundary: `/v1` covers `/v1`
+    /// "Inside a prefix" compares the bytes on a segment boundary: `/v1` covers `/v1`
     /// and `/v1/chat`, not `/v10`; a destination prefix `/v1/` covers `/v1/chat`, not `/v1`,
-    /// while a denied prefix `/v1/keys/` covers `/v1/keys` too.
+    /// while a denied prefix `/v1/keys/` covers `/v1/keys` too. The destination prefix matches
+    /// exactly; denied prefixes ignore ASCII case, since many servers do. Servers that strip
+    /// `;params` from segments (`/v1/keys;x`, `/v1/x/..;/keys`) are why `;` is refused.
     pub fn check(policy: &SecretPolicy, method: &str, path: &HttpPath) -> Result<(), ErrorCode> {
         let Destination::Https { path_prefix, .. } = policy.destination() else {
             return Err(ErrorCode::PolicyDenied);
         };
         let path = path.as_str();
-        if !within(path, path_prefix) {
+        if !within(path, path_prefix, false) {
+            return Err(ErrorCode::PolicyDenied);
+        }
+        let restricted = path_prefix != "/" || policy.http().is_some_and(|r| !r.deny_path_prefixes.is_empty());
+        if restricted && path[path_prefix.len()..].contains(';') {
             return Err(ErrorCode::PolicyDenied);
         }
         if let Some(rules) = policy.http() {
@@ -41,16 +49,16 @@ pub struct HttpPolicy;
 /// Denied prefixes err on the side of denying: `/v1/keys/` also covers `/v1/keys`.
 fn denied(path: &str, deny: &str) -> bool {
     let trimmed = deny.trim_end_matches('/');
-    within(path, deny) || (!trimmed.is_empty() && within(path, trimmed))
+    within(path, deny, true) || (!trimmed.is_empty() && within(path, trimmed, true))
 }
 
-/// `path` equals `prefix` or continues it after a `/`.
-fn within(path: &str, prefix: &str) -> bool {
-    match path.strip_prefix(prefix) {
-        Some("") => true,
-        Some(rest) => prefix.ends_with('/') || rest.starts_with('/'),
-        None => false,
-    }
+/// `path` equals `prefix` or continues it after a `/`; `fold_case` ignores ASCII case.
+fn within(path: &str, prefix: &str, fold_case: bool) -> bool {
+    let rest = match path.get(..prefix.len()) {
+        Some(head) if head == prefix || (fold_case && head.eq_ignore_ascii_case(prefix)) => &path[prefix.len()..],
+        _ => return false,
+    };
+    rest.is_empty() || prefix.ends_with('/') || rest.starts_with('/')
 }
 
 #[cfg(test)]
@@ -129,6 +137,30 @@ mod tests {
             "a trailing slash still denies the bare path"
         );
         assert_eq!(check(&p, "GET", "/v1/administrator"), Ok(()));
+    }
+
+    #[test]
+    fn denied_prefixes_ignore_case() {
+        let p = policy("https://api.example.com/v1", &[], &["/v1/keys"]);
+        assert_eq!(check(&p, "GET", "/v1/KEYS"), Err(ErrorCode::PolicyDenied));
+        assert_eq!(check(&p, "GET", "/v1/Keys/1"), Err(ErrorCode::PolicyDenied));
+        assert_eq!(check(&p, "GET", "/v1/KEYSTORE"), Ok(()), "segment boundary");
+        assert_eq!(check(&p, "GET", "/V1/keys"), Err(ErrorCode::PolicyDenied), "the destination prefix stays exact");
+    }
+
+    #[test]
+    fn semicolons_refused_when_paths_are_restricted() {
+        let deny = policy("https://api.example.com", &[], &["/v1/keys"]);
+        let prefix = policy("https://api.example.com/v1", &[], &[]);
+        let open = policy("https://api.example.com", &[], &[]);
+        for path in ["/v1/keys;x", "/v1/keys;x/new", "/v1/models;x", "/v1/x/..;/keys"] {
+            assert_eq!(check(&deny, "GET", path), Err(ErrorCode::PolicyDenied), "{path}");
+            assert_eq!(check(&prefix, "GET", path), Err(ErrorCode::PolicyDenied), "{path}");
+            assert_eq!(check(&open, "GET", path), Ok(()), "{path}: nothing to bypass");
+        }
+        let in_prefix = policy("https://api.example.com/v1;v=2", &[], &[]);
+        assert_eq!(check(&in_prefix, "GET", "/v1;v=2/models"), Ok(()), "the destination's own `;`");
+        assert_eq!(check(&in_prefix, "GET", "/v1;v=2/models;x"), Err(ErrorCode::PolicyDenied));
     }
 
     #[test]

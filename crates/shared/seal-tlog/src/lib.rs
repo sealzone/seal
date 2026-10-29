@@ -254,7 +254,10 @@ impl LogVerifier {
 
 /// Witness rule: `new` must not loosen `old`: every `min_service_key_version` ≥, every
 /// `min_tcb` meets the old one (`Tcb::meets`), no platform or TCB component removed, and
-/// `revoked_keys` and `revoked_measurements` keep everything `old` revoked.
+/// `revoked_keys` and `revoked_measurements` keep everything `old` revoked. A `min_tcb` may
+/// gain a family floor (`turin.snp`): that admits a family the floor refused until then, at
+/// that floor, and only rises afterwards. A family is shut out for good with a floor no
+/// firmware reaches (a component above 255).
 pub fn policy_not_loosened(
     old: &seal_proto::release::ReleaseConstraints,
     new: &seal_proto::release::ReleaseConstraints,

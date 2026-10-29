@@ -89,6 +89,32 @@ async fn widening_changes_wait_the_window_and_watch_shows_them() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn the_freshness_window_narrows_at_once_and_widens_after_the_pending_window() {
+    let servers = Servers::start("freshness-window").await;
+    let home = servers.dir.0.join("home");
+    let files = servers.write_home(&home);
+    let key = files.key.to_str().unwrap();
+    init(&home, &files, &["--pending-window", "1h"]).await;
+    let out = ok(&home, &["settings", "freshness", "window", "--key-file", key]).await;
+    assert!(out.contains("freshness window 1d"), "{out}");
+    let (success, _, stderr) = seal(&home, &["settings", "freshness", "window", "1m", "--key-file", key]).await;
+    assert!(!success && stderr.contains("the freshness window is 5m to 1d"), "{stderr}");
+
+    let out = ok(&home, &["settings", "freshness", "window", "10m", "--yes", "--key-file", key]).await;
+    assert!(out.contains("this narrows access") && out.contains("~ freshness window: 86400s -> 600s"), "{out}");
+    let verified = servers.verified();
+    assert_eq!((verified.state().version, verified.state().freshness_secs), (2, Some(600)));
+    let out = ok(&home, &["settings", "freshness", "--json", "--key-file", key]).await;
+    assert!(out.contains(r#""freshness_secs":600"#), "{out}");
+
+    // Back to the default lengthens it: it waits the pending window.
+    let out = ok(&home, &["settings", "freshness", "window", "default", "--yes", "--key-file", key]).await;
+    assert!(out.contains("this widens access") && out.contains("takes effect in 1h"), "{out}");
+    let verified = servers.verified();
+    assert_eq!((verified.state().version, verified.latest_state().freshness_secs), (2, None));
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn init_grants_settings_and_status_end_to_end() {
     let servers = Servers::start("e2e").await;
     let home = servers.dir.0.join("home");

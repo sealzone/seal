@@ -20,6 +20,11 @@
 //!                                                                              aci-policy template.json, checked to
 //!                                                                              measure HEX, PUT after the evidence
 //!                                                                              for `seal deploy`
+//! seal-release policy FILE [--log URL]                                        check a checkpoint policy (JSON
+//!                                                                              `ReleaseConstraints`) against the
+//!                                                                              platforms' TCB components and the
+//!                                                                              log's current policy; prints it
+//!                                                                              for the log's `PUT /v1/policy`
 //! seal-release guardian-identity --url URL --measurement HEX                 a booted guardian's attested key (https, or
 //!                                                                              http straight to the guardian: the
 //!                                                                              evidence authenticates the answer)
@@ -42,7 +47,7 @@ use clap::{Parser, Subcommand};
 
 use seal_proto::release::Component;
 use seal_proto::{Measurement, PlatformId, PublicKey, ServiceKeyVersion};
-use seal_release::{aci, release, trust};
+use seal_release::{aci, policy, release, trust};
 
 #[derive(Parser)]
 #[command(name = "seal-release", about = "Seal release tooling (development)")]
@@ -132,6 +137,14 @@ enum Command {
         /// Azure enclave releases: the deployable template (`aci-policy` output) `seal deploy` uses
         #[arg(long)]
         template: Option<PathBuf>,
+    },
+    /// Check a checkpoint policy before it is set on the log
+    Policy {
+        /// `ReleaseConstraints` as JSON
+        file: PathBuf,
+        /// The log: the policy must not loosen its current checkpoint's
+        #[arg(long)]
+        log: Option<url::Url>,
     },
     /// A booted guardian's key, from its attested `GET /v1/identity`
     GuardianIdentity {
@@ -261,6 +274,19 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 bail!("--maa: not an attestation endpoint: {maa}");
             }
             println!("{}", serde_json::to_string(&seal_guardian::keysource::release_policy(&host_data, &maa))?);
+        }
+        Command::Policy { file, log } => {
+            let policy: seal_proto::release::ReleaseConstraints =
+                serde_json::from_str(&read(&file)?).with_context(|| format!("{}", file.display()))?;
+            let current = match log {
+                None => None,
+                Some(log) => {
+                    let log = seal::admin::LogClient::with_https(log, seal::admin::https());
+                    Some(log.checkpoint().await.context("the log's checkpoint")?.checkpoint.policy)
+                }
+            };
+            policy::check(&policy, current.as_ref())?;
+            println!("{}", serde_json::to_string(&policy)?);
         }
         Command::Publish {
             component,

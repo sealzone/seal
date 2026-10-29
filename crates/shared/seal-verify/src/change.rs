@@ -20,6 +20,7 @@
 //! | `freshness_keys` | adding one | removing one |
 //! | `telemetry_readers` | removing one while others remain | adding one; removing the last |
 //! | `pending_window_secs` | lengthening | shortening |
+//! | `freshness_secs` | shortening (setting it shortens) | lengthening (clearing it lengthens) |
 //! | root `admin_keys` | | adding or removing a key |
 //! | root `threshold` | raising | lowering |
 //! | root `cosign_releases` | turning it on | turning it off |
@@ -177,6 +178,11 @@ pub enum Item {
     PendingWindow {
         old: u64,
         new: u64,
+    },
+    /// `TenantState::freshness_secs` (`None`: `STATE_FRESHNESS_SECS`).
+    FreshnessWindow {
+        old: Option<u64>,
+        new: Option<u64>,
     },
     AdminKeyAdded {
         key: AdminKey,
@@ -362,6 +368,13 @@ pub fn diff_states(old: &TenantState, new: &TenantState) -> Vec<Difference> {
     if ow != nw {
         d.when(nw < ow, Item::PendingWindow { old: ow, new: nw });
     }
+    // A longer window keeps a replayed older state usable for longer.
+    if old.freshness_secs != new.freshness_secs {
+        d.when(
+            new.freshness_window() > old.freshness_window(),
+            Item::FreshnessWindow { old: old.freshness_secs, new: new.freshness_secs },
+        );
+    }
     d.0
 }
 
@@ -502,6 +515,7 @@ mod tests {
             issued_at: 1,
             pending_window_secs: 3600,
             app_networks: [(app("checkout"), [net("203.0.113.0/24"), net("198.51.100.7/32")].into())].into(),
+            freshness_secs: Some(3_600),
         }
     }
 
@@ -805,6 +819,23 @@ mod tests {
         assert_eq!(narrows(|s| s.pending_window_secs = 7200), Item::PendingWindow { old: 3600, new: 7200 });
         assert_eq!(widens(|s| s.pending_window_secs = 60), Item::PendingWindow { old: 3600, new: 60 });
         assert_eq!(widens(|s| s.pending_window_secs = 0), Item::PendingWindow { old: 3600, new: 0 });
+    }
+
+    #[test]
+    fn freshness_window() {
+        let window = |old, new| Item::FreshnessWindow { old, new };
+        assert_eq!(narrows(|s| s.freshness_secs = Some(600)), window(Some(3_600), Some(600)));
+        assert_eq!(widens(|s| s.freshness_secs = Some(7_200)), window(Some(3_600), Some(7_200)));
+        assert_eq!(widens(|s| s.freshness_secs = None), window(Some(3_600), None));
+
+        // Setting it where none was set shortens the 24-hour default.
+        let old = TenantState { freshness_secs: None, ..base() };
+        let new = TenantState { freshness_secs: Some(86_399), ..old.clone() };
+        assert_eq!(
+            diff_states(&old, &new),
+            [Difference { change: Change::Narrowing, item: window(None, Some(86_399)) }]
+        );
+        assert_eq!(classify_state(&new, &old), Change::Widening);
     }
 
     #[test]

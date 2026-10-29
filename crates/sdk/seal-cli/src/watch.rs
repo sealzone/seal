@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use seal::admin::{describe, platform_name, Admin, Current};
 use seal_proto::identity::HostedMode;
+use seal_proto::state::STATE_FRESHNESS_SECS;
 use seal_proto::{TrustedTime, UnixTime};
 use seal_verify::change::{Change, Difference, Item};
 use seal_verify::Pending;
@@ -122,6 +123,10 @@ pub fn line(d: &Difference) -> String {
         Item::TelemetryReaderAdded { key } => format!("+ telemetry reader: {key}"),
         Item::TelemetryReaderRemoved { key } => format!("- telemetry reader: {key}"),
         Item::PendingWindow { old, new } => format!("~ pending window: {} -> {}", span(*old), span(*new)),
+        Item::FreshnessWindow { old, new } => {
+            let window = |w: &Option<u64>| w.map_or_else(|| format!("{} (default)", span(STATE_FRESHNESS_SECS)), span);
+            format!("~ freshness window: {} -> {}", window(old), window(new))
+        }
         Item::AdminKeyAdded { key } => format!("+ admin key {}", seal_crypto::sign::admin_key_id(key)),
         Item::AdminKeyRemoved { key } => format!("- admin key {}", seal_crypto::sign::admin_key_id(key)),
         Item::Threshold { old, new } => format!("~ threshold: {old} -> {new}"),
@@ -256,6 +261,8 @@ mod tests {
     fn lines_say_their_classification() {
         let d = Difference { change: Change::Widening, item: Item::PendingWindow { old: 3_600, new: 0 } };
         assert_eq!(line(&d), "~ pending window: 1h -> 0s (widening)");
+        let d = Difference { change: Change::Narrowing, item: Item::FreshnessWindow { old: None, new: Some(600) } };
+        assert_eq!(line(&d), "~ freshness window: 1d (default) -> 10m (narrowing)");
         let pending = Pending {
             version: 4,
             root_version: 1,

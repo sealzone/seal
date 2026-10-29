@@ -81,7 +81,8 @@ pub struct TenantStateLeaf {
 pub struct ReleaseConstraints {
     /// Releases with an older `service_key_version` get no keys.
     pub min_service_key_version: BTreeMap<PlatformId, ServiceKeyVersion>,
-    /// Minimum platform TCB per platform, compared component by component (`Tcb::meets`).
+    /// Minimum platform TCB per platform, compared component by component, each family's
+    /// floor only with that family's evidence (`Tcb::passes`).
     pub min_tcb: BTreeMap<PlatformId, Tcb>,
     /// Release, auditor and witness keys that no longer count (a leaked key below the
     /// threshold). Only grows. The trust compiled into the guardian never changes, so this
@@ -93,11 +94,15 @@ pub struct ReleaseConstraints {
     pub revoked_measurements: BTreeMap<PlatformId, BTreeSet<Measurement>>,
 }
 
-/// A platform's trusted computing base as named version components:
-/// - Azure SNP ACI: `bootloader`, `tee`, `snp`, `microcode` (and `fmc` on Turin and later)
-///   from the report's REPORTED_TCB, decoded by the chip family whose AMD key verified the
-///   report, plus `uvm_svn` from Microsoft's UVM endorsement (production floor at least 100).
-///   Never compared as a packed integer: AMD reorders the packed fields between CPU generations.
+/// A platform's trusted computing base as named version components. A name `family.component`
+/// belongs to one hardware family: evidence carries the components of its own family only, and
+/// a floor's `family.*` entries apply only to evidence of that family (`Tcb::passes`).
+/// - Azure SNP ACI: `<family>.bootloader`, `.tee`, `.snp` and `.microcode` (and `.fmc` on
+///   Turin and later) from the report's REPORTED_TCB, with family `milan`, `genoa` or `turin`
+///   (the AMD key that verified the report), plus `uvm_svn` from Microsoft's UVM endorsement
+///   (production floor at least 100). Each family numbers its firmware on its own scale, so
+///   a floor names each family it admits. Never compared as a packed integer: AMD reorders
+///   the packed fields between CPU generations.
 /// - AWS Nitro: none. The Nitro hypervisor is AWS-run and not versioned in the attestation
 ///   document, so `min_tcb` has no entry for it; retirement works through releases only.
 /// - GCP Confidential Space: `cs_version` (the token's `swversion`) and `cs_stable` (1 when
@@ -108,10 +113,32 @@ pub struct ReleaseConstraints {
 pub struct Tcb(pub BTreeMap<String, u64>);
 
 impl Tcb {
-    /// Every component `minimum` names is present here and at least as high.
+    /// Every component `minimum` names is present here and at least as high. Compares two
+    /// floors (`seal_tlog::policy_not_loosened`); evidence is checked with `passes`.
     pub fn meets(&self, minimum: &Tcb) -> bool {
         minimum.0.iter().all(|(name, min)| self.0.get(name).is_some_and(|have| have >= min))
     }
+
+    /// Whether evidence with this TCB passes `floor`:
+    /// - a component without a family (no `.`) must be present here and at least as high;
+    /// - `family.component` entries apply only when this evidence is of that family, and then
+    ///   each must be present and at least as high;
+    /// - when `floor` names any family, this evidence must be of one of them. A family the
+    ///   floor does not list, such as hardware newer than the floor, is refused.
+    pub fn passes(&self, floor: &Tcb) -> bool {
+        let mine: BTreeSet<&str> = self.0.keys().filter_map(|name| family(name)).collect();
+        let listed: BTreeSet<&str> = floor.0.keys().filter_map(|name| family(name)).collect();
+        (listed.is_empty() || !listed.is_disjoint(&mine))
+            && floor.0.iter().all(|(name, min)| match family(name) {
+                Some(other) if !mine.contains(other) => true,
+                _ => self.0.get(name).is_some_and(|have| have >= min),
+            })
+    }
+}
+
+/// The family of a `family.component` name.
+fn family(name: &str) -> Option<&str> {
+    name.split_once('.').map(|(family, _)| family)
 }
 
 /// A log checkpoint (C2SP signed-note style, CBOR-encoded).
@@ -335,5 +362,42 @@ mod tests {
         // A component the minimum names must be present.
         assert!(!tcb(&[("snp", 22), ("microcode", 213)]).meets(&min));
         assert!(tcb(&[]).meets(&Tcb::default()));
+    }
+
+    #[test]
+    fn floors_without_families_pass_as_meets() {
+        let min = tcb(&[("cs_stable", 1), ("tdx_tcb_status", 3)]);
+        assert!(tcb(&[("cs_stable", 1), ("tdx_tcb_status", 3), ("cs_version", 9)]).passes(&min));
+        assert!(!tcb(&[("cs_stable", 1), ("tdx_tcb_status", 2)]).passes(&min));
+        assert!(!tcb(&[("cs_stable", 1)]).passes(&min));
+        assert!(tcb(&[]).passes(&Tcb::default()));
+        assert!(tcb(&[("milan.snp", 1)]).passes(&Tcb::default()));
+    }
+
+    #[test]
+    fn a_family_floor_applies_to_its_family_only() {
+        let floor = tcb(&[("milan.snp", 24), ("milan.microcode", 219), ("turin.fmc", 1), ("uvm_svn", 100)]);
+        let milan = |snp, microcode| tcb(&[("milan.snp", snp), ("milan.microcode", microcode), ("uvm_svn", 100)]);
+        assert!(milan(24, 219).passes(&floor));
+        assert!(!milan(23, 255).passes(&floor));
+        assert!(!milan(24, 218).passes(&floor));
+        // Turin's fmc is never asked of Milan, and Milan's numbers never of Turin.
+        let turin = |fmc| tcb(&[("turin.fmc", fmc), ("turin.snp", 4), ("turin.microcode", 81), ("uvm_svn", 100)]);
+        assert!(turin(1).passes(&floor));
+        assert!(!turin(0).passes(&floor));
+        // A component without a family applies to every family.
+        assert!(!tcb(&[("milan.snp", 24), ("milan.microcode", 219), ("uvm_svn", 99)]).passes(&floor));
+        // A family-only floor component the evidence lacks is still required.
+        assert!(!tcb(&[("milan.snp", 24), ("uvm_svn", 100)]).passes(&floor));
+    }
+
+    #[test]
+    fn a_family_the_floor_does_not_list_is_refused() {
+        let floor = tcb(&[("milan.snp", 24), ("uvm_svn", 100)]);
+        assert!(!tcb(&[("genoa.snp", 99), ("uvm_svn", 100)]).passes(&floor));
+        // Evidence without any family fails a floor that lists families.
+        assert!(!tcb(&[("snp", 99), ("uvm_svn", 100)]).passes(&floor));
+        // A floor without families admits every family.
+        assert!(tcb(&[("genoa.snp", 1), ("uvm_svn", 100)]).passes(&tcb(&[("uvm_svn", 100)])));
     }
 }

@@ -119,6 +119,7 @@ async fn init_resumes_where_a_failed_run_stopped() {
         issued_at: now().now,
         pending_window_secs: 0,
         app_networks: Default::default(),
+        freshness_secs: None,
     };
     let state = Admin::sign_state(&root.body, state, std::slice::from_ref(&key)).unwrap();
     servers.admin(None).log().append_state(&acme(), &state).await.unwrap();
@@ -175,6 +176,7 @@ async fn init_resubmits_a_proposed_state_the_log_holds() {
         issued_at: now().now,
         pending_window_secs: 3_600,
         app_networks: Default::default(),
+        freshness_secs: None,
     };
     let state = Admin::sign_state(&root.body, state, std::slice::from_ref(&key)).unwrap();
     servers.admin(None).log().append_state(&acme(), &state).await.unwrap();

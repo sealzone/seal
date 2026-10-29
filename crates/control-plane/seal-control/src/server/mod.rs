@@ -53,8 +53,16 @@ use store::{Freshness, Store, TenantDocs, TenantEntry};
 use token::ConsoleKeys;
 use upstream::{Appended, Upstreams};
 
-/// The log's statement in the bundle is refetched once it is this old.
+/// The log's statement in the bundle is refetched once it is this old, or a quarter of the
+/// tenant's freshness window if that is sooner (`log_freshness_refresh`).
 pub const LOG_FRESHNESS_REFRESH_SECS: u64 = 3_600;
+
+/// How old the log's statement may get before a bundle refetches it, for states whose shortest
+/// freshness window is `window`: a quarter of it, at most `LOG_FRESHNESS_REFRESH_SECS`, so
+/// replicas reloading every `STATE_RELOAD_SECS` always hold a current one.
+pub fn log_freshness_refresh(window: u64) -> u64 {
+    LOG_FRESHNESS_REFRESH_SECS.min(window / 4)
+}
 /// A guardian's anchor in the bundle is renewed once it is this old, so bundles carry about
 /// `MAX_PENDING_WINDOW_SECS` plus this much of a tenant's states.
 pub const ANCHOR_REFRESH_SECS: u64 = 3_600;
@@ -456,11 +464,16 @@ async fn get_bundle(
         return Err(ApiError::not_found("no root chain and state for this tenant"));
     };
     let now = app.now();
+    let keys = app.anchor_keys(&state.body.platforms);
+    let stored = entry.lock().await.logged_states(oldest_anchored(&keys, &docs.anchors))?;
 
-    // The log's statement: refetched when missing or an hour old; the cached one stays in
-    // use while the log is unreachable.
+    // The log's statement: refetched when missing or due by the shortest freshness window of
+    // the states the bundle can carry (the one in force is among them); the cached one stays
+    // in use while the log is unreachable.
+    let window = stored.iter().map(|s| s.state.body.freshness_window()).fold(state.body.freshness_window(), u64::min);
     let mut log_statement = docs.freshness.log.clone().filter(|s| for_state(s, &state.body));
-    let due = log_statement.as_ref().is_none_or(|s| now >= s.body.signed_at.saturating_add(LOG_FRESHNESS_REFRESH_SECS));
+    let due =
+        log_statement.as_ref().is_none_or(|s| now >= s.body.signed_at.saturating_add(log_freshness_refresh(window)));
     if due {
         match app.log_freshness(&tenant).await {
             Ok(Some(fresh)) if for_state(&fresh, &state.body) => {
@@ -528,7 +541,6 @@ async fn get_bundle(
             None
         }
     };
-    let keys = app.anchor_keys(&state.body.platforms);
     let mut bundle = TenantBundle {
         root_chain: docs.roots.clone(),
         signals: docs.signals.into_iter().filter(|s| state.body.integrity.is_live(&s.body, &time)).collect(),
@@ -540,8 +552,6 @@ async fn get_bundle(
         checkpoint,
         anchors: docs.anchors.clone(),
     };
-    let from = oldest_anchored(&keys, &bundle.anchors);
-    let stored = entry.lock().await.logged_states(from)?;
     bundle.states = app.served_states(stored.clone(), &bundle, &keys, &time);
     if app.refresh_anchors(&tenant, root_id, &keys, &mut bundle, now).await {
         let mut e = entry.lock().await;

@@ -253,6 +253,7 @@ fn build() -> Vec<Vector> {
         issued_at: 1_900_000_000,
         pending_window_secs: 0,
         app_networks: Default::default(),
+        freshness_secs: None,
     };
     v.signed("state/tenant-state", TENANT_STATE_LABEL, &state);
     let state_digest = labeled_digest(TENANT_STATE_LABEL, &state);
@@ -327,6 +328,9 @@ fn build() -> Vec<Vector> {
     // (`TenantBundle::states`) and a guardian's anchor (`TenantBundle::anchors`).
     let windowed = TenantState { version: 8, pending_window_secs: 86_400, ..state.clone() };
     v.signed("state/tenant-state-pending-window", TENANT_STATE_LABEL, &windowed);
+    // A state with its own freshness window (`TenantState::freshness_secs`).
+    let short_fresh = TenantState { version: 9, freshness_secs: Some(600), ..state.clone() };
+    v.signed("state/tenant-state-freshness-window", TENANT_STATE_LABEL, &short_fresh);
     let signed_checkpoint = SignedCheckpoint {
         checkpoint: checkpoint(),
         log_signature: sig(),

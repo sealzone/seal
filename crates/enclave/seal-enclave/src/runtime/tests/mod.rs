@@ -192,6 +192,7 @@ impl World {
             issued_at: wall() - DAY,
             pending_window_secs: 0,
             app_networks: Default::default(),
+            freshness_secs: None,
         };
         Self { log, _dir: dir, root_id: root_id(&root.body), root, root_index, state, states: Vec::new() }
     }

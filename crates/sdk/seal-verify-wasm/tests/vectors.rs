@@ -113,6 +113,7 @@ fn state(version: u64, deployments: &[u8]) -> TenantState {
         issued_at: T,
         pending_window_secs: HOUR,
         app_networks: Default::default(),
+        freshness_secs: None,
     }
 }
 

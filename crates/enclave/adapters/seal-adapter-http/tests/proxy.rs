@@ -436,6 +436,51 @@ async fn path_method_and_deny_rules() {
 }
 
 #[tokio::test]
+async fn path_tricks_against_deny_rules_are_refused() {
+    let rules = HttpRules { methods: BTreeSet::new(), deny_path_prefixes: ["/v1/keys".to_string()].into() };
+    let h = Harness::new(claims_with(Injection::default(), rules)).await;
+    let mut c = h.connect().await;
+    for target in ["/v1/KEYS", "/v1/Keys/1", "/v1/keys;x", "/v1/models/..;/keys", "/v1/models;v=1"] {
+        let reply = c.get(target).await;
+        assert_eq!(reply.status, StatusCode::FORBIDDEN, "{target}");
+        assert_eq!(reply.seal_error(), "policy_denied", "{target}");
+    }
+    assert_eq!(c.get("/v1/models").await.status, StatusCode::OK);
+    assert_eq!(h.seen().len(), 1);
+}
+
+#[tokio::test]
+async fn method_and_url_override_headers_are_refused() {
+    let rules = HttpRules { methods: ["GET".to_string()].into(), deny_path_prefixes: ["/v1/keys".to_string()].into() };
+    let h = Harness::new(claims_with(Injection::default(), rules)).await;
+    let mut c = h.connect().await;
+    for (name, value) in [
+        ("x-http-method-override", "DELETE"),
+        ("X-HTTP-Method", "DELETE"),
+        ("x-method-override", "DELETE"),
+        ("x-original-url", "/v1/keys"),
+        ("X-Rewrite-URL", "/v1/keys"),
+    ] {
+        let reply = c.request(get("/v1/models").header(name, value).body(Full::default()).unwrap()).await;
+        assert_eq!(reply.status, StatusCode::FORBIDDEN, "{name}");
+        assert_eq!(reply.seal_error(), "policy_denied", "{name}");
+    }
+    assert_eq!(c.get("/v1/models").await.status, StatusCode::OK, "the connection survives");
+    assert_eq!(h.seen().len(), 1);
+}
+
+#[tokio::test]
+async fn range_headers_are_dropped() {
+    let h = Harness::default().await;
+    let mut c = h.connect().await;
+    let req = get("/v1/models").header("range", "bytes=0-3").header("if-range", "\"etag\"").body(Full::default());
+    assert_eq!(c.request(req.unwrap()).await.status, StatusCode::OK);
+    let up = &h.seen()[0];
+    assert!(up.headers.get("range").is_none(), "a ranged echo could slice the secret past the scrubber");
+    assert!(up.headers.get("if-range").is_none());
+}
+
+#[tokio::test]
 async fn refused_request_with_body_is_answered() {
     let h = Harness::default().await;
     let mut c = h.connect().await;

@@ -33,3 +33,5 @@ async-trait.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 proptest.workspace = true
 hex.workspace = true
+# `TimeProvider`, to read `tls_time()`.
+rustls.workspace = true

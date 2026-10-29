@@ -55,6 +55,7 @@ fn production_tdx_token_verifies() {
         ]
         .into())
     );
+    seal_attest::check_floor(PlatformId::GcpConfidentialSpace, &v.tcb).unwrap();
     assert_eq!(
         v.deployment,
         Some(WorkloadIdentity::ConfidentialSpace {

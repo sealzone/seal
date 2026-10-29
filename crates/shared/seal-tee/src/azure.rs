@@ -298,7 +298,7 @@ struct VcekFetcher {
 
 impl VcekFetcher {
     fn new(dialer: Arc<dyn seal_net::Dialer>) -> Self {
-        let connector = Arc::new(seal_net::BakedRootsConnector::new(dialer));
+        let connector = Arc::new(seal_net::BakedRootsConnector::new(dialer).with_time(crate::tls_time()));
         Self { https: seal_net::HttpsClient::new(connector), cached: Mutex::new(None) }
     }
 

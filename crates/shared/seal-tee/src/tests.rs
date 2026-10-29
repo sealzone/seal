@@ -78,4 +78,13 @@ mod sim {
         assert!(behind.now.abs_diff(system - 3_600) <= 1);
         assert!(Clock::System(SystemClock::new(i64::MIN)).now().await.is_err());
     }
+
+    #[tokio::test]
+    async fn readings_feed_tls_time() {
+        use rustls::time_provider::TimeProvider;
+        let read = Clock::System(SystemClock::new(0)).now().await.unwrap();
+        let tls = crate::tls_time().current_time().unwrap().as_secs();
+        // Other tests read offset clocks in parallel (`clock_offset`).
+        assert!(tls >= read.latest() - 3_601 && tls <= read.latest() + 86_402, "{tls}");
+    }
 }

@@ -66,6 +66,18 @@ are frozen and need not match type names.
 `MAX_PENDING_WINDOW_SECS` (24 h). It is omitted when 0. A written 0 or a longer window does
 not decode, so each window has one signed encoding.
 
+**Freshness window.** `TenantState::freshness_secs` sets how long a `StateFreshness` keeps
+the state usable, from `MIN_STATE_FRESHNESS_SECS` (5 min) up to `STATE_FRESHNESS_SECS`
+(24 h), for the log's statement and the tenant signers' alike. It is omitted for 24 h. A
+written 24 h or a value outside the bounds does not decode. Verifiers apply the shorter of
+the latest state's window and the state in force's, so shortening it narrows access and
+applies at once, while lengthening or clearing it widens and waits the pending window
+(`seal_verify::change`). A shorter window bounds how long a replayed older state works. The
+tenant then also survives an unreachable log, or a missed tenant signature, only that long.
+The control plane refetches the log's statement once it is a quarter of the window old, at
+most hourly (`LOG_FRESHNESS_REFRESH_SECS`), and replicas pick it up at their next reload. Set
+it with `seal settings freshness window`.
+
 **Network rules.** `TenantState::app_networks` lists CIDRs in one canonical spelling
 (`seal_proto::net::Cidr`). The enclave checks the connection's source address against them
 at session start, at extend and on every data connection. An app with no rule may connect
@@ -360,8 +372,9 @@ upstream is its owner's job.
 
 The admin mechanisms hold against replay. A state is used only with a current
 `StateFreshness` for exactly that state. So nobody can bring back an older state for more
-than `STATE_FRESHNESS_SECS` (24 h), whether a control plane, a host restarting replicas, or
-a holder of a revoked credential running their own enclave. See "Binding and freshness".
+than the state's freshness window (`STATE_FRESHNESS_SECS`, 24 h, unless the tenant sets a
+shorter `freshness_secs`), whether a control plane, a host restarting replicas, or a holder
+of a revoked credential running their own enclave. See "Binding and freshness".
 
 ## Telemetry and integrity
 
@@ -534,6 +547,11 @@ following them, and refuses `CONNECT` and `Upgrade`. Database adapters authentic
 destination's user and database, replacing what the client sent. Each adapter adds its own
 rules:
 
+- **HTTP** refuses method and URL override headers (`X-HTTP-Method-Override`,
+  `X-HTTP-Method`, `X-Method-Override`, `X-Original-URL`, `X-Rewrite-URL`) and drops `Range`
+  and `If-Range`, so an echoed secret comes back whole for the scrubber. When the policy
+  restricts paths, a `;` after the destination prefix is refused, and denied prefixes match
+  ignoring ASCII case; the destination prefix matches exactly.
 - **Postgres** drops startup `options` and refuses replication and `FunctionCall`. It gives
   the client a `BackendKeyData` of its own, random per connection and never the upstream's.
   A `CancelRequest` naming that key, on a new connection to the same replica while the
@@ -586,7 +604,11 @@ Upstreams are TLS-only. `Destination` cannot represent a plaintext upstream. `ht
 to `SSLRequest` is refused (`NetError::NoTls`), never downgraded. Upstream certificates are
 verified only against `seal_net::baked_roots()`, which is the Mozilla set plus the AWS RDS
 global bundle (`crates/shared/seal-net/certs/`). Azure Database and Azure Cache roots are
-already in the Mozilla set. Any other CA needs a custom image.
+already in the Mozilla set. Any other CA needs a custom image. The enclave and the guardian
+check certificate validity (handshake and pins, for upstreams, the guardian, the control
+plane, OIDC and STS) at trusted time, never the host-set system clock: the latest end of the
+latest `seal_tee::Clock` reading, advanced by the monotonic clock (`seal_tee::tls_time()`,
+`seal_net::BakedRootsConnector::with_time`). A handshake before the first reading fails.
 
 ## Enclave runtime
 
@@ -737,10 +759,12 @@ Who may read and write a tenant's documents (the crate docs hold the full route 
   control plane does when a proposal is submitted. The control plane stores it with its
   inclusion proof. The log signs `StateFreshness` for each tenant's latest state, and the
   bundle carries it. The enclave and the guardian use a state only with a statement for
-  exactly that state, under `STATE_FRESHNESS_SECS` (24 h) old. When the state names
-  `freshness_keys`, they also need one from a tenant-run signer. So replaying an older
-  state, or a truncated root chain, works for at most 24 h. Withholding a newer state makes
-  the tenant unavailable after 24 h instead of quietly stale. A log statement for an older
+  exactly that state, younger than its freshness window: the shorter `freshness_secs` of
+  the latest state and the state in force, `STATE_FRESHNESS_SECS` (24 h) when neither sets
+  one. When the state names `freshness_keys`, they also need one from a tenant-run signer,
+  within the same window. So replaying an older state, or a truncated root chain, works for
+  at most that window. Withholding a newer state makes the tenant unavailable after it
+  instead of quietly stale. A log statement for an older
   version than one the log already logged is a signed, provable lie (`seal status --log`
   looks for them). Monotonic caches still reject rollback relative to remembered state.
 - **Pending window** (`seal_verify::change`, `seal_verify::window`). The document in force
@@ -774,7 +798,8 @@ Who may read and write a tenant's documents (the crate docs hold the full route 
     its `lock_time`, naming a state in the bundle.
 
   A guardian signs a `TenantAnchor` for any bundle that verifies (`POST /v1/anchors`), as of
-  `at = min(lock_time, fresh_until − STATE_FRESHNESS_SECS)`. The freshness statement proves
+  `at = min(lock_time, signed_at)`, where `signed_at` is when the earliest-expiring required
+  freshness statement was signed. The freshness statement proves
   no newer state existed at that time. Every state newer than the one in force at `at`
   became public after `at − MAX_PENDING_WINDOW_SECS`, so a bundle needs only those. With the
   control plane refreshing anchors hourly, that is about 25 h of states. The enclave trusts
@@ -827,8 +852,9 @@ Who may read and write a tenant's documents (the crate docs hold the full route 
   It opens none of the tenant's blobs, the tenant's pinned deployments refuse it, and SDKs
   with `root_id` set refuse enclaves serving it. A sealer without a pinned root could still
   be steered to an enclave serving it and seal there. `seal status --log` detects it.
-- **Freshness window.** A replayed older state works for at most `STATE_FRESHNESS_SECS`
-  (24 h). With the log as the only freshness signer, the log operator (Seal) could sign for
+- **Freshness window.** A replayed older state works for at most its freshness window,
+  `STATE_FRESHNESS_SECS` (24 h) unless the tenant sets a shorter one (down to 5 min). With
+  the log as the only freshness signer, the log operator (Seal) could sign for
   an older state. That is provable but not prevented. A tenant-run signer
   (`freshness_keys`) prevents it for every state signed after the signer was added.
 - **OIDC binding.** OIDC JWTs (Azure managed identity) cannot embed the proof context. Only
@@ -837,8 +863,10 @@ Who may read and write a tenant's documents (the crate docs hold the full route 
 - **Sessions can mint credentials.** A consumer can do anything the sealed credential
   allows, including creating a credential of its own, and adapters cannot reliably stop it.
   Upstream least privilege is the control.
-- **Scrubbing.** Response scrubbing sees plain bytes only, so it does not catch an upstream
-  that transforms a secret and then echoes it. A secret inside an LZ4, ZSTD or gzip frame
+- **Scrubbing.** Response scrubbing masks the secret plain, under one layer of JSON or URL
+  escaping, and in base64 (standard or URL-safe, any alignment, its stable core only). It
+  does not catch any other transformation an upstream echoes: hex, a hash, a substring,
+  double escaping. A secret inside an LZ4, ZSTD or gzip frame
   never appears whole, so adapters refuse response compression. HTTP asks for `identity`,
   and the ClickHouse adapter is specified to refuse compressed connections. Masking is
   visible, so it tells a consumer whether chosen text is the secret. A random secret of
@@ -937,6 +965,15 @@ Who may read and write a tenant's documents (the crate docs hold the full route 
   are about 11 KB and last an hour. TDX tokens' Intel TCB status is in `Tcb`
   (`tdx_tcb_status`, `tdx_tcb_evaluation_data_number`). A `min_tcb` naming them refuses
   tokens without the claim.
+- **Azure TCB floors are per chip family.** An Azure `Tcb` names its hardware components
+  after the chip family whose AMD key signed the report (`milan.bootloader`, `.tee`, `.snp`,
+  `.microcode`; the same for `genoa`; `turin` adds `.fmc`), plus `uvm_svn` with no family.
+  A `min_tcb` entry `family.component` applies only to that family (`Tcb::passes`), and once
+  any family is named, evidence of a family the floor does not name is refused. Admitting a
+  family is adding its floor; witnesses allow that, since it only rises afterwards. A
+  component without its family (`snp`) is in no Azure evidence, so it refuses all of them.
+  The floors take effect only in builds that name components this way: a guardian or SDK
+  built before reads them as components its evidence lacks and refuses Azure.
 - **Azure Key Vault, measured.** An ACI confidential group's guardian attests at Microsoft
   Azure Attestation's shared East US endpoint (`POST /attest/SevSnpVm`, with the report, the
   VCEK with the baked ASK and ARK, and the UVM endorsement). It gets back claims an

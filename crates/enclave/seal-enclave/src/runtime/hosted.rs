@@ -143,6 +143,7 @@ mod tests {
             issued_at: 0,
             pending_window_secs: 0,
             app_networks: Default::default(),
+            freshness_secs: None,
         }
     }
 

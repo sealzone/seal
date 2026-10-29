@@ -134,6 +134,7 @@ pub fn base_state(version: u64) -> TenantState {
         issued_at: T,
         pending_window_secs: 0,
         app_networks: Default::default(),
+        freshness_secs: None,
     }
 }
 
