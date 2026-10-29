@@ -543,7 +543,28 @@ fn build() -> Vec<Vector> {
             at: 1_900_000_502,
             tenant: tenant(),
             identity: Some(app_key_id()),
-            event: TelemetryEvent::Refused { operation: Operation::Session, code: ErrorCode::ResealRequired },
+            event: TelemetryEvent::Refused {
+                operation: Operation::Session,
+                code: ErrorCode::ResealRequired,
+                context: None,
+            },
+        },
+    );
+
+    v.cbor(
+        "telemetry/entry-refused-outside-networks",
+        &TelemetryEntry {
+            at: 1_900_000_504,
+            tenant: tenant(),
+            identity: Some(app_key_id()),
+            event: TelemetryEvent::Refused {
+                operation: Operation::Session,
+                code: ErrorCode::NotAllowed,
+                context: Some(RefusalContext::OutsideNetworks {
+                    app: app(),
+                    from: Some("203.0.113.7".parse().unwrap()),
+                }),
+            },
         },
     );
 

@@ -16,6 +16,7 @@
 //! ARN rebuilt from the assumed-role ARN (without the role's path, which that ARN does not carry).
 
 use seal_proto::identity::WorkloadIdentity;
+use seal_proto::telemetry::Dependency;
 use seal_proto::Bearer;
 use serde::Deserialize;
 
@@ -305,10 +306,10 @@ pub(crate) async fn replay(https: &seal_net::HttpsClient, call: &StsCall) -> Res
     } else {
         https.get(&call.url, &headers).await
     };
-    let (status, body) = result.map_err(|e| AuthzError::Unavailable(format!("STS: {e}")))?;
+    let (status, body) = result.map_err(|e| AuthzError::Unavailable(Dependency::Sts, format!("STS: {e}")))?;
     match status {
         200 => parse_response(&body),
         400..=499 => Err(bad("STS refused the signed request")),
-        _ => Err(AuthzError::Unavailable(format!("STS: HTTP {status}"))),
+        _ => Err(AuthzError::Unavailable(Dependency::Sts, format!("STS: HTTP {status}"))),
     }
 }

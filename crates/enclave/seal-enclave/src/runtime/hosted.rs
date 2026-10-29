@@ -6,6 +6,7 @@
 //! hosted identity; nothing else a replica reads marks it as hosted, so neither Seal nor the
 //! host can make a customer's replica idle out.
 
+use seal_proto::telemetry::RefusalContext;
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -67,7 +68,7 @@ impl Activity {
     fn start(&self, authenticated: bool) -> Result<Busy<'_>, ServiceError> {
         let mut state = lock(&self.inner);
         if state.draining {
-            return Err(fail(ErrorCode::Unavailable, "the replica is stopping"));
+            return Err(fail(ErrorCode::Unavailable, "the replica is stopping").with(RefusalContext::Stopping));
         }
         state.in_flight += 1;
         Ok(Busy { activity: self, authenticated })

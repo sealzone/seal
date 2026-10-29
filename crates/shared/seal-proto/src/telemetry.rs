@@ -8,6 +8,7 @@
 //! per-request `Completion`.
 
 use std::collections::BTreeSet;
+use std::net::IpAddr;
 
 use serde::{Deserialize, Serialize};
 
@@ -16,7 +17,7 @@ use crate::integrity::{IntegrityAction, Severity, SignalSource};
 use crate::policy::Protocol;
 use crate::session::ConsumerTier;
 use crate::signed::Signed;
-use crate::{codec, AppName, BlobId, ErrorCode, PublicKey, TenantId, UnixTime};
+use crate::{codec, AppName, BlobId, ErrorCode, KeyId, PlatformId, PublicKey, TenantId, TenantKeyVersion, UnixTime};
 
 /// How one data-plane request ended, reported by its adapter (`Session::complete`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -140,8 +141,15 @@ pub enum TelemetryEvent {
         session_id: [u8; 16],
         reason: ErrorCode,
     },
-    /// A control operation was refused.
-    Refused { operation: Operation, code: ErrorCode },
+    /// A control operation was refused: the code the caller heard, and why (`context`), which
+    /// the caller is not told. Entries written before refusals said why have no context, and
+    /// encode as they did.
+    Refused {
+        operation: Operation,
+        code: ErrorCode,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        context: Option<RefusalContext>,
+    },
     /// One data-plane request on a session.
     Request {
         #[serde(with = "codec::array_b64")]
@@ -156,6 +164,110 @@ pub enum TelemetryEvent {
     /// This replica dropped entries because its buffer was full: data-plane `Request`
     /// entries first, other kinds only once no `Request` entries are left to drop.
     Dropped { requests: u64, other: u64 },
+}
+
+/// Why the enclave refused an operation (`TelemetryEvent::Refused::context`), with the values
+/// behind it. Text fields (`what`) hold one of the enclave's own fixed sentences, never text
+/// from the caller or an upstream.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RefusalContext {
+    // Who is asking.
+    /// The verified caller matches no grant of `apps`: the blob's apps, or empty for any app
+    /// of the tenant.
+    NoGrant { caller: WorkloadIdentity, apps: BTreeSet<AppName> },
+    /// An app key that no grant names.
+    UnknownAppKey { key_id: KeyId },
+    /// The identity proof does not verify; `what` says which check it failed.
+    BadProof { what: String },
+    /// The identity token expired at `expired_at`.
+    TokenExpired { expired_at: UnixTime },
+    /// The proof's ticket expired at `expired_at`.
+    TicketExpired { expired_at: UnixTime },
+    /// The proof was made for another enclave (another TLS key).
+    WrongEnclave,
+    /// The proof was made for another request.
+    WrongRequest,
+    /// The extend's proof is from `caller`, not the session's caller.
+    OtherCaller { caller: WorkloadIdentity },
+    /// The request, proof, blob or session is `tenant`'s, not this enclave's tenant.
+    OtherTenant { tenant: TenantId },
+
+    // Where it comes from.
+    /// The caller connected from outside `app`'s networks. `from` is the address the enclave
+    /// saw (`None` when it saw none); on a Seal-hosted replica that is the front door's.
+    OutsideNetworks { app: AppName, from: Option<IpAddr> },
+
+    // Grants and integrity.
+    /// A live session's caller no longer holds `app`'s grant on the blob: the app left the
+    /// blob's apps, or its grant no longer matches the caller.
+    GrantLost { app: AppName },
+    /// The caller is suspended by an integrity signal with `code`, until `until` (`None`: until
+    /// an admin clears it).
+    Suspended { code: String, until: Option<UnixTime> },
+    /// The endpoint report fails the app's artifact rule.
+    ArtifactMismatch,
+    /// The endpoint's evidence failed an integrity check.
+    EvidenceFailed,
+
+    // The blob.
+    /// The blob stopped working at `expired_at`.
+    BlobExpired { blob_id: BlobId, expired_at: UnixTime },
+    /// The blob's tenant key version is older than the oldest the tenant still accepts.
+    KeyVersionRetired { version: TenantKeyVersion, oldest_accepted: TenantKeyVersion },
+    /// The blob was sealed under tenant key `version`, newer than this replica's state.
+    NewerState { version: TenantKeyVersion },
+    /// The blob's minimum platform excludes this replica's `platform`.
+    PlatformExcluded { platform: PlatformId },
+    /// The blob was sealed before the tenant enabled `platform`, this replica's: reseal it.
+    NotSealedForPlatform { platform: PlatformId },
+    /// No platform the tenant enables meets the policy's minimum: nothing to seal for.
+    NoPlatform,
+
+    // The session.
+    /// The session would be at `offered`, below the `required` tier.
+    TierTooLow { required: ConsumerTier, offered: ConsumerTier },
+    /// The session's token expired at `expired_at`.
+    SessionExpired { expired_at: UnixTime },
+    /// The session was ended early.
+    SessionEnded,
+    /// The session token is malformed, or no enclave of this tenant issued it.
+    BadSessionToken,
+
+    // This replica.
+    /// The enclave's verified tenant state was fresh only until `fresh_until` (when known).
+    StaleState { fresh_until: Option<UnixTime> },
+    /// The enclave has no verified tenant state yet.
+    NoState,
+    /// The tenant no longer lists this replica's deployment.
+    DeploymentNotListed,
+    /// The replica is stopping.
+    Stopping,
+    /// A service the enclave needed did not answer.
+    Unavailable { service: Dependency },
+
+    // The request itself.
+    /// The request is malformed; `what` says how.
+    Malformed { what: String },
+    /// An external signal's signer is not a source the tenant enrolled, or its signature
+    /// does not verify.
+    UnknownSignalSource,
+}
+
+/// A service the enclave depends on (`RefusalContext::Unavailable`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Dependency {
+    /// The trusted clock.
+    Clock,
+    /// Seal's control plane.
+    ControlPlane,
+    /// The key service (the guardian) or its certified wrapping keys.
+    KeyService,
+    /// An identity token's issuer (OIDC discovery or keys).
+    Issuer,
+    /// AWS STS, for an AWS caller's signed request.
+    Sts,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

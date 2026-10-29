@@ -1,5 +1,6 @@
 //! Identity proofs → verified identities. Call only after `check_context`.
 
+use seal_proto::telemetry::RefusalContext;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -115,7 +116,8 @@ fn caller(
     matched_grants.sort();
     matched_grants.dedup();
     if matched_grants.is_empty() {
-        return Err(AuthzError::not_allowed("no grant matches the caller"));
+        let denied = AuthzError::not_allowed("no grant matches the caller");
+        return Err(denied.with(RefusalContext::NoGrant { caller: identity, apps: Default::default() }));
     }
     Ok(AuthenticatedCaller { identity, scope: AuthenticationScope { matched_grants, expires_at, assurance } })
 }
@@ -136,7 +138,10 @@ fn verify_app_key(
             }
             _ => None,
         })
-        .ok_or(AuthzError::not_allowed("no grant names this app key"))?;
+        .ok_or_else(|| {
+            AuthzError::not_allowed("no grant names this app key")
+                .with(RefusalContext::UnknownAppKey { key_id: *key_id })
+        })?;
     let sig = Signature { signer: *key_id, alg: SigAlg::Ed25519 { sig: signature.to_vec() } };
     seal_crypto::sign::verify(&public_key, PROOF_CONTEXT_LABEL, ctx, &sig)
         .map_err(|_| AuthzError::BadProof("app key signature does not verify for this context"))?;

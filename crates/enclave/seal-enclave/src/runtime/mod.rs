@@ -7,6 +7,7 @@
 //! the newest verified `TenantState` in `StateCache`; signals and session ends this replica
 //! signs are applied to that cache at once by re-verifying the latest bundle with them added.
 
+use seal_proto::telemetry::{Dependency, RefusalContext};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
@@ -51,7 +52,7 @@ pub(crate) use crate::{fail, lock, random, rng};
 
 impl From<seal_authz::AuthzError> for ServiceError {
     fn from(e: seal_authz::AuthzError) -> Self {
-        fail(e.code(), e.to_string())
+        ServiceError { code: e.code(), detail: e.to_string(), context: e.context().map(Box::new) }
     }
 }
 
@@ -295,16 +296,22 @@ impl Runtime {
 
     /// A fresh reading of the trusted clock, which also anchors `time.estimate()`.
     pub(crate) async fn now(&self) -> Result<TrustedTime, ServiceError> {
-        let time = self.cloud.clock().now().await.map_err(|e| fail(e.code(), format!("clock: {e}")))?;
+        let time = self.cloud.clock().now().await.map_err(|e| {
+            fail(e.code(), format!("clock: {e}")).with(RefusalContext::Unavailable { service: Dependency::Clock })
+        })?;
         self.time.record(time);
         Ok(time)
     }
 
     /// The newest verified state, if it is still fresh at `time`: the enclave fails closed.
     pub(crate) fn snapshot(&self, time: &TrustedTime) -> Result<VerifiedTenant, ServiceError> {
-        let tenant = self.state.get().ok_or_else(|| fail(ErrorCode::Unavailable, "no verified tenant state"))?;
+        let tenant = self
+            .state
+            .get()
+            .ok_or_else(|| fail(ErrorCode::Unavailable, "no verified tenant state").with(RefusalContext::NoState))?;
         if time.latest() >= tenant.fresh_until() {
-            return Err(fail(ErrorCode::Unavailable, "the tenant state is past its fresh_until"));
+            return Err(fail(ErrorCode::Unavailable, "the tenant state is past its fresh_until")
+                .with(RefusalContext::StaleState { fresh_until: Some(tenant.fresh_until()) }));
         }
         Ok(tenant)
     }
@@ -321,8 +328,10 @@ impl Runtime {
     /// What this replica serves under `tenant`: `NotAllowed` once the tenant no longer lists
     /// its deployment identity.
     pub(crate) fn serving(&self, tenant: &VerifiedTenant) -> Result<hosted::Serving, ServiceError> {
-        hosted::serving(tenant.state(), &self.deployment)
-            .ok_or_else(|| fail(ErrorCode::NotAllowed, "the tenant no longer lists this deployment"))
+        hosted::serving(tenant.state(), &self.deployment).ok_or_else(|| {
+            fail(ErrorCode::NotAllowed, "the tenant no longer lists this deployment")
+                .with(RefusalContext::DeploymentNotListed)
+        })
     }
 
     /// Resolves once this replica has started draining because it is idle (`SealService::idle_exit`).
@@ -363,11 +372,15 @@ impl Runtime {
     /// Claims of a token this tenant's enclaves issued, for the pinned tenant and root.
     pub(crate) fn redeem(&self, token: &str) -> Result<SessionClaims, ServiceError> {
         let claims = self.service.token.redeem(token).map_err(|e| match e {
-            seal_crypto::CryptoError::Malformed(_) => fail(ErrorCode::BadRequest, "malformed session token"),
-            _ => fail(ErrorCode::NotAllowed, "a session token this tenant's enclaves did not issue"),
+            seal_crypto::CryptoError::Malformed(_) => {
+                fail(ErrorCode::BadRequest, "malformed session token").with(RefusalContext::BadSessionToken)
+            }
+            _ => fail(ErrorCode::NotAllowed, "a session token this tenant's enclaves did not issue")
+                .with(RefusalContext::BadSessionToken),
         })?;
         if claims.tenant != self.pin.tenant || claims.blob.header.root_id != self.pin.root_id {
-            return Err(fail(ErrorCode::NotAllowed, "a session of another tenant"));
+            return Err(fail(ErrorCode::NotAllowed, "a session of another tenant")
+                .with(RefusalContext::OtherTenant { tenant: claims.tenant.clone() }));
         }
         Ok(claims)
     }

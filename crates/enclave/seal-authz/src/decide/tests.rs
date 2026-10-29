@@ -223,8 +223,13 @@ fn tenant_key_version_window_and_reseal() {
     assert!(!decide(&t, 2).unwrap());
     // Decrypt-only: works and is resealed.
     assert!(decide(&t, 1).unwrap());
-    // Newer than this snapshot knows: retryable.
-    assert!(matches!(decide(&t, 3), Err(AuthzError::Stale)));
+    // Newer than this snapshot knows: retryable, and the telemetry names the version.
+    let newer = decide(&t, 3).unwrap_err();
+    assert_eq!(newer.code(), ErrorCode::Unavailable);
+    assert_eq!(
+        newer.context(),
+        Some(seal_proto::telemetry::RefusalContext::NewerState { version: TenantKeyVersion(3) })
+    );
     // Retired.
     let t = tenant(versions(2, 2));
     assert_eq!(code(decide(&t, 1)), ErrorCode::Expired);
@@ -631,6 +636,13 @@ fn a_network_rule_admits_its_networks_only() {
     assert!(from(Some("::ffff:203.0.113.9")).is_ok(), "an IPv4-mapped peer is its IPv4 address");
     assert_eq!(code(from(Some("198.51.100.1"))), ErrorCode::NotAllowed);
     assert_eq!(code(from(None)), ErrorCode::NotAllowed, "an unknown address is in no network");
+    // The tenant's telemetry says which app, and the address the caller came from.
+    let outside = |source: Option<&str>| seal_proto::telemetry::RefusalContext::OutsideNetworks {
+        app: app("checkout"),
+        from: source.map(ip),
+    };
+    assert_eq!(from(Some("198.51.100.1")).unwrap_err().context(), Some(outside(Some("198.51.100.1"))));
+    assert_eq!(from(None).unwrap_err().context(), Some(outside(None)));
 }
 
 #[test]

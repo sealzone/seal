@@ -19,6 +19,7 @@
 //! `TENANT_KEY_CACHE_SECS` after they were fetched and then requested again, so a revoked
 //! customer-managed key stops working for new sessions within that time.
 
+use seal_proto::telemetry::{Dependency, RefusalContext};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -107,12 +108,13 @@ impl GuardianKeyProvider {
 }
 
 fn guardian_error(e: GuardianError) -> ServiceError {
-    fail(e.code(), format!("guardian: {e}"))
+    fail(e.code(), format!("guardian: {e}")).with(RefusalContext::Unavailable { service: Dependency::KeyService })
 }
 
 fn scope_mismatch(what: &str) -> ServiceError {
     tracing::error!("the guardian released {what} for another scope than requested");
     fail(ErrorCode::Internal, format!("released {what} are for another scope than requested"))
+        .with(RefusalContext::Unavailable { service: Dependency::KeyService })
 }
 
 #[async_trait]

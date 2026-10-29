@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 
 use super::*;
 use seal_proto::session::{SessionEnd, SESSION_END_LABEL, SESSION_TOKEN_SECS};
-use seal_proto::telemetry::{Operation, Outcome};
+use seal_proto::telemetry::{Operation, Outcome, RefusalContext};
 use seal_proto::tunnel::TunnelConnect;
 
 /// A destination no adapter of the image speaks is refused when sealing, not when connecting.
@@ -92,9 +92,10 @@ async fn seal_session_request_extend_end() {
         .collect();
     assert_eq!(requests, [Outcome::Allowed, Outcome::Allowed]);
     assert!(events.iter().any(|e| matches!(e, TelemetryEvent::Extend { session_id: s, .. } if *s == session_id)));
-    assert!(events
-        .iter()
-        .any(|e| matches!(e, TelemetryEvent::Refused { operation: Operation::Extend, code: ErrorCode::NotAllowed })));
+    assert!(events.iter().any(|e| matches!(
+        e,
+        TelemetryEvent::Refused { operation: Operation::Extend, code: ErrorCode::NotAllowed, .. }
+    )));
     assert_eq!(events.iter().filter(|e| matches!(e, TelemetryEvent::End { .. })).count(), 1);
     let entries = h.telemetry.entries.lock().unwrap().clone();
     assert_eq!(entries[0].identity, None, "sealing is open: no identity");
@@ -111,10 +112,14 @@ async fn refuses_callers_without_grants() {
     assert_eq!(h.start(STRANGER, &blob, None).await.unwrap_err().code, ErrorCode::NotAllowed);
     let events = h.events();
     assert!(matches!(events[0], TelemetryEvent::Seal { .. }));
-    assert!(matches!(
-        events.last().unwrap(),
-        TelemetryEvent::Refused { operation: Operation::Session, code: ErrorCode::NotAllowed }
-    ));
+    let TelemetryEvent::Refused { operation: Operation::Session, code: ErrorCode::NotAllowed, context } =
+        events.last().unwrap()
+    else {
+        panic!("{events:?}")
+    };
+    // The tenant learns why: an app key that no grant names.
+    let WorkloadIdentity::AppKey { key_id } = app_identity(STRANGER) else { unreachable!() };
+    assert_eq!(context, &Some(RefusalContext::UnknownAppKey { key_id }));
 }
 
 #[tokio::test]
@@ -130,7 +135,11 @@ async fn a_blob_without_a_wrap_for_this_platform_needs_a_reseal() {
     assert_eq!(refused.code, ErrorCode::ResealRequired);
     assert!(matches!(
         h.events().last().unwrap(),
-        TelemetryEvent::Refused { operation: Operation::Session, code: ErrorCode::ResealRequired }
+        TelemetryEvent::Refused {
+            operation: Operation::Session,
+            code: ErrorCode::ResealRequired,
+            context: Some(RefusalContext::NotSealedForPlatform { platform: PlatformId::Sim }),
+        }
     ));
 }
 
@@ -318,7 +327,7 @@ async fn fails_closed_once_the_state_is_past_fresh_until() {
     assert!(h
         .events()
         .iter()
-        .any(|e| matches!(e, TelemetryEvent::Refused { operation: Operation::End, code: ErrorCode::Unavailable })));
+        .any(|e| matches!(e, TelemetryEvent::Refused { operation: Operation::End, code: ErrorCode::Unavailable, .. })));
     assert_eq!(h.service.admits_tunnel().unwrap_err().code, ErrorCode::Unavailable);
     // A stale bundle does not revive it; a fresh one does.
     assert!(h.service.runtime.reload().await.is_err());

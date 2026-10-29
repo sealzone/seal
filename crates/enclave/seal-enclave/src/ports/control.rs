@@ -7,6 +7,7 @@
 //! here, including a refusal of something this enclave posts, is `Unavailable` to callers;
 //! the status stays in `detail`.
 
+use seal_proto::telemetry::{Dependency, RefusalContext};
 use std::sync::{Arc, OnceLock};
 
 use async_trait::async_trait;
@@ -24,6 +25,7 @@ use crate::{fail, host_now, ReleaseStore, ServiceError, TelemetrySigner, TenantS
 
 fn unavailable(what: &str, e: ControlError) -> ServiceError {
     fail(ErrorCode::Unavailable, format!("control plane, {what}: {e}"))
+        .with(RefusalContext::Unavailable { service: Dependency::ControlPlane })
 }
 
 /// How this replica's reads of its tenant's bundle are authorized (`seal_proto::control`):

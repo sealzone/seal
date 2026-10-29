@@ -24,17 +24,56 @@ use std::sync::Arc;
 mod runtime;
 
 /// What every operation and port fails with: the public code, plus detail for the enclave's
-/// own diagnostics. `detail` never reaches a caller and never holds a secret.
+/// own diagnostics. `detail` never reaches a caller and never holds a secret. `context` is why
+/// a refusal happened, for the tenant's telemetry (`TelemetryEvent::Refused`): built only from
+/// values the enclave checked and its own fixed sentences, never from an upstream's text.
 #[derive(Debug, thiserror::Error)]
 #[error("{code:?}: {detail}")]
 pub struct ServiceError {
     pub code: ErrorCode,
     pub detail: String,
+    pub context: Option<Box<seal_proto::telemetry::RefusalContext>>,
+}
+
+impl ServiceError {
+    /// The same error, with the values that explain it.
+    pub(crate) fn with(mut self, context: seal_proto::telemetry::RefusalContext) -> Self {
+        self.context = Some(Box::new(context));
+        self
+    }
+}
+
+/// A `ServiceError`'s detail: one of the enclave's fixed sentences, which a malformed request
+/// also gives its telemetry (`RefusalContext::Malformed`), or text built at run time (which
+/// may hold an upstream's words), which stays in the log.
+pub(crate) enum Detail {
+    Fixed(&'static str),
+    Built(String),
+}
+
+impl From<&'static str> for Detail {
+    fn from(s: &'static str) -> Self {
+        Detail::Fixed(s)
+    }
+}
+
+impl From<String> for Detail {
+    fn from(s: String) -> Self {
+        Detail::Built(s)
+    }
 }
 
 /// A `ServiceError` with `code` and diagnostic `detail`.
-pub(crate) fn fail(code: ErrorCode, detail: impl Into<String>) -> ServiceError {
-    ServiceError { code, detail: detail.into() }
+pub(crate) fn fail(code: ErrorCode, detail: impl Into<Detail>) -> ServiceError {
+    match detail.into() {
+        Detail::Fixed(s) => ServiceError {
+            code,
+            detail: s.into(),
+            context: (code == ErrorCode::BadRequest)
+                .then(|| Box::new(seal_proto::telemetry::RefusalContext::Malformed { what: s.into() })),
+        },
+        Detail::Built(detail) => ServiceError { code, detail, context: None },
+    }
 }
 
 /// Locks, recovering from a poisoned lock: every value behind the crate's locks stays

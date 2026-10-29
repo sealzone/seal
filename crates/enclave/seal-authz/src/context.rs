@@ -1,5 +1,6 @@
 use seal_crypto::TicketKey;
 use seal_proto::identity::{ProofContext, ProofPurpose};
+use seal_proto::telemetry::RefusalContext;
 use seal_proto::{TenantId, TrustedTime};
 
 use crate::AuthzError;
@@ -15,15 +16,25 @@ pub(crate) fn check_context(
     time: &TrustedTime,
 ) -> Result<(), AuthzError> {
     if &ctx.tenant != tenant {
-        return Err(AuthzError::not_allowed("proof context names another tenant"));
+        return Err(AuthzError::not_allowed("proof context names another tenant")
+            .with(RefusalContext::OtherTenant { tenant: ctx.tenant.clone() }));
     }
     if &ctx.tls_spki_sha256 != tls_spki_sha256 {
-        return Err(AuthzError::not_allowed("proof context names another enclave key"));
+        return Err(
+            AuthzError::not_allowed("proof context names another enclave key").with(RefusalContext::WrongEnclave)
+        );
     }
     if &ctx.purpose != purpose {
-        return Err(AuthzError::not_allowed("proof context is for another request"));
+        return Err(AuthzError::not_allowed("proof context is for another request").with(RefusalContext::WrongRequest));
     }
-    ticket_key.verify(tenant, &ctx.ticket, time).map_err(|_| AuthzError::not_allowed("proof ticket invalid or expired"))
+    ticket_key.verify(tenant, &ctx.ticket, time).map_err(|_| {
+        let denied = AuthzError::not_allowed("proof ticket invalid or expired");
+        if time.latest() >= ctx.ticket.expires_at {
+            denied.with(RefusalContext::TicketExpired { expired_at: ctx.ticket.expires_at })
+        } else {
+            denied
+        }
+    })
 }
 
 #[cfg(test)]

@@ -99,7 +99,7 @@ fn seal_entry(at: UnixTime) -> TelemetryEntry {
         at,
         tenant: tenant(),
         identity: Some(identity()),
-        event: TelemetryEvent::Refused { operation: Operation::Seal, code: ErrorCode::NotAllowed },
+        event: TelemetryEvent::Refused { operation: Operation::Seal, code: ErrorCode::NotAllowed, context: None },
     }
 }
 

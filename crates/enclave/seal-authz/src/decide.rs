@@ -16,6 +16,7 @@ use std::net::IpAddr;
 use std::str::FromStr;
 
 use crate::{AuthenticatedRequest, AuthzError};
+use seal_proto::telemetry::RefusalContext;
 use seal_proto::{
     api::{ExtendRequest, SessionRequest, SignalRequest},
     blob::Blob,
@@ -76,8 +77,10 @@ impl<'a> TenantAuthorizer<'a> {
         self.source.is_none_or(|source| self.tenant.state().admits_source(app, source))
     }
 
-    fn outside_networks() -> AuthzError {
+    /// Refused for connecting from outside `app`'s networks, with the address the enclave saw.
+    fn outside_networks(&self, app: &AppName) -> AuthzError {
         AuthzError::not_allowed("the caller connects from outside its app's networks")
+            .with(RefusalContext::OutsideNetworks { app: app.clone(), from: self.source.flatten() })
     }
     fn fresh(&self, time: &TrustedTime) -> Result<(), AuthzError> {
         if time.latest() < self.tenant.fresh_until() {
@@ -90,7 +93,10 @@ impl<'a> TenantAuthorizer<'a> {
     fn not_suspended(&self, identity: &WorkloadIdentity, time: &TrustedTime) -> Result<(), AuthzError> {
         match self.suspension(identity, time) {
             None => Ok(()),
-            Some(_) => Err(AuthzError::denied(ErrorCode::IntegrityFailed, "the caller is suspended")),
+            Some(Suspension { code, until }) => {
+                Err(AuthzError::denied(ErrorCode::IntegrityFailed, "the caller is suspended")
+                    .with(RefusalContext::Suspended { code, until }))
+            }
         }
     }
 
@@ -103,7 +109,8 @@ impl<'a> TenantAuthorizer<'a> {
         if tenant == &self.tenant.state().tenant {
             Ok(())
         } else {
-            Err(AuthzError::not_allowed("request for another tenant"))
+            Err(AuthzError::not_allowed("request for another tenant")
+                .with(RefusalContext::OtherTenant { tenant: tenant.clone() }))
         }
     }
 
@@ -120,10 +127,11 @@ impl<'a> TenantAuthorizer<'a> {
         let granted =
             blob.policy.apps().contains(app) && self.app_grants(app).is_some_and(|g| holds(scope, identity, g, time));
         if !granted {
-            return Err(AuthzError::not_allowed("the caller no longer holds the session's app grant"));
+            return Err(AuthzError::not_allowed("the caller no longer holds the session's app grant")
+                .with(RefusalContext::GrantLost { app: app.clone() }));
         }
         if !self.admits_source(app) {
-            return Err(Self::outside_networks());
+            return Err(self.outside_networks(app));
         }
         self.not_suspended(identity, time)
     }
@@ -134,18 +142,26 @@ impl<'a> TenantAuthorizer<'a> {
         let state = self.tenant.state();
         let h = &blob.header;
         if h.tenant != state.tenant || &h.root_id != self.tenant.root_id() {
-            return Err(AuthzError::not_allowed("blob of another tenant"));
+            return Err(AuthzError::not_allowed("blob of another tenant")
+                .with(RefusalContext::OtherTenant { tenant: h.tenant.clone() }));
         }
-        if blob.policy.expires_at().is_some_and(|e| time.latest() >= e) {
-            return Err(AuthzError::denied(ErrorCode::Expired, "blob expired"));
+        if let Some(expired_at) = blob.policy.expires_at().filter(|e| time.latest() >= *e) {
+            return Err(AuthzError::denied(ErrorCode::Expired, "blob expired")
+                .with(RefusalContext::BlobExpired { blob_id: h.blob_id, expired_at }));
         }
         let versions = state.tenant_key_versions;
         if h.tenant_key_version < versions.oldest_accepted {
-            return Err(AuthzError::denied(ErrorCode::Expired, "blob tenant key version retired"));
+            return Err(AuthzError::denied(ErrorCode::Expired, "blob tenant key version retired").with(
+                RefusalContext::KeyVersionRetired {
+                    version: h.tenant_key_version,
+                    oldest_accepted: versions.oldest_accepted,
+                },
+            ));
         }
         if h.tenant_key_version > versions.current {
             // Sealed under a state newer than this snapshot.
-            return Err(AuthzError::Stale);
+            return Err(AuthzError::denied(ErrorCode::Unavailable, "blob sealed under a newer tenant state")
+                .with(RefusalContext::NewerState { version: h.tenant_key_version }));
         }
         Ok(h.tenant_key_version < versions.current)
     }
@@ -179,12 +195,14 @@ impl<'a> TenantAuthorizer<'a> {
             .filter(|app| self.app_grants(app).is_some_and(|g| holds(scope, identity, g, time)))
             .collect();
         if granted.is_empty() {
-            return Err(AuthzError::not_allowed("the caller holds no grant for the blob's apps"));
+            return Err(AuthzError::not_allowed("the caller holds no grant for the blob's apps")
+                .with(RefusalContext::NoGrant { caller: identity.clone(), apps: blob.policy.apps().clone() }));
         }
-        let granted: Vec<&AppName> = granted.into_iter().filter(|app| self.admits_source(app)).collect();
-        if granted.is_empty() {
-            return Err(Self::outside_networks());
+        let admitted: Vec<&AppName> = granted.iter().copied().filter(|app| self.admits_source(app)).collect();
+        if admitted.is_empty() {
+            return Err(self.outside_networks(granted[0]));
         }
+        let granted = admitted;
         self.not_suspended(identity, time)?;
         let integrity = &self.tenant.state().integrity;
         granted
@@ -227,12 +245,14 @@ impl<'a> TenantAuthorizer<'a> {
         let reseal = self.check_blob(&blob, time)?;
         let caller = request.caller();
         let app = self.choose_app(caller.scope(), caller.identity(), &blob, req.endpoint.as_ref(), time)?;
-        if req.min_tier.is_some_and(|min| offered_tier < min) {
-            return Err(AuthzError::denied(ErrorCode::TierTooLow, "the session would be below min_tier"));
+        if let Some(required) = req.min_tier.filter(|min| offered_tier < *min) {
+            return Err(AuthzError::denied(ErrorCode::TierTooLow, "the session would be below min_tier")
+                .with(RefusalContext::TierTooLow { required, offered: offered_tier }));
         }
         // The sealed policy's floor, which nobody can lower after sealing.
-        if blob.policy.min_tier().is_some_and(|min| offered_tier < min) {
-            return Err(AuthzError::denied(ErrorCode::TierTooLow, "the blob requires a higher tier"));
+        if let Some(required) = blob.policy.min_tier().filter(|min| offered_tier < *min) {
+            return Err(AuthzError::denied(ErrorCode::TierTooLow, "the blob requires a higher tier")
+                .with(RefusalContext::TierTooLow { required, offered: offered_tier }));
         }
         Ok(SessionPermit {
             request,
@@ -245,13 +265,15 @@ impl<'a> TenantAuthorizer<'a> {
     /// The session itself: this tenant, not ended early, token not expired.
     fn check_session(&self, claims: &SessionClaims, time: &TrustedTime) -> Result<(), AuthzError> {
         if claims.tenant != self.tenant.state().tenant {
-            return Err(AuthzError::not_allowed("session of another tenant"));
+            return Err(AuthzError::not_allowed("session of another tenant")
+                .with(RefusalContext::OtherTenant { tenant: claims.tenant.clone() }));
         }
         if let Some(end) = self.tenant.session_end(&claims.session_id) {
-            return Err(AuthzError::denied(end.reason, "the session was ended"));
+            return Err(AuthzError::denied(end.reason, "the session was ended").with(RefusalContext::SessionEnded));
         }
         if time.latest() >= claims.expires_at {
-            return Err(AuthzError::denied(ErrorCode::SessionExpired, "session token expired"));
+            return Err(AuthzError::denied(ErrorCode::SessionExpired, "session token expired")
+                .with(RefusalContext::SessionExpired { expired_at: claims.expires_at }));
         }
         Ok(())
     }
@@ -270,11 +292,14 @@ impl<'a> TenantAuthorizer<'a> {
         self.fresh(time)?;
         let caller = request.caller();
         if caller.identity() != &current.caller {
-            return Err(AuthzError::not_allowed("the proof is from another caller"));
+            return Err(AuthzError::not_allowed("the proof is from another caller")
+                .with(RefusalContext::OtherCaller { caller: caller.identity().clone() }));
         }
         self.own_tenant(&request.request().context.tenant)?;
         if self.tenant.session_end(&current.session_id).is_some() {
-            return Err(AuthzError::denied(ErrorCode::SessionEnded, "the session was ended"));
+            return Err(
+                AuthzError::denied(ErrorCode::SessionEnded, "the session was ended").with(RefusalContext::SessionEnded)
+            );
         }
         self.check_session(current, time)?;
         self.check_blob(&current.blob, time)?;
@@ -284,8 +309,9 @@ impl<'a> TenantAuthorizer<'a> {
         }
         // Recomputed from the fresh report every extend: a hardened blob stops working
         // within one extend of its endpoint's attestation going silent.
-        if current.blob.policy.min_tier().is_some_and(|min| offered_tier < min) {
-            return Err(AuthzError::denied(ErrorCode::TierTooLow, "the blob requires a higher tier"));
+        if let Some(required) = current.blob.policy.min_tier().filter(|min| offered_tier < *min) {
+            return Err(AuthzError::denied(ErrorCode::TierTooLow, "the blob requires a higher tier")
+                .with(RefusalContext::TierTooLow { required, offered: offered_tier }));
         }
         Ok(ExtendPermit { current, scope: caller.scope().clone() })
     }
@@ -331,13 +357,17 @@ impl<'a> TenantAuthorizer<'a> {
         self.fresh(time)?;
         let state = self.tenant.state();
         let req = request.request();
-        let context = req.context.as_ref().ok_or(AuthzError::not_allowed("a self-signal carries its proof context"))?;
+        let context = req.context.as_ref().ok_or_else(|| {
+            AuthzError::not_allowed("a self-signal carries its proof context")
+                .with(RefusalContext::Malformed { what: "a self-signal carries its proof context".into() })
+        })?;
         self.own_tenant(&context.tenant)?;
         validate_code(&req.code).map_err(|_| AuthzError::denied(ErrorCode::BadRequest, "malformed signal code"))?;
         let caller = request.caller();
         let granted = state.apps.values().any(|g| holds(caller.scope(), caller.identity(), g, time));
         if !granted {
-            return Err(AuthzError::not_allowed("the caller holds no grant in the tenant"));
+            return Err(AuthzError::not_allowed("the caller holds no grant in the tenant")
+                .with(RefusalContext::NoGrant { caller: caller.identity().clone(), apps: BTreeSet::new() }));
         }
         let signal = IntegritySignal {
             tenant: state.tenant.clone(),

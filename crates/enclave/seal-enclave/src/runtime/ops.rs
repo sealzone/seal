@@ -4,6 +4,7 @@
 //! on, and acts only through its `seal-authz` permit. Every success and every refusal is one
 //! telemetry entry.
 
+use seal_proto::telemetry::RefusalContext;
 use std::net::IpAddr;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -68,10 +69,12 @@ fn offered_tier(attested: bool) -> ConsumerTier {
 }
 
 impl Runtime {
-    /// Records a refusal as `Refused { operation, code }` and hands back the error.
+    /// Records a refusal as `Refused { operation, code, context }` and hands back the error.
     fn refused<T>(&self, operation: Operation, result: Result<T, Refusal>) -> Result<T, ServiceError> {
         result.map_err(|r| {
-            self.record(r.identity.map(|i| *i), TelemetryEvent::Refused { operation, code: r.error.code });
+            let event =
+                TelemetryEvent::Refused { operation, code: r.error.code, context: r.error.context.as_deref().cloned() };
+            self.record(r.identity.map(|i| *i), event);
             r.error
         })
     }
@@ -98,6 +101,7 @@ impl Runtime {
                     tracing::warn!(error = %e, "publishing an artifact-mismatch signal failed");
                 }
                 fail(ErrorCode::IntegrityFailed, "the endpoint report fails the app's artifact rule")
+                    .with(RefusalContext::ArtifactMismatch)
             }
             error => error.into(),
         }
@@ -479,7 +483,7 @@ impl Runtime {
         let observed_at =
             request.observed_at.ok_or_else(|| fail(ErrorCode::BadRequest, "an external finding carries its time"))?;
         let who = identity.clone();
-        let refuse = |code, detail: &str| Err(fail(code, detail)).by(&who);
+        let refuse = |code, detail: &'static str| Err(fail(code, detail)).by(&who);
 
         if seal_proto::integrity::validate_code(&request.code).is_err() {
             return refuse(ErrorCode::BadRequest, "invalid signal code");

@@ -281,10 +281,13 @@ async fn expiry_and_not_before_allow_60_seconds_of_skew() {
     let claims = github_claims(json!("74"), T); // exp = T + 300
     let proof = oidc(OidcProvider::GitHub, jwt(rs256("rsa-1"), &claims, Signer::Rsa));
     check(&v, &proof, std::slice::from_ref(&prod), T + 359).await.unwrap();
-    assert!(is_bad_proof(&refused(check(&v, &proof, std::slice::from_ref(&prod), T + 360).await)));
-    assert!(is_bad_proof(&refused(
-        v.verify(&proof, &ctx(), std::slice::from_ref(&prod), &TrustedTime { now: T + 355, radius: 5 }).await
-    )));
+    // Expired, and the tenant's telemetry says when: exp plus the skew.
+    let expired = Some(seal_proto::telemetry::RefusalContext::TokenExpired { expired_at: T + 360 });
+    let late = refused(check(&v, &proof, std::slice::from_ref(&prod), T + 360).await);
+    assert_eq!((late.code(), late.context()), (ErrorCode::NotAllowed, expired.clone()));
+    let uncertain =
+        refused(v.verify(&proof, &ctx(), std::slice::from_ref(&prod), &TrustedTime { now: T + 355, radius: 5 }).await);
+    assert_eq!(uncertain.context(), expired);
     // nbf (and iat) in the future beyond the skew, against the earliest time.
     check(&v, &proof, std::slice::from_ref(&prod), T - 60).await.unwrap();
     assert!(is_bad_proof(&refused(check(&v, &proof, std::slice::from_ref(&prod), T - 61).await)));

@@ -356,7 +356,11 @@ async fn telemetry_reader_keys_are_generated_and_open_sealed_batches() {
         at: 1_900_000_000,
         tenant: acme(),
         identity: None,
-        event: TelemetryEvent::Refused { operation: Operation::Seal, code: ErrorCode::NotAllowed },
+        event: TelemetryEvent::Refused {
+            operation: Operation::Seal,
+            code: ErrorCode::NotAllowed,
+            context: Some(seal_proto::telemetry::RefusalContext::DeploymentNotListed),
+        },
     };
     let mut rng = seal_crypto::UnwrapErr(seal_crypto::SysRng);
     let entries = std::slice::from_ref(&entry);
@@ -380,6 +384,7 @@ async fn telemetry_reader_keys_are_generated_and_open_sealed_batches() {
 
     let out = ok(&home, &["telemetry", "--reader-key", key_path, "--key-file", key]).await;
     assert!(out.contains(r#"07070707#0  enclave  {"kind":"refused""#), "{out}");
+    assert!(out.contains(r#""context":{"kind":"deployment_not_listed"}"#), "{out}");
     assert!(!out.contains("FOUND") && !out.contains("sealed batch"), "{out}");
     let out = ok(&home, &["telemetry", "--reader-key", key_path, "--json", "--key-file", key]).await;
     let line: serde_json::Value = serde_json::from_str(out.lines().next().unwrap()).unwrap();

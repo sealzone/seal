@@ -372,6 +372,17 @@ reports, runs the detectors, applies the policy and writes telemetry.
   identity, and a `TelemetryEvent`: `Seal`, `Session`, `Extend`, `End`, `Refused`, `Request`
   (one data-plane request with its `Completion`), `Integrity` (signal applied and the action
   taken) or `Dropped`. Entries are numbered across their stream.
+- **Refusals say why** (`Refused::context`, a `RefusalContext`): the caller hears only the
+  `ErrorCode`; the tenant's telemetry gets the cause and the values the enclave checked, e.g.
+  `outside_networks` with the app and the address the caller came from (on a Seal-hosted
+  replica, until it reads the front door's PROXY header, the front's), `no_grant` with the
+  verified caller and the blob's apps, `unknown_app_key`, `tier_too_low` with the required and
+  offered tiers, `blob_expired`, `suspended` with the signal's code and until when, `other_tenant`,
+  `stale_state`, `unavailable` with the service. `bad_proof` and `malformed` carry the
+  enclave's fixed sentence for which check failed (`what`), never the caller's text. Entries
+  written before refusals said why have no context and encode as they did; a verifier
+  re-encodes what it parsed to check the batch signature, so readers (the control plane, the
+  SDK, the console's verifier) must know `context` before enclaves that write it run.
 - **Never contains** the secret, a credential, payload bodies or upstream-supplied text. An
   upstream error is recorded as its kind only: an HTTP status, or a Postgres `ErrorResponse`'s
   SQLSTATE (`UpstreamErrorKind::Sqlstate`, five digits or upper-case letters; `XX000` when

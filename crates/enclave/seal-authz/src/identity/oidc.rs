@@ -10,6 +10,7 @@
 //! Key sets are cached per issuer for `JWKS_CACHE_SECS` and refetched early when a token names
 //! an unknown `kid`, at most once per `JWKS_REFETCH_MIN_SECS`.
 
+use seal_proto::telemetry::{Dependency, RefusalContext};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -147,7 +148,7 @@ fn issuer(provider: OidcProvider, iss: &str, candidates: &[IdentityMatcher]) -> 
 
 /// Discovery document, then its `jwks_uri`.
 async fn fetch(https: &seal_net::HttpsClient, iss: &str, discovery: &str) -> Result<JwkSet, AuthzError> {
-    let unavailable = |what: &str| AuthzError::Unavailable(format!("OIDC issuer {iss}: {what}"));
+    let unavailable = |what: &str| AuthzError::Unavailable(Dependency::Issuer, format!("OIDC issuer {iss}: {what}"));
     let get = |url: String| async move {
         let (status, body) =
             https.get(&url, &[("accept", "application/json")]).await.map_err(|e| unavailable(&e.to_string()))?;
@@ -212,7 +213,9 @@ pub(crate) async fn verify(
     let exp = time_claim(&claims, "exp")?.ok_or(AuthzError::BadProof("token has no expiry"))?;
     let expires_at = exp.saturating_add(OIDC_SKEW_SECS);
     if time.latest() >= expires_at {
-        return Err(AuthzError::BadProof("token expired"));
+        return Err(
+            AuthzError::not_allowed("token expired").with(RefusalContext::TokenExpired { expired_at: expires_at })
+        );
     }
     let not_before = |name| -> Result<Option<UnixTime>, AuthzError> {
         let t = time_claim(&claims, name)?;
@@ -261,7 +264,13 @@ pub(crate) async fn verify(
                 bearer,
                 |m| matches!(m, IdentityMatcher::Azure { audience, .. } if aud.contains(&audience.as_str())),
             )
-            .map_err(|_| AuthzError::not_allowed("no grant matches the caller and token audience"))
+            .map_err(|e| {
+                let denied = AuthzError::not_allowed("no grant matches the caller and token audience");
+                match e.context() {
+                    Some(context) => denied.with(context),
+                    None => denied,
+                }
+            })
         }
         OidcProvider::GitHub => {
             seal_aud()?;

@@ -46,7 +46,7 @@ async fn an_artifact_mismatch_is_signed_recorded_applied_and_published() {
     )));
     assert!(matches!(
         events.last().unwrap(),
-        TelemetryEvent::Refused { operation: Operation::Session, code: ErrorCode::IntegrityFailed }
+        TelemetryEvent::Refused { operation: Operation::Session, code: ErrorCode::IntegrityFailed, .. }
     ));
     // Suspended now, even with the allowed artifact.
     let again = h.start(CONSUMER, &blob, Some(report(1))).await.unwrap_err();
@@ -74,7 +74,7 @@ async fn an_artifact_mismatch_at_extend_is_applied_too() {
     )));
     assert!(matches!(
         h.events().last().unwrap(),
-        TelemetryEvent::Refused { operation: Operation::Extend, code: ErrorCode::IntegrityFailed }
+        TelemetryEvent::Refused { operation: Operation::Extend, code: ErrorCode::IntegrityFailed, .. }
     ));
 }
 

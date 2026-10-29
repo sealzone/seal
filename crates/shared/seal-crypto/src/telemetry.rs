@@ -143,7 +143,7 @@ mod tests {
             at,
             tenant: tenant(),
             identity: Some(WorkloadIdentity::AppKey { key_id: KeyId([0x11; 32]) }),
-            event: TelemetryEvent::Refused { operation: Operation::Seal, code: ErrorCode::NotAllowed },
+            event: TelemetryEvent::Refused { operation: Operation::Seal, code: ErrorCode::NotAllowed, context: None },
         }
     }
 

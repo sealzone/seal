@@ -59,7 +59,7 @@ fn telemetry_entry(at: u64) -> TelemetryEntry {
         at,
         tenant: tenant(),
         identity: Some(workload()),
-        event: TelemetryEvent::Refused { operation: Operation::Seal, code: ErrorCode::NotAllowed },
+        event: TelemetryEvent::Refused { operation: Operation::Seal, code: ErrorCode::NotAllowed, context: None },
     }
 }
 
