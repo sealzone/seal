@@ -1,6 +1,6 @@
 //! `seal-verify` for the browser: the web UI checks tenant documents, the pending window,
-//! passkey signatures and telemetry with the same code the enclave, the guardian and the CLI
-//! run, and seals secrets to an attested enclave as the CLI does. `api` holds the functions
+//! passkey signatures, telemetry and the transparency log's checkpoints and releases with the
+//! same code the enclave, the guardian and the CLI run, and seals secrets to an attested enclave as the CLI does. `api` holds the functions
 //! (JSON in and out); built for `wasm32-unknown-unknown`, they are exported to JavaScript, and
 //! `js/index.js` wraps them (`build.sh` makes the npm package `@sealzone/verify`).
 //!
@@ -117,6 +117,26 @@ mod js {
     #[wasm_bindgen(js_name = telemetryReaderPublicKey)]
     pub fn telemetry_reader_public_key(reader_seed: &str) -> Result<String, JsError> {
         js(api::telemetry_reader_public_key(reader_seed))
+    }
+
+    #[wasm_bindgen(js_name = verifyCheckpoint)]
+    pub fn verify_checkpoint(trust: &str, checkpoint: &str) -> Result<String, JsError> {
+        js(api::verify_checkpoint(trust, checkpoint))
+    }
+
+    #[wasm_bindgen(js_name = verifyInclusion)]
+    pub fn verify_inclusion(trust: &str, entry: &str, proof: &str) -> Result<String, JsError> {
+        js(api::verify_inclusion(trust, entry, proof))
+    }
+
+    #[wasm_bindgen(js_name = releaseSigners)]
+    pub fn release_signers(trust: &str, manifest: &str) -> Result<String, JsError> {
+        js(api::release_signers(trust, manifest))
+    }
+
+    #[wasm_bindgen(js_name = verifyRelease)]
+    pub fn verify_release(trust: &str, evidence: &str, fresh: &str, now: f64) -> Result<String, JsError> {
+        js(api::verify_release(trust, evidence, fresh, now as u64))
     }
 
     #[cfg(feature = "seal")]

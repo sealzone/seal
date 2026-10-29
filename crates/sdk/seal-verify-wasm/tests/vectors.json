@@ -830,6 +830,511 @@
       1900000300
     ]
   },
+  "releases": {
+    "checkpoint": {
+      "checkpoint": {
+        "origin": "dev.log.seal.zone/v1",
+        "policy": {
+          "min_service_key_version": {},
+          "min_tcb": {}
+        },
+        "root_hash": "63rxzrggOPcedADJg2nKwCnQRefl8_NjORbv_xB5qu4",
+        "size": 5
+      },
+      "cosignatures": [
+        {
+          "signature": {
+            "alg": {
+              "alg": "ed25519",
+              "sig": "XYCuSdcwp07kurr5DWeMeB0rj7K_cyERkSMsA7Gd6VWReLl3kvrt858ylLrcNI1FjIIqfFw8VWvqtcrg16oyDg"
+            },
+            "signer": "000e62ba0c6ce93da66eca96821f963dd440ac086073f7bbe6ef91ef90c9d3f6"
+          },
+          "timestamp": 1900043200
+        },
+        {
+          "signature": {
+            "alg": {
+              "alg": "ed25519",
+              "sig": "JkCa7YLCiG1pWC6IC-UnhM4xrs-t1ykpPljVhhbdGWYsfS-MlbQy25Jg8cRKo33Qh1CC2tA9z0MXvBYWiM-cAw"
+            },
+            "signer": "d8270188647d1a2453e4b07d468a1fef57eec30ecb34cf54639437e416ddbde5"
+          },
+          "timestamp": 1900043200
+        },
+        {
+          "signature": {
+            "alg": {
+              "alg": "ed25519",
+              "sig": "1Kuo0bid1kOAIr07--WU9myScTSexiL93z2a5bt4MJSaqmAdzLV16Ocay64JlAEjoV0ZD5tUbvEvmH_nRngvBA"
+            },
+            "signer": "4845ecc67e207f28233c9c2ba96eaae6b588d8aa402893a80f9d6ce199c86a50"
+          },
+          "timestamp": 1900043200
+        }
+      ],
+      "log_signature": {
+        "alg": {
+          "alg": "ed25519",
+          "sig": "pXMVWzywoHwuYsCqcRgFBJ3JPUI3xQr8iGLZJ_8mHq-AvpgzJ1jb9K4BFCmEVUkTw48bbD5RTSlHd1mbrcaLBQ"
+        },
+        "signer": "9aaa744aaee7d4d7ab5043d1f87cec6032b01c14b0b851c765b253e0816f830c"
+      }
+    },
+    "early_checkpoint": {
+      "checkpoint": {
+        "origin": "dev.log.seal.zone/v1",
+        "policy": {
+          "min_service_key_version": {},
+          "min_tcb": {}
+        },
+        "root_hash": "63rxzrggOPcedADJg2nKwCnQRefl8_NjORbv_xB5qu4",
+        "size": 5
+      },
+      "cosignatures": [
+        {
+          "signature": {
+            "alg": {
+              "alg": "ed25519",
+              "sig": "rQctdpvzqpHpVLLdhY6Uzx6Lwr4La2iS30wDLBbOBSDChwblRN4zwFKICJ22cs-NwW04BHf-lttmoNB5sSJeDw"
+            },
+            "signer": "000e62ba0c6ce93da66eca96821f963dd440ac086073f7bbe6ef91ef90c9d3f6"
+          },
+          "timestamp": 1900037800
+        },
+        {
+          "signature": {
+            "alg": {
+              "alg": "ed25519",
+              "sig": "xdMlGNTD_O4WEwzyA8t06MR5-WpW4Aw6an3Mh-B_JXDKdd7DLz1TqgRVvR_n1_OjHFmvZ-iHf15y18aoWqwzCw"
+            },
+            "signer": "d8270188647d1a2453e4b07d468a1fef57eec30ecb34cf54639437e416ddbde5"
+          },
+          "timestamp": 1900037800
+        },
+        {
+          "signature": {
+            "alg": {
+              "alg": "ed25519",
+              "sig": "FjxMSqBT9ZrckAweGUE2yqmHi27tn--ggXNjuQc-Jbwmg6ippuLv6Op83q-2k5Hqm1OhmjtPtlCAVXpQJnDYCQ"
+            },
+            "signer": "4845ecc67e207f28233c9c2ba96eaae6b588d8aa402893a80f9d6ce199c86a50"
+          },
+          "timestamp": 1900037800
+        }
+      ],
+      "log_signature": {
+        "alg": {
+          "alg": "ed25519",
+          "sig": "pXMVWzywoHwuYsCqcRgFBJ3JPUI3xQr8iGLZJ_8mHq-AvpgzJ1jb9K4BFCmEVUkTw48bbD5RTSlHd1mbrcaLBQ"
+        },
+        "signer": "9aaa744aaee7d4d7ab5043d1f87cec6032b01c14b0b851c765b253e0816f830c"
+      }
+    },
+    "entry": {
+      "body": {
+        "component": "enclave",
+        "measurement": "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e",
+        "platform": "sim",
+        "service_key_version": 1,
+        "source_commit": "0123456789abcdef0123456789abcdef01234567",
+        "version": "1.0.0"
+      },
+      "kind": "release"
+    },
+    "evidence": {
+      "auditor": null,
+      "fresh": {
+        "checkpoint": {
+          "origin": "dev.log.seal.zone/v1",
+          "policy": {
+            "min_service_key_version": {},
+            "min_tcb": {}
+          },
+          "root_hash": "63rxzrggOPcedADJg2nKwCnQRefl8_NjORbv_xB5qu4",
+          "size": 5
+        },
+        "cosignatures": [
+          {
+            "signature": {
+              "alg": {
+                "alg": "ed25519",
+                "sig": "XYCuSdcwp07kurr5DWeMeB0rj7K_cyERkSMsA7Gd6VWReLl3kvrt858ylLrcNI1FjIIqfFw8VWvqtcrg16oyDg"
+              },
+              "signer": "000e62ba0c6ce93da66eca96821f963dd440ac086073f7bbe6ef91ef90c9d3f6"
+            },
+            "timestamp": 1900043200
+          },
+          {
+            "signature": {
+              "alg": {
+                "alg": "ed25519",
+                "sig": "JkCa7YLCiG1pWC6IC-UnhM4xrs-t1ykpPljVhhbdGWYsfS-MlbQy25Jg8cRKo33Qh1CC2tA9z0MXvBYWiM-cAw"
+              },
+              "signer": "d8270188647d1a2453e4b07d468a1fef57eec30ecb34cf54639437e416ddbde5"
+            },
+            "timestamp": 1900043200
+          },
+          {
+            "signature": {
+              "alg": {
+                "alg": "ed25519",
+                "sig": "1Kuo0bid1kOAIr07--WU9myScTSexiL93z2a5bt4MJSaqmAdzLV16Ocay64JlAEjoV0ZD5tUbvEvmH_nRngvBA"
+              },
+              "signer": "4845ecc67e207f28233c9c2ba96eaae6b588d8aa402893a80f9d6ce199c86a50"
+            },
+            "timestamp": 1900043200
+          }
+        ],
+        "log_signature": {
+          "alg": {
+            "alg": "ed25519",
+            "sig": "pXMVWzywoHwuYsCqcRgFBJ3JPUI3xQr8iGLZJ_8mHq-AvpgzJ1jb9K4BFCmEVUkTw48bbD5RTSlHd1mbrcaLBQ"
+          },
+          "signer": "9aaa744aaee7d4d7ab5043d1f87cec6032b01c14b0b851c765b253e0816f830c"
+        }
+      },
+      "included": {
+        "audit_path": [
+          [
+            244,
+            191,
+            147,
+            42,
+            25,
+            188,
+            52,
+            103,
+            74,
+            188,
+            136,
+            245,
+            213,
+            17,
+            103,
+            105,
+            194,
+            33,
+            118,
+            156,
+            82,
+            179,
+            36,
+            141,
+            200,
+            162,
+            177,
+            63,
+            30,
+            251,
+            13,
+            174
+          ]
+        ],
+        "checkpoint": {
+          "checkpoint": {
+            "origin": "dev.log.seal.zone/v1",
+            "policy": {
+              "min_service_key_version": {},
+              "min_tcb": {}
+            },
+            "root_hash": "63rxzrggOPcedADJg2nKwCnQRefl8_NjORbv_xB5qu4",
+            "size": 5
+          },
+          "cosignatures": [
+            {
+              "signature": {
+                "alg": {
+                  "alg": "ed25519",
+                  "sig": "7u_fPJBw4Nt3VYVhjV4lFIwTbj6VnwsEGuUKtpitvwVGm4G9m2yaltuuMsTQFAIdUAMvJRBhhv_TUkUcmdTiAw"
+                },
+                "signer": "000e62ba0c6ce93da66eca96821f963dd440ac086073f7bbe6ef91ef90c9d3f6"
+              },
+              "timestamp": 1900036000
+            },
+            {
+              "signature": {
+                "alg": {
+                  "alg": "ed25519",
+                  "sig": "04MhP6gvD19kZzqtjFdwHG5YTq2p-ttXUg9VBlWefxyVcb0cz24RROrn1rYOcqTJ4TggISxNPeq2_9-36ttkDw"
+                },
+                "signer": "d8270188647d1a2453e4b07d468a1fef57eec30ecb34cf54639437e416ddbde5"
+              },
+              "timestamp": 1900036000
+            },
+            {
+              "signature": {
+                "alg": {
+                  "alg": "ed25519",
+                  "sig": "bdyDhhI0OIOoGONRdfv6FCl_LD91iZ3Cjli3hJ-8ooWGHg4gzIterxoXbpJ-MlcWE09PGJnBsbhMU2hNAaAkAA"
+                },
+                "signer": "4845ecc67e207f28233c9c2ba96eaae6b588d8aa402893a80f9d6ce199c86a50"
+              },
+              "timestamp": 1900036000
+            }
+          ],
+          "log_signature": {
+            "alg": {
+              "alg": "ed25519",
+              "sig": "pXMVWzywoHwuYsCqcRgFBJ3JPUI3xQr8iGLZJ_8mHq-AvpgzJ1jb9K4BFCmEVUkTw48bbD5RTSlHd1mbrcaLBQ"
+            },
+            "signer": "9aaa744aaee7d4d7ab5043d1f87cec6032b01c14b0b851c765b253e0816f830c"
+          }
+        },
+        "leaf_index": 4
+      },
+      "manifest": {
+        "body": {
+          "component": "enclave",
+          "measurement": "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e",
+          "platform": "sim",
+          "service_key_version": 1,
+          "source_commit": "0123456789abcdef0123456789abcdef01234567",
+          "version": "1.0.0"
+        },
+        "signatures": [
+          {
+            "alg": {
+              "alg": "ed25519",
+              "sig": "KNZt4In0BpQRLaJzO136zLORiKupmGqVaboRnotWTKXI4eh6FGVIR100yjLzjLpsvZbehBrtVgvCxTnxdxlKCw"
+            },
+            "signer": "8b66e5c51ff27bf5c4e6acc4c4d071a9fa062b172fac927a5ad6d4d70cb00b8a"
+          },
+          {
+            "alg": {
+              "alg": "ed25519",
+              "sig": "Zjx2z2UoE5OPpKmwnRRkvfvPU-dC6iiMd10WE4_ddGnGrbeG_FONiw2PzArAFztoy7Ae6gyyACQ0UrF7ZxbJBw"
+            },
+            "signer": "63ed95d660e07cb98ff0e163db81e165d32e0ff9717c6c430a477d6946c99614"
+          }
+        ]
+      }
+    },
+    "now": 1900043260,
+    "other_proof": {
+      "audit_path": [],
+      "checkpoint": {
+        "checkpoint": {
+          "origin": "dev.log.seal.zone/v1",
+          "policy": {
+            "min_service_key_version": {},
+            "min_tcb": {}
+          },
+          "root_hash": "SJNBJt4Y1x5Y6DLecFKWo0RJqop5H95ctQrFqbM8Ki8",
+          "size": 1
+        },
+        "cosignatures": [
+          {
+            "signature": {
+              "alg": {
+                "alg": "ed25519",
+                "sig": "4aPcZzjFkEYJAu0bB_gXFjYipSeRpRrYzao3v13vJEu2ce0L5vmP0YzQNUwgDZx0f7Bp-YeXztLTEkWHE-qMBQ"
+              },
+              "signer": "000e62ba0c6ce93da66eca96821f963dd440ac086073f7bbe6ef91ef90c9d3f6"
+            },
+            "timestamp": 1899999990
+          },
+          {
+            "signature": {
+              "alg": {
+                "alg": "ed25519",
+                "sig": "wOSjoq2aC1YFszkuDn4JfoP8EmRBO7AVIdeFcno8OM6p-orb_WLt6MWqLZldfKE0Bm5mcfFfZS6ar03dsB1dAA"
+              },
+              "signer": "d8270188647d1a2453e4b07d468a1fef57eec30ecb34cf54639437e416ddbde5"
+            },
+            "timestamp": 1899999990
+          },
+          {
+            "signature": {
+              "alg": {
+                "alg": "ed25519",
+                "sig": "YYWetAJdBPST8irAnulQsQN-s2DHAWWyEe0A47kHo6BvnrZMikX_HWnkn2B16wEoYJNjMt1Q1z4jKZdrPJuICg"
+              },
+              "signer": "4845ecc67e207f28233c9c2ba96eaae6b588d8aa402893a80f9d6ce199c86a50"
+            },
+            "timestamp": 1899999990
+          }
+        ],
+        "log_signature": {
+          "alg": {
+            "alg": "ed25519",
+            "sig": "z8xK0PJwXybSJT-z4aHg-61yIAaTiKPO6BSp9_5b5lC9DkQCpfvM5-Bk5kFoljHUUelcDJjsHJ-pSJ5b8VYJDQ"
+          },
+          "signer": "9aaa744aaee7d4d7ab5043d1f87cec6032b01c14b0b851c765b253e0816f830c"
+        }
+      },
+      "leaf_index": 0
+    },
+    "public_since": 1900036000,
+    "release_index": 4,
+    "signers": [
+      "8b66e5c51ff27bf5c4e6acc4c4d071a9fa062b172fac927a5ad6d4d70cb00b8a",
+      "63ed95d660e07cb98ff0e163db81e165d32e0ff9717c6c430a477d6946c99614"
+    ],
+    "under_threshold": {
+      "auditor": null,
+      "fresh": {
+        "checkpoint": {
+          "origin": "dev.log.seal.zone/v1",
+          "policy": {
+            "min_service_key_version": {},
+            "min_tcb": {}
+          },
+          "root_hash": "63rxzrggOPcedADJg2nKwCnQRefl8_NjORbv_xB5qu4",
+          "size": 5
+        },
+        "cosignatures": [
+          {
+            "signature": {
+              "alg": {
+                "alg": "ed25519",
+                "sig": "XYCuSdcwp07kurr5DWeMeB0rj7K_cyERkSMsA7Gd6VWReLl3kvrt858ylLrcNI1FjIIqfFw8VWvqtcrg16oyDg"
+              },
+              "signer": "000e62ba0c6ce93da66eca96821f963dd440ac086073f7bbe6ef91ef90c9d3f6"
+            },
+            "timestamp": 1900043200
+          },
+          {
+            "signature": {
+              "alg": {
+                "alg": "ed25519",
+                "sig": "JkCa7YLCiG1pWC6IC-UnhM4xrs-t1ykpPljVhhbdGWYsfS-MlbQy25Jg8cRKo33Qh1CC2tA9z0MXvBYWiM-cAw"
+              },
+              "signer": "d8270188647d1a2453e4b07d468a1fef57eec30ecb34cf54639437e416ddbde5"
+            },
+            "timestamp": 1900043200
+          },
+          {
+            "signature": {
+              "alg": {
+                "alg": "ed25519",
+                "sig": "1Kuo0bid1kOAIr07--WU9myScTSexiL93z2a5bt4MJSaqmAdzLV16Ocay64JlAEjoV0ZD5tUbvEvmH_nRngvBA"
+              },
+              "signer": "4845ecc67e207f28233c9c2ba96eaae6b588d8aa402893a80f9d6ce199c86a50"
+            },
+            "timestamp": 1900043200
+          }
+        ],
+        "log_signature": {
+          "alg": {
+            "alg": "ed25519",
+            "sig": "pXMVWzywoHwuYsCqcRgFBJ3JPUI3xQr8iGLZJ_8mHq-AvpgzJ1jb9K4BFCmEVUkTw48bbD5RTSlHd1mbrcaLBQ"
+          },
+          "signer": "9aaa744aaee7d4d7ab5043d1f87cec6032b01c14b0b851c765b253e0816f830c"
+        }
+      },
+      "included": {
+        "audit_path": [
+          [
+            244,
+            191,
+            147,
+            42,
+            25,
+            188,
+            52,
+            103,
+            74,
+            188,
+            136,
+            245,
+            213,
+            17,
+            103,
+            105,
+            194,
+            33,
+            118,
+            156,
+            82,
+            179,
+            36,
+            141,
+            200,
+            162,
+            177,
+            63,
+            30,
+            251,
+            13,
+            174
+          ]
+        ],
+        "checkpoint": {
+          "checkpoint": {
+            "origin": "dev.log.seal.zone/v1",
+            "policy": {
+              "min_service_key_version": {},
+              "min_tcb": {}
+            },
+            "root_hash": "63rxzrggOPcedADJg2nKwCnQRefl8_NjORbv_xB5qu4",
+            "size": 5
+          },
+          "cosignatures": [
+            {
+              "signature": {
+                "alg": {
+                  "alg": "ed25519",
+                  "sig": "7u_fPJBw4Nt3VYVhjV4lFIwTbj6VnwsEGuUKtpitvwVGm4G9m2yaltuuMsTQFAIdUAMvJRBhhv_TUkUcmdTiAw"
+                },
+                "signer": "000e62ba0c6ce93da66eca96821f963dd440ac086073f7bbe6ef91ef90c9d3f6"
+              },
+              "timestamp": 1900036000
+            },
+            {
+              "signature": {
+                "alg": {
+                  "alg": "ed25519",
+                  "sig": "04MhP6gvD19kZzqtjFdwHG5YTq2p-ttXUg9VBlWefxyVcb0cz24RROrn1rYOcqTJ4TggISxNPeq2_9-36ttkDw"
+                },
+                "signer": "d8270188647d1a2453e4b07d468a1fef57eec30ecb34cf54639437e416ddbde5"
+              },
+              "timestamp": 1900036000
+            },
+            {
+              "signature": {
+                "alg": {
+                  "alg": "ed25519",
+                  "sig": "bdyDhhI0OIOoGONRdfv6FCl_LD91iZ3Cjli3hJ-8ooWGHg4gzIterxoXbpJ-MlcWE09PGJnBsbhMU2hNAaAkAA"
+                },
+                "signer": "4845ecc67e207f28233c9c2ba96eaae6b588d8aa402893a80f9d6ce199c86a50"
+              },
+              "timestamp": 1900036000
+            }
+          ],
+          "log_signature": {
+            "alg": {
+              "alg": "ed25519",
+              "sig": "pXMVWzywoHwuYsCqcRgFBJ3JPUI3xQr8iGLZJ_8mHq-AvpgzJ1jb9K4BFCmEVUkTw48bbD5RTSlHd1mbrcaLBQ"
+            },
+            "signer": "9aaa744aaee7d4d7ab5043d1f87cec6032b01c14b0b851c765b253e0816f830c"
+          }
+        },
+        "leaf_index": 4
+      },
+      "manifest": {
+        "body": {
+          "component": "enclave",
+          "measurement": "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e",
+          "platform": "sim",
+          "service_key_version": 1,
+          "source_commit": "0123456789abcdef0123456789abcdef01234567",
+          "version": "1.0.0"
+        },
+        "signatures": [
+          {
+            "alg": {
+              "alg": "ed25519",
+              "sig": "KNZt4In0BpQRLaJzO136zLORiKupmGqVaboRnotWTKXI4eh6FGVIR100yjLzjLpsvZbehBrtVgvCxTnxdxlKCw"
+            },
+            "signer": "8b66e5c51ff27bf5c4e6acc4c4d071a9fa062b172fac927a5ad6d4d70cb00b8a"
+          }
+        ]
+      }
+    },
+    "unlocked_at": 1900039600,
+    "witnessed_at": 1900043200
+  },
   "signing": {
     "admin_key": {
       "kind": "web_authn_es256",
@@ -4153,6 +4658,26 @@
   "trust": {
     "guardians": {
       "sim": "5526f742941711b3bc530ba44ff6f6dab0f0ab71af832f41a7fe3b9fdaed9c60"
+    },
+    "releases": {
+      "release_keys": [
+        "ee93a4f66f8d16b819bb9beb9ffccdfcdc1412e87fee6a324c2a99a1e0e67148",
+        "e28a8970753332bd72fef413e6b0b2ef1b4aadda7aa2c141f233712a6876b351",
+        "d4eec1869fb1b8a4e817516ad5a931557cb56805c3eb16e8f3a803d647df7869"
+      ],
+      "release_threshold": 2,
+      "required_auditor": null,
+      "time_lock_secs": 3600,
+      "tlog": {
+        "log_key": "054d3838bd472a1dfb33d7f24d31c8015caab5ca6c48574530a30249e1c7e5fb",
+        "origin": "dev.log.seal.zone/v1",
+        "witness_keys": [
+          "62ec3a71cfb17cf364be6f3cb7367f364dcab1cb72cdb66077aad1f161e00ec9",
+          "f54c2b77546ec236873b2250f65c21d14bfb386d29deb6f8eb75c2180e113a53",
+          "c5907f8a7d59cbb991123e83425bbf4fa237c74c90f1a00d7807dcf847781ad7"
+        ],
+        "witness_quorum": 2
+      }
     },
     "tenants": {
       "registrar_keys": [

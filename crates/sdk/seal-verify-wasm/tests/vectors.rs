@@ -16,14 +16,17 @@ use seal_crypto::telemetry::TelemetryReaderKey;
 use seal_proto::api::TelemetryReceipt;
 use seal_proto::codec::{b64url, labeled_digest};
 use seal_proto::identity::{HostedMode, IdentityMatcher};
-use seal_proto::release::{LogEntry, ServiceKeyCertificate, SERVICE_KEY_CERTIFICATE_LABEL};
+use seal_proto::release::{
+    Component, LogEntry, ReleaseEvidence, ReleaseManifest, ServiceKeyCertificate, RELEASE_LABEL,
+    SERVICE_KEY_CERTIFICATE_LABEL,
+};
 use seal_proto::signed::Signed;
 use seal_proto::state::{
     root_id, AdminKey, LoggedRoot, LoggedState, TenantBundle, TenantKeyVersions, TenantRoot, TenantState,
     TENANT_ROOT_LABEL, TENANT_STATE_LABEL,
 };
 use seal_proto::telemetry::{TelemetryBatch, TelemetryEntries, TelemetryEntry, TelemetryEvent, TELEMETRY_BATCH_LABEL};
-use seal_proto::{KeyId, PlatformId, PublicKey, ServiceKeyVersion, TenantId, TenantKeyVersion, UnixTime};
+use seal_proto::{KeyId, Measurement, PlatformId, PublicKey, ServiceKeyVersion, TenantId, TenantKeyVersion, UnixTime};
 use seal_tlog::dev::DevLog;
 use seal_verify_wasm::api;
 
@@ -167,6 +170,18 @@ fn build() -> Value {
             },
             "registrar_keys": [key(21).public_key()],
             "registrar_threshold": 1,
+        },
+        "releases": {
+            "tlog": {
+                "origin": trust_tlog.origin,
+                "log_key": trust_tlog.log_key,
+                "witness_keys": trust_tlog.witness_keys,
+                "witness_quorum": trust_tlog.witness_quorum,
+            },
+            "release_keys": [key(70).public_key(), key(71).public_key(), key(72).public_key()],
+            "release_threshold": 2,
+            "required_auditor": null,
+            "time_lock_secs": HOUR,
         },
         "guardians": { "sim": guardian.public_key() },
     });
@@ -313,6 +328,36 @@ fn build() -> Value {
     ];
     let receipts = vec![TelemetryReceipt { stream: [1; 16], entry: 0 }, TelemetryReceipt { stream: [1; 16], entry: 2 }];
 
+    // A release signed by two of the three release keys, logged at R and published with a
+    // checkpoint from two hours later, so its one-hour time lock has passed; and the same
+    // release with one signature. Last in the log, so nothing above changes.
+    const R: UnixTime = T + 10 * HOUR;
+    let manifest = ReleaseManifest {
+        component: Component::Enclave,
+        platform: PlatformId::Sim,
+        measurement: Measurement([0x5e; 48]),
+        service_key_version: ServiceKeyVersion(1),
+        version: "1.0.0".into(),
+        source_commit: "0123456789abcdef0123456789abcdef01234567".into(),
+        serves: None,
+    };
+    let mut signed_manifest = key(70).sign_into(RELEASE_LABEL, manifest.clone());
+    key(71).cosign(RELEASE_LABEL, &mut signed_manifest);
+    let release_index = log.log.append(LogEntry::Release(manifest.clone())).unwrap();
+    let included = log.at(
+        R,
+        |l| {
+            l.checkpoint();
+            l.prove(release_index)
+        },
+        |p| uniform(&p.checkpoint),
+    );
+    let fresh = log.at(R + 2 * HOUR, |l| l.checkpoint(), uniform);
+    let early = log.at(R + HOUR / 2, |l| l.checkpoint(), uniform);
+    let evidence = ReleaseEvidence { manifest: signed_manifest.clone(), included, fresh: fresh.clone(), auditor: None };
+    let under_threshold =
+        ReleaseEvidence { manifest: key(70).sign_into(RELEASE_LABEL, manifest.clone()), ..evidence.clone() };
+
     json!({
         "trust": trust,
         "tenant": "acme",
@@ -371,6 +416,20 @@ fn build() -> Value {
             "signers": [key(31).key_id().to_string(), seal_crypto::sign::admin_key_id(&passkey).to_string()],
             "root_v1": root,
             "root_id": root_id(&root).to_string(),
+        },
+        "releases": {
+            "checkpoint": fresh,
+            "witnessed_at": R + 2 * HOUR,
+            "entry": LogEntry::Release(manifest.clone()),
+            "evidence": evidence,
+            "release_index": release_index,
+            "public_since": R,
+            "unlocked_at": R + HOUR,
+            "now": R + 2 * HOUR + 60,
+            "early_checkpoint": early,
+            "signers": [key(70).key_id().to_string(), key(71).key_id().to_string()],
+            "under_threshold": under_threshold,
+            "other_proof": chain[0].proof,
         },
         "telemetry": {
             "root_id": root_id(&root).to_string(),
@@ -492,4 +551,42 @@ fn the_api_meets_its_vectors() {
     assert_eq!(json!(found), t["findings"]);
     let closed = analyze("");
     assert_eq!(closed["sealed"].as_array().unwrap().len() as u64, t["sealed_without_reader"].as_u64().unwrap());
+
+    let r = &v["releases"];
+    let parse = |out: String| -> Value { serde_json::from_str(&out).unwrap() };
+    let checkpoint = parse(api::verify_checkpoint(&trust, &s(&r["checkpoint"])).unwrap());
+    assert_eq!(checkpoint["public_since"], r["witnessed_at"]);
+    assert_eq!(checkpoint["quorum"], json!(2));
+    let cosigned: Vec<&Value> = checkpoint["witnesses"].as_array().unwrap().iter().map(|w| &w["cosigned_at"]).collect();
+    assert_eq!(cosigned, vec![&r["witnessed_at"]; 3]);
+    let mut tampered = r["checkpoint"].clone();
+    tampered["checkpoint"]["size"] = json!(tampered["checkpoint"]["size"].as_u64().unwrap() + 1);
+    assert!(api::verify_checkpoint(&trust, &s(&tampered)).unwrap_err().contains("not signed by the log key"));
+    let mut one_witness = r["checkpoint"].clone();
+    one_witness["cosignatures"].as_array_mut().unwrap().truncate(1);
+    assert!(api::verify_checkpoint(&trust, &s(&one_witness)).unwrap_err().contains("quorum"));
+
+    let included = &r["evidence"]["included"];
+    let inclusion = parse(api::verify_inclusion(&trust, &s(&r["entry"]), &s(included)).unwrap());
+    assert_eq!(inclusion["leaf_index"], r["release_index"]);
+    assert_eq!(inclusion["public_since"], r["public_since"]);
+    let err = api::verify_inclusion(&trust, &s(&r["entry"]), &s(&r["other_proof"])).unwrap_err();
+    assert!(err.contains("inclusion proof does not match"), "{err}");
+
+    let signers = parse(api::release_signers(&trust, &s(&r["evidence"]["manifest"])).unwrap());
+    assert_eq!(signers, r["signers"]);
+    let one = parse(api::release_signers(&trust, &s(&r["under_threshold"]["manifest"])).unwrap());
+    assert_eq!(one.as_array().unwrap().len(), 1);
+
+    let now = r["now"].as_u64().unwrap();
+    let release = parse(api::verify_release(&trust, &s(&r["evidence"]), "", now).unwrap());
+    assert_eq!(release["public_since"], r["public_since"]);
+    assert_eq!(release["unlocked_at"], r["unlocked_at"]);
+    assert_eq!(release["manifest"], r["entry"]["body"]);
+    let err = api::verify_release(&trust, &s(&r["under_threshold"]), "", now).unwrap_err();
+    assert!(err.starts_with("release signatures"), "{err}");
+    let err = api::verify_release(&trust, &s(&r["evidence"]), &s(&r["early_checkpoint"]), now).unwrap_err();
+    assert!(err.starts_with("time lock"), "{err}");
+    let err = api::verify_release(&trust, &s(&r["evidence"]), &s(&tampered), now).unwrap_err();
+    assert!(err.contains("not signed by the log key"), "{err}");
 }

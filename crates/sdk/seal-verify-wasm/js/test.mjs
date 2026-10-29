@@ -87,6 +87,30 @@ test("telemetry", () => {
   assert.equal(closed.sealed.length, t.sealed_without_reader)
 })
 
+test("the log: checkpoints, inclusion and releases", () => {
+  const r = v.releases
+  const checkpoint = seal.verifyCheckpoint(v.trust, r.checkpoint)
+  assert.equal(checkpoint.public_since, r.witnessed_at)
+  assert.deepEqual(checkpoint.witnesses.map((w) => w.cosigned_at), [r.witnessed_at, r.witnessed_at, r.witnessed_at])
+  const tampered = structuredClone(r.checkpoint)
+  tampered.checkpoint.size += 1
+  assert.throws(() => seal.verifyCheckpoint(v.trust, tampered), /not signed by the log key/)
+
+  const inclusion = seal.verifyInclusion(v.trust, r.entry, r.evidence.included)
+  assert.equal(inclusion.leaf_index, r.release_index)
+  assert.equal(inclusion.public_since, r.public_since)
+  assert.throws(() => seal.verifyInclusion(v.trust, r.entry, r.other_proof), /inclusion proof does not match/)
+
+  assert.deepEqual(seal.releaseSigners(v.trust, r.evidence.manifest), r.signers)
+  assert.equal(seal.releaseSigners(v.trust, r.under_threshold.manifest).length, 1)
+
+  const release = seal.verifyRelease(v.trust, r.evidence, { now: r.now })
+  assert.equal(release.public_since, r.public_since)
+  assert.equal(release.unlocked_at, r.unlocked_at)
+  assert.throws(() => seal.verifyRelease(v.trust, r.under_threshold, { now: r.now }), /^Error: release signatures/)
+  assert.throws(() => seal.verifyRelease(v.trust, r.evidence, { fresh: r.early_checkpoint, now: r.now }), /time lock/)
+})
+
 // The sealing module. A real seal needs a live attested enclave (the console's e2e covers it);
 // here, what holds without one.
 const sealing = await import(join(pkg, "seal.js"))

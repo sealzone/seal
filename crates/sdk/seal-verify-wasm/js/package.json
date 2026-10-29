@@ -1,7 +1,7 @@
 {
   "name": "@sealzone/verify",
   "version": "@VERSION@",
-  "description": "Seal's verifier in the browser: tenant documents and the pending window, passkey signatures, telemetry; sealing secrets to an attested enclave (`/seal`).",
+  "description": "Seal's verifier in the browser: tenant documents and the pending window, passkey signatures, telemetry, the transparency log's checkpoints and releases; sealing secrets to an attested enclave (`/seal`).",
   "license": "Apache-2.0",
   "homepage": "https://seal.zone",
   "type": "module",

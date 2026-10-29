@@ -7,12 +7,16 @@ use std::collections::BTreeMap;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-use seal_crypto::sign::{admin_key_id, verify_admin};
+use seal_crypto::sign::{admin_key_id, key_id, verify, verify_admin};
 use seal_crypto::telemetry::TelemetryReaderKey;
 use seal_proto::api::{AttestationResponse, IngestContext, SealPayload, SealRequest, SealResponse, TelemetryReceipt};
 use seal_proto::codec::{self, labeled_digest};
 use seal_proto::policy::{HttpRules, Injection, SecretPolicy, SpkiPin};
-use seal_proto::release::{ReleaseCosign, SignedCheckpoint, SignedServiceKeyCertificate, RELEASE_COSIGN_LABEL};
+use seal_proto::release::{
+    LogEntry, ReleaseConstraints, ReleaseCosign, ReleaseEvidence, ReleaseManifest, SignedCheckpoint,
+    SignedServiceKeyCertificate, TlogProof, RELEASE_COSIGN_LABEL, RELEASE_LABEL,
+};
+use seal_proto::signed::Signed;
 use seal_proto::signed::{SigAlg, Signature};
 use seal_proto::state::{
     root_id as chain_root_id, AdminKey, LoggedRoot, LoggedState, TenantBundle, TenantRoot, TenantState,
@@ -20,6 +24,7 @@ use seal_proto::state::{
 };
 use seal_proto::telemetry::SignedTelemetryBatch;
 use seal_proto::{PlatformId, PublicKey, TenantId, TenantRootId, TrustedTime, UnixTime};
+use seal_tlog::LogVerifier;
 use seal_verify::change::{self, Difference};
 use seal_verify::{Pending, Public, TenantTrust, TenantVerifier};
 
@@ -363,6 +368,142 @@ pub fn analyze_telemetry(
 /// lists.
 pub fn telemetry_reader_public_key(reader_seed: &str) -> Result<String> {
     Ok(reader_key(reader_seed)?.public_key().to_string())
+}
+
+// The transparency log in the browser: a checkpoint's log signature and witness quorum, an
+// entry's inclusion, and a release's evidence, against the trust's `releases` (its log, release
+// keys and time lock), as the guardian checks them.
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// One trusted witness and whether its cosignature on the checkpoint counts.
+#[derive(Serialize)]
+struct WitnessJson {
+    key_id: String,
+    /// The time it saw the checkpoint, when its cosignature is valid and not revoked.
+    cosigned_at: Option<UnixTime>,
+}
+
+#[derive(Serialize)]
+struct CheckpointJson<'a> {
+    origin: &'a str,
+    size: u64,
+    /// Hex.
+    root_hash: String,
+    policy: &'a ReleaseConstraints,
+    /// The earliest time a quorum had seen it: anything it includes was public by then.
+    public_since: UnixTime,
+    /// The latest time a quorum vouched for it.
+    fresh_at: UnixTime,
+    quorum: usize,
+    witnesses: Vec<WitnessJson>,
+}
+
+/// `LogVerifier::checkpoint` of `checkpoint` (a `SignedCheckpoint`) with the trust's release
+/// log: origin, log signature, witness quorum. Also each trusted witness's own cosignature.
+pub fn verify_checkpoint(trust: &str, checkpoint: &str) -> Result<String> {
+    let tlog = full_trust(trust)?.releases.tlog;
+    let cp: SignedCheckpoint = parse("checkpoint", checkpoint)?;
+    let verified = LogVerifier::new(tlog.clone()).checkpoint(&cp).map_err(|e| e.to_string())?;
+    let witnesses = tlog
+        .witness_keys
+        .iter()
+        .map(|key| {
+            let alone = seal_tlog::TlogTrust { witness_keys: vec![*key], witness_quorum: 1, ..tlog.clone() };
+            WitnessJson {
+                key_id: key_id(key).to_string(),
+                cosigned_at: LogVerifier::new(alone).checkpoint(&cp).ok().map(|v| v.fresh_at()),
+            }
+        })
+        .collect();
+    let c = verified.checkpoint();
+    json(&CheckpointJson {
+        origin: &c.origin,
+        size: c.size,
+        root_hash: hex(&c.root_hash),
+        policy: &c.policy,
+        public_since: verified.public_since(),
+        fresh_at: verified.fresh_at(),
+        quorum: tlog.witness_quorum,
+        witnesses,
+    })
+}
+
+#[derive(Serialize)]
+struct InclusionJson {
+    leaf_index: u64,
+    /// The proof's checkpoint.
+    size: u64,
+    root_hash: String,
+    public_since: UnixTime,
+}
+
+/// `LogVerifier::inclusion` of `entry` (a `LogEntry`) under `proof` (a `TlogProof`): the
+/// proof's checkpoint verifies as `verify_checkpoint` does, and the entry's leaf at
+/// `leaf_index` hashes up to its root.
+pub fn verify_inclusion(trust: &str, entry: &str, proof: &str) -> Result<String> {
+    let tlog = full_trust(trust)?.releases.tlog;
+    let entry: LogEntry = parse("entry", entry)?;
+    let proof: TlogProof = parse("proof", proof)?;
+    let verified = LogVerifier::new(tlog).inclusion(&entry, &proof).map_err(|e| e.to_string())?;
+    let c = verified.checkpoint();
+    json(&InclusionJson {
+        leaf_index: proof.leaf_index,
+        size: c.size,
+        root_hash: hex(&c.root_hash),
+        public_since: verified.public_since(),
+    })
+}
+
+/// Key ids (hex) of the trust's release keys with a valid signature on `manifest` (a
+/// `Signed<ReleaseManifest>`), each once. Revocations are the log's (`verify_release`).
+pub fn release_signers(trust: &str, manifest: &str) -> Result<String> {
+    let keys = full_trust(trust)?.releases.release_keys;
+    let manifest: Signed<ReleaseManifest> = parse("manifest", manifest)?;
+    let mut out: Vec<String> = Vec::new();
+    for sig in &manifest.signatures {
+        let Some(key) = keys.iter().find(|k| key_id(k) == sig.signer) else { continue };
+        let id = sig.signer.to_string();
+        if !out.contains(&id) && verify(key, RELEASE_LABEL, &manifest.body, sig).is_ok() {
+            out.push(id);
+        }
+    }
+    json(&out)
+}
+
+#[derive(Serialize)]
+struct ReleaseJson<'a> {
+    manifest: &'a ReleaseManifest,
+    public_since: UnixTime,
+    /// `public_since` plus the trust's time lock: when the guardian could first hand it keys.
+    unlocked_at: UnixTime,
+    /// The rules in force, from the fresh checkpoint.
+    policy: &'a ReleaseConstraints,
+}
+
+/// `ReleaseVerifier::verify` of `evidence` (a `ReleaseEvidence`) at `now`: release signatures
+/// against the threshold, inclusion, time lock, freshness, revocations and the minimum service
+/// key version. `fresh` (a `SignedCheckpoint`, or empty) replaces the evidence's own fresh
+/// checkpoint, which is as old as the release: a recent one from the log says whether the
+/// release is still allowed.
+pub fn verify_release(trust: &str, evidence: &str, fresh: &str, now: UnixTime) -> Result<String> {
+    let releases = full_trust(trust)?.releases;
+    let time_lock = releases.time_lock_secs;
+    let mut evidence: ReleaseEvidence = parse("release evidence", evidence)?;
+    if !fresh.is_empty() {
+        evidence.fresh = parse("fresh checkpoint", fresh)?;
+    }
+    let verified = seal_verify::ReleaseVerifier::new(releases)
+        .verify(&evidence, &TrustedTime::exact(now))
+        .map_err(|e| e.to_string())?;
+    json(&ReleaseJson {
+        manifest: verified.manifest(),
+        public_since: verified.public_since(),
+        unlocked_at: verified.public_since().saturating_add(time_lock),
+        policy: verified.constraints(),
+    })
 }
 
 // Sealing in the browser. The page verifies the tenant's enclave (`verify_enclave`), then

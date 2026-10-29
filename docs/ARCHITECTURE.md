@@ -20,7 +20,7 @@ Crates are grouped by role under `crates/`. A crate's name does not change with 
 | `enclave/adapters/` | seal-adapter, seal-adapter-{http,pg,redis,clickhouse} | Inside the enclave TEE. One upstream protocol per crate |
 | `guardian/` | seal-guardian | Run by Seal in its own TEE. A release is frozen; a successor release takes over its root |
 | `control-plane/` | seal-control, seal-registrar | Run by Seal with no TEE, untrusted. The registrar signs only root version 1 of new tenants |
-| `sdk/` | seal-client, seal-cli, seal-py, seal-node, seal-ffi, seal-verify-wasm, and the Go module `seal-go` (not a crate) | On customers' processes and machines. seal-verify-wasm runs in admins' browsers |
+| `sdk/` | seal-client, seal-cli, seal-py, seal-node, seal-ffi, seal-verify-wasm, and the Go module `seal-go` (not a crate) | On customers' processes and machines. seal-verify-wasm runs in admins' browsers and on seal.zone's transparency page |
 | `sim/` | seal-sim, seal-release (`publish = false`) | On developer machines only. seal-sim drives the whole system on the simulator. seal-release uses the production SDK (no `sim` feature) to measure, sign, log and publish releases, and drives the same flows against live deployments |
 
 The enclave and the guardian are separate realms. The enclave runs on every cloud and changes

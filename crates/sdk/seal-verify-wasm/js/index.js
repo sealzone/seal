@@ -19,6 +19,10 @@ import init, {
   certifiedTelemetryKeys as wasmCertifiedTelemetryKeys,
   analyzeTelemetry as wasmAnalyzeTelemetry,
   telemetryReaderPublicKey as wasmTelemetryReaderPublicKey,
+  verifyCheckpoint as wasmVerifyCheckpoint,
+  verifyInclusion as wasmVerifyInclusion,
+  releaseSigners as wasmReleaseSigners,
+  verifyRelease as wasmVerifyRelease,
 } from "./seal_verify_wasm.js"
 
 export { init, initSync }
@@ -109,4 +113,20 @@ export function analyzeTelemetry(tenant, keys, batches, { since = 0, receipts = 
 
 export function telemetryReaderPublicKey(readerSeed) {
   return wasmTelemetryReaderPublicKey(hex(readerSeed))
+}
+
+export function verifyCheckpoint(trust, checkpoint) {
+  return parse(wasmVerifyCheckpoint(json(trust), json(checkpoint)))
+}
+
+export function verifyInclusion(trust, entry, proof) {
+  return parse(wasmVerifyInclusion(json(trust), json(entry), json(proof)))
+}
+
+export function releaseSigners(trust, manifest) {
+  return parse(wasmReleaseSigners(json(trust), json(manifest)))
+}
+
+export function verifyRelease(trust, evidence, { fresh, now = nowSecs() } = {}) {
+  return parse(wasmVerifyRelease(json(trust), json(evidence), fresh === undefined ? "" : json(fresh), now))
 }

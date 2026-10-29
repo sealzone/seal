@@ -17,12 +17,30 @@ export const LABELS: {
   readonly releaseCosign: "seal/release-cosign/v1"
 }
 
-/** The trust file (`trust.json`): `tenants` verifies documents, `guardians` telemetry certificates. */
+export interface TlogTrust {
+  origin: string
+  log_key: string
+  witness_keys: string[]
+  witness_quorum: number
+}
+
+/**
+ * The trust file (`trust.json`): `tenants` verifies documents, `guardians` telemetry
+ * certificates, `releases` the log's checkpoints and releases (`verifyCheckpoint`,
+ * `verifyInclusion`, `releaseSigners`, `verifyRelease`, which take the whole file).
+ */
 export interface Trust {
   tenants: {
-    tlog: { origin: string; log_key: string; witness_keys: string[]; witness_quorum: number }
+    tlog: TlogTrust
     registrar_keys: string[]
     registrar_threshold: number
+  }
+  releases?: {
+    tlog: TlogTrust
+    release_keys: string[]
+    release_threshold: number
+    required_auditor?: string | null
+    time_lock_secs: number
   }
   guardians?: Record<string, string>
   [other: string]: unknown
@@ -143,3 +161,48 @@ export function analyzeTelemetry(
   options?: { since?: number; receipts?: Json[]; readerSeed?: string | Uint8Array },
 ): Analysis
 export function telemetryReaderPublicKey(readerSeed: string | Uint8Array): string
+
+/** A checkpoint whose log signature and witness quorum verify (`releases.tlog`). */
+export interface VerifiedCheckpoint {
+  origin: string
+  size: number
+  /** Hex. */
+  root_hash: string
+  /** The checkpoint's `ReleaseConstraints`. */
+  policy: Json
+  /** The earliest time a quorum had seen it. */
+  public_since: number
+  /** The latest time a quorum vouched for it. */
+  fresh_at: number
+  quorum: number
+  /** Each trusted witness; `cosigned_at` is null unless its cosignature is valid and not revoked. */
+  witnesses: { key_id: string; cosigned_at: number | null }[]
+}
+export function verifyCheckpoint(trust: Trust, checkpoint: Json): VerifiedCheckpoint
+
+/** `entry` (a `LogEntry`) is the leaf at `leaf_index` of the proof's verified checkpoint. */
+export interface VerifiedInclusion {
+  leaf_index: number
+  size: number
+  root_hash: string
+  public_since: number
+}
+export function verifyInclusion(trust: Trust, entry: Json, proof: Json): VerifiedInclusion
+
+/** Key ids (hex) of the trust's release keys with a valid signature on a `Signed<ReleaseManifest>`. */
+export function releaseSigners(trust: Trust, manifest: Json): string[]
+
+/** A release the guardian would accept: signatures, inclusion, time lock, freshness, revocations. */
+export interface VerifiedRelease {
+  manifest: Json
+  public_since: number
+  /** `public_since` plus the trust's time lock. */
+  unlocked_at: number
+  policy: Json
+}
+/** `fresh` replaces the evidence's own fresh checkpoint with a recent one. */
+export function verifyRelease(
+  trust: Trust,
+  evidence: Json,
+  options?: { fresh?: Json; now?: number },
+): VerifiedRelease
