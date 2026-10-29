@@ -655,6 +655,15 @@ impl Admin {
             bundle.states = consecutive_to(&documents.states, &bundle.state);
             verified = verifier.verify(&self.tenant, &bundle, time);
         }
+        if matches!(verified, Err(VerifyError::StateNotFresh)) {
+            // Right after a state is logged the control plane can still hold the log's statement
+            // for the one before: ask the log for it directly. It is signed for exactly the state
+            // it names, so it proves no more than the control plane's copy would.
+            if let Ok(statement) = self.log.freshness(&self.tenant).await {
+                bundle.freshness.push(statement);
+                verified = verifier.verify(&self.tenant, &bundle, time);
+            }
+        }
         let tenant = verified.map_err(|e| match e {
             VerifyError::StateNotFresh if !bundle.state.body.freshness_keys.is_empty() => ClientError::Verification(
                 "no current freshness statement for the tenant's state; it names freshness keys, so one of them \
