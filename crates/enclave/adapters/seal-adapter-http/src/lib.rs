@@ -42,6 +42,7 @@
 
 use std::collections::VecDeque;
 use std::convert::Infallible;
+use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -78,6 +79,10 @@ const END_GRACE: Duration = Duration::from_secs(1);
 /// to keep the connection; a longer or slower one closes it.
 const DRAIN_MAX_BYTES: usize = 1 << 20;
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
+/// A response body whose upstream sends nothing for this long gets the scrubber's held-back
+/// window (`Scrubber::release`), so a stream (SSE) is never stuck behind it. When that happens
+/// depends on arrival times alone, never on the bytes.
+const QUIET_RELEASE: Duration = Duration::from_millis(100);
 /// `Completion::action` keeps at most this many bytes of the path.
 const ACTION_PATH_MAX: usize = 128;
 /// Headers some servers and frameworks take as the request's method (`methods` policy) or
@@ -362,6 +367,7 @@ impl Conn {
             inner_done: false,
             pushed: 0,
             sent: 0,
+            quiet: Box::pin(tokio::time::sleep(QUIET_RELEASE)),
             report: Some(Report { session, action, outcome, bytes_up, conn: self.clone() }),
         };
         Response::from_parts(parts, body.boxed())
@@ -780,6 +786,8 @@ struct DownBody {
     pushed: u64,
     /// Body bytes returned to the client.
     sent: u64,
+    /// `QUIET_RELEASE` after the upstream's latest data.
+    quiet: Pin<Box<tokio::time::Sleep>>,
     report: Option<Report>,
 }
 
@@ -820,10 +828,20 @@ impl Body for DownBody {
                 this.report(None);
                 return Poll::Ready(None);
             }
-            match ready!(Pin::new(&mut this.inner).poll_frame(cx)) {
+            let polled = Pin::new(&mut this.inner).poll_frame(cx);
+            if polled.is_pending() {
+                if this.scrubber.holding() && this.quiet.as_mut().poll(cx).is_ready() {
+                    let out = this.scrubber.release();
+                    this.queue(out);
+                    continue;
+                }
+                return Poll::Pending;
+            }
+            match ready!(polled) {
                 Some(Ok(frame)) => match frame.into_data() {
                     Ok(data) => {
                         this.pushed += data.len() as u64;
+                        this.quiet.as_mut().reset(tokio::time::Instant::now() + QUIET_RELEASE);
                         let out = this.scrubber.push(&data);
                         this.queue(out);
                     }

@@ -27,12 +27,21 @@ use zeroize::{Zeroize, Zeroizing};
 /// Streaming scrubber: overwrites every occurrence of any needle, in any of the forms the
 /// module lists, with the same number of `*` bytes, including occurrences split across chunk
 /// boundaries. Same length on purpose: Postgres, Redis and ClickHouse frames carry length
-/// prefixes, so a length-changing replacement would corrupt the protocol. Holds back only a
-/// tail that could still become an occurrence (shorter than the longest spelling: six bytes
-/// per byte of a needle or base64 core), and `flush` releases it at a protocol message boundary, so a
-/// request/response protocol never stalls on a reply that happens to end like the start of
-/// the secret. Sees only the bytes as sent: a secret inside compressed data passes, which is
-/// why adapters refuse response compression. Needles are zeroized on drop.
+/// prefixes, so a length-changing replacement would corrupt the protocol.
+///
+/// What it releases, and when, depends only on how many bytes arrived, never on what they
+/// were: it always holds back the last `window` bytes (one less than the longest spelling of
+/// any pattern, six bytes per byte of a needle or base64 core), whether or not they could
+/// start an occurrence, and `flush` releases them all at a protocol message boundary, so a
+/// request/response protocol never stalls. A stream with no message boundaries calls `release`
+/// when its upstream goes quiet, a moment set by arrival times alone: the held bytes go out and
+/// stay as context, so an occurrence that resumes after the pause still has its unsent rest
+/// masked (only what went out before the pause is past masking). Holding back only a tail that might be the
+/// secret's beginning would frame the output by how much of the secret an echo matched: an
+/// upstream that echoes chosen text would then be a prefix oracle for the secret.
+///
+/// Sees only the bytes as sent: a secret inside compressed data passes, which is why adapters
+/// refuse response compression. Needles are zeroized on drop.
 pub struct Scrubber {
     /// Each needle and its base64 cores, matched byte by byte in any spelling.
     patterns: Vec<Zeroizing<Vec<u8>>>,
@@ -41,6 +50,10 @@ pub struct Scrubber {
     carry: Vec<u8>,
     /// Per byte of `carry`: already covered by a complete occurrence.
     carry_masked: Vec<bool>,
+    /// How many leading bytes of `carry` went out already (`release`): context only.
+    carry_sent: usize,
+    /// Bytes always held back: no occurrence still open can start earlier.
+    window: usize,
     /// Scratch for `scan`, kept to avoid an allocation per byte.
     active: Vec<Partial>,
     next: Vec<Partial>,
@@ -60,7 +73,16 @@ impl Scrubber {
                 }
             }
         }
-        Self { patterns, carry: Vec::new(), carry_masked: Vec::new(), active: Vec::new(), next: Vec::new() }
+        let longest = patterns.iter().map(|p| p.len() * LONGEST_SPELLING).max().unwrap_or(0);
+        Self {
+            patterns,
+            carry: Vec::new(),
+            carry_masked: Vec::new(),
+            carry_sent: 0,
+            window: longest.saturating_sub(1),
+            active: Vec::new(),
+            next: Vec::new(),
+        }
     }
 
     /// Feed a chunk; returns bytes safe to forward now.
@@ -73,26 +95,43 @@ impl Scrubber {
         let mut masked = std::mem::take(&mut self.carry_masked);
         masked.resize(buf.len(), false);
 
-        // Mask every complete occurrence and find the earliest start of one still open.
-        let mut emit = buf.len();
+        // Mask every complete occurrence. The release point is fixed by the length alone (module
+        // docs): an occurrence still open is shorter than its longest spelling, so it starts
+        // inside the window.
+        let keep = buf.len().saturating_sub(self.window);
         for pattern in &self.patterns {
-            if let Some(start) = scan(pattern, &buf, &mut masked, &mut self.active, &mut self.next) {
-                emit = emit.min(start);
-            }
+            let open = scan(pattern, &buf, &mut masked, &mut self.active, &mut self.next);
+            debug_assert!(open.is_none_or(|start| start >= keep));
         }
 
-        let out = apply(&buf[..emit], &masked[..emit]);
-        self.carry = buf[emit..].to_vec();
-        self.carry_masked = masked[emit..].to_vec();
+        let emit = keep.max(self.carry_sent);
+        let out = apply(&buf[self.carry_sent..emit], &masked[self.carry_sent..emit]);
+        self.carry = buf[keep..].to_vec();
+        self.carry_masked = masked[keep..].to_vec();
+        self.carry_sent = emit - keep;
         buf.zeroize();
         out
     }
 
+    /// The upstream went quiet: returns every byte not yet released, scrubbed as far as known,
+    /// and keeps the window as context for the next push (module docs).
+    pub fn release(&mut self) -> Vec<u8> {
+        let out = apply(&self.carry[self.carry_sent..], &self.carry_masked[self.carry_sent..]);
+        self.carry_sent = self.carry.len();
+        out
+    }
+
+    /// Whether bytes are held back that `release` would hand out.
+    pub fn holding(&self) -> bool {
+        self.carry_sent < self.carry.len()
+    }
+
     /// Protocol message boundary: returns the held-back tail, scrubbed; the next push starts fresh.
     pub fn flush(&mut self) -> Vec<u8> {
-        let out = apply(&self.carry, &self.carry_masked);
+        let out = apply(&self.carry[self.carry_sent..], &self.carry_masked[self.carry_sent..]);
         self.carry.zeroize();
         self.carry_masked.clear();
+        self.carry_sent = 0;
         out
     }
 
@@ -170,6 +209,9 @@ impl Spelling {
 
 /// How many spellings `spelling` can return per byte.
 const SPELLINGS: usize = 5;
+
+/// The longest spelling of any byte (`\u00XX`).
+const LONGEST_SPELLING: usize = 6;
 
 /// The `n`th spelling of byte `b`, if it has one: plain, `%XX`, `\u00XX`, a short JSON escape,
 /// `+` for a space.
@@ -323,7 +365,6 @@ mod tests {
     fn masks_occurrence_split_across_chunks() {
         let mut s = scrubber(&[b"sk-secret"]);
         let mut out = s.push(b"error: sk-se");
-        assert_eq!(out, b"error: ", "holds back only the possible prefix");
         out.extend(s.push(b"cret, bye"));
         out.extend(s.finish());
         assert_eq!(out, b"error: *********, bye");
@@ -357,20 +398,64 @@ mod tests {
     #[test]
     fn flush_releases_tail_and_starts_fresh() {
         let mut s = scrubber(&[b"secret"]);
-        assert_eq!(s.push(b"+OK sec"), b"+OK ");
-        assert_eq!(s.flush(), b"sec", "a message boundary releases the tail");
-        assert_eq!(s.push(b"ret"), b"ret", "the next push starts fresh");
-        assert!(s.finish().is_empty());
-        assert_eq!(s.push(b"secret"), b"******");
+        assert_eq!(s.push(b"+OK sec"), b"", "the window covers the whole reply");
+        assert_eq!(s.flush(), b"+OK sec", "a message boundary releases the tail");
+        assert_eq!(s.push(b"ret"), b"", "the next push starts fresh");
+        assert_eq!(s.finish(), b"ret");
+        assert_eq!(s.push(b"secret"), b"");
+        assert_eq!(s.finish(), b"******");
     }
 
     #[test]
-    fn holds_back_less_than_longest_needle() {
+    fn holds_back_a_fixed_window() {
+        // Six bytes per byte of the longest pattern, less one: 35 for a six-byte needle.
         let mut s = scrubber(&[b"abcdef"]);
-        assert_eq!(s.push(b"abcde"), b"");
-        assert_eq!(s.push(b"x"), b"abcdex");
-        assert_eq!(s.push(b"%6"), b"", "could become `%61`");
-        assert_eq!(s.push(b"2"), b"%62");
+        assert_eq!(s.window, 35);
+        let filler = [b'x'; 40];
+        assert_eq!(s.push(&filler), &filler[..5]);
+        assert_eq!(s.push(b"y"), b"x");
+        assert_eq!(s.finish(), [&filler[..34], b"y"].concat());
+    }
+
+    #[test]
+    fn release_hands_out_the_window_and_keeps_it_as_context() {
+        let mut s = scrubber(&[b"sk-secret"]);
+        assert_eq!(s.push(b"error: sk-se"), b"");
+        assert!(s.holding());
+        assert_eq!(s.release(), b"error: sk-se", "a pause sends what is held");
+        assert!(!s.holding());
+        assert_eq!(s.release(), b"");
+        // The occurrence resumes: its unsent rest is still masked.
+        let mut out = s.push(b"cret, bye");
+        out.extend(s.finish());
+        assert_eq!(out, b"****, bye");
+        // A whole occurrence after a pause is masked as usual.
+        let mut s = scrubber(&[b"sk-secret"]);
+        s.push(b"x");
+        assert_eq!(s.release(), b"x");
+        let mut out = s.push(b" sk-secret y");
+        out.extend(s.finish());
+        assert_eq!(out, b" ********* y");
+    }
+
+    #[test]
+    fn release_points_never_depend_on_the_secret() {
+        // A prefix oracle: an echo of a guess that matches the secret's beginning must come out
+        // in the same pieces as one that does not.
+        let secret: &[u8] = b"sk-live-9Qz7wPb3nX2mK8vR4tY6";
+        let pieces = |guess: &[u8]| {
+            let mut s = scrubber(&[secret]);
+            let echo = [b"data: {\"text\": \"".as_slice(), guess, b"\"}\n\n"].concat();
+            let mut sizes: Vec<usize> = echo.chunks(7).map(|c| s.push(c).len()).collect();
+            sizes.push(s.finish().len());
+            sizes
+        };
+        // Same length, so only the content differs: a wrong last character, nothing alike, and
+        // the whole secret but its last character (against the secret itself, which is masked).
+        for wrong in [b"sk-live-9Qa".as_slice(), b"xxxxxxxxxxx", b"sk-live-9Qz7wPb3nX2mK8vR4tY5"] {
+            let right = pieces(&secret[..wrong.len()]);
+            assert_eq!(pieces(wrong), right, "{}", String::from_utf8_lossy(wrong));
+        }
     }
 
     #[test]
@@ -425,8 +510,10 @@ mod tests {
             assert_eq!(run(&mut scrubber(&[SECRET]), &[a, b]), whole, "cut at {cut}");
         }
         let mut s = scrubber(&[SECRET]);
-        assert_eq!(s.push(b"x sk-live%2"), b"x ", "holds an escape cut in half");
-        assert_eq!(s.push(b"F4f%2Ba%26b%3Cc%3E%3DZ9q%3F~!"), masked("", "sk-live%2F4f%2Ba%26b%3Cc%3E%3DZ9q%3F~", "!"));
+        let mut out = s.push(b"x sk-live%2");
+        out.extend(s.push(b"F4f%2Ba%26b%3Cc%3E%3DZ9q%3F~!"));
+        out.extend(s.finish());
+        assert_eq!(out, masked("x ", "sk-live%2F4f%2Ba%26b%3Cc%3E%3DZ9q%3F~", "!"), "an escape cut in half");
     }
 
     #[test]
@@ -495,6 +582,29 @@ mod tests {
             }
             out.extend(s.finish());
             prop_assert_eq!(out, reference(&input, &needles));
+        }
+
+        #[test]
+        fn release_points_depend_on_lengths_only(
+            needles in proptest::collection::vec(needle(), 1..3),
+            a in input(),
+            b in input(),
+            cuts in proptest::collection::vec(1usize..9, 1..40),
+        ) {
+            let n = a.len().min(b.len());
+            let pieces = |input: &[u8]| {
+                let mut s = Scrubber::new(needles.iter().cloned().map(Zeroizing::new).collect());
+                let (mut at, mut sizes) = (0, Vec::new());
+                for &c in cuts.iter().cycle() {
+                    if at >= n { break; }
+                    let end = (at + c).min(n);
+                    sizes.push(s.push(&input[at..end]).len());
+                    at = end;
+                }
+                sizes.push(s.finish().len());
+                sizes
+            };
+            prop_assert_eq!(pieces(&a[..n]), pieces(&b[..n]));
         }
 
         #[test]

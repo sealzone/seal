@@ -911,7 +911,14 @@ Who may read and write a tenant's documents (the crate docs hold the full route 
   and the ClickHouse adapter is specified to refuse compressed connections. Masking is
   visible, so it tells a consumer whether chosen text is the secret. A random secret of
   `MIN_SECRET_BYTES` is out of reach of that search. A guessable secret of any length is
-  not.
+  not. When and in what pieces the scrubber releases bytes depends only on how many arrived
+  and when, never on what they were: it always holds back a fixed window (the longest
+  spelling of any needle, less one) and releases it at a protocol message boundary, at the
+  end of a body, or, for HTTP, once the upstream has sent nothing for `QUIET_RELEASE`
+  (100 ms). So echoing a guess cannot tell how much of the secret it matches. An echo of the
+  secret itself that the upstream pauses in the middle of for that long goes out unmasked up
+  to the pause. The time the scrubber spends scanning still varies slightly with how much
+  of an echo resembles the secret, far below network jitter for one response.
 - **Postgres cancels** reach only the replica holding the connection. One sent to another
   replica does nothing. A tunnel sends its connections to the replica that last answered, so
   a cancel lands there unless that replica stopped answering in between.
