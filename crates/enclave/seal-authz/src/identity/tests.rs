@@ -37,8 +37,13 @@ fn ec_key() -> p256::ecdsa::SigningKey {
 
 /// A JWT over `header` and `claims`, signed with the test RSA or P-256 key.
 fn jwt(header: Value, claims: &Value, signer: Signer) -> String {
+    jwt_raw(header.to_string().as_bytes(), claims.to_string().as_bytes(), signer)
+}
+
+/// A JWT over raw header and claims bytes (not necessarily JSON).
+fn jwt_raw(header: &[u8], claims: &[u8], signer: Signer) -> String {
     use rsa::signature::Signer as _;
-    let input = format!("{}.{}", b64url(header.to_string().as_bytes()), b64url(claims.to_string().as_bytes()));
+    let input = format!("{}.{}", b64url(header), b64url(claims));
     let sig = match signer {
         Signer::Rsa => {
             let uint = |s: &str| rsa::BoxedUint::from_be_slice(&d(s), 2048).unwrap();
@@ -987,4 +992,240 @@ async fn request_authenticator_computes_the_purpose_itself() {
     let swapped = SignalRequest { severity: Severity::Low, ..signal };
     assert_eq!(auth.signal(swapped, &t, &now).await.err().unwrap().code(), ErrorCode::NotAllowed);
     assert_eq!(s.requests(), 0);
+}
+
+// ---- arbitrary and mutated input ----
+
+/// One local issuer server and verifier for every generated case.
+struct Fuzz {
+    rt: tokio::runtime::Runtime,
+    verifier: ProofVerifier,
+    _server: Server,
+}
+
+static FUZZ: std::sync::LazyLock<Fuzz> = std::sync::LazyLock::new(|| {
+    let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
+    let server = rt.block_on(issuers());
+    let verifier = ProofVerifier::new(server.https.clone());
+    Fuzz { rt, verifier, _server: server }
+});
+
+fn fuzz_candidates() -> Vec<IdentityMatcher> {
+    vec![
+        github_matcher("acme/api", 74, GitHubScope::Environment("prod".into())),
+        azure("oid-1", "api://seal-a"),
+        k8s(K8S_ISSUER, "uid-1"),
+        IdentityMatcher::Gcp { email: "api@acme.iam.gserviceaccount.com".into(), unique_id: "1234567890".into() },
+    ]
+}
+
+const PROVIDERS: [OidcProvider; 4] =
+    [OidcProvider::GitHub, OidcProvider::Azure, OidcProvider::Kubernetes, OidcProvider::Gcp];
+
+/// A token every check accepts, per index: GitHub, Azure v2 and v1, Kubernetes (ES256), GCP.
+fn valid_token(i: usize) -> (OidcProvider, Value, Signer) {
+    match i % 5 {
+        0 => (OidcProvider::GitHub, github_claims(json!("74"), T - 10), Signer::Rsa),
+        1 => (OidcProvider::Azure, azure_claims(&azure_v2(), "api://seal-a", "oid-1"), Signer::Rsa),
+        2 => (OidcProvider::Azure, azure_claims(&azure_v1(), "api://seal-a", "oid-1"), Signer::Rsa),
+        3 => (OidcProvider::Kubernetes, k8s_claims("uid-1", T - 5), Signer::Ec),
+        _ => (OidcProvider::Gcp, gcp_claims("1234567890"), Signer::Rsa),
+    }
+}
+
+fn header_for(signer: Signer) -> Value {
+    match signer {
+        Signer::Rsa => rs256("rsa-1"),
+        Signer::Ec => es256("ec-1"),
+    }
+}
+
+fn fuzz_verify(provider: OidcProvider, token: String) -> Result<AuthenticatedCaller, AuthzError> {
+    FUZZ.rt.block_on(check(&FUZZ.verifier, &oidc(provider, token), &fuzz_candidates(), T))
+}
+
+const CLAIM_PATHS: &[&str] = &[
+    "/iss",
+    "/aud",
+    "/exp",
+    "/nbf",
+    "/iat",
+    "/tid",
+    "/oid",
+    "/sub",
+    "/repository",
+    "/repository_id",
+    "/repository_owner_id",
+    "/environment",
+    "/ref",
+    "/email",
+    "/email_verified",
+    "/kubernetes.io",
+    "/kubernetes.io/namespace",
+    "/kubernetes.io/serviceaccount",
+    "/kubernetes.io/serviceaccount/name",
+    "/kubernetes.io/serviceaccount/uid",
+];
+
+fn odd_value() -> impl proptest::strategy::Strategy<Value = Value> {
+    use proptest::prelude::*;
+    prop_oneof![
+        Just(Value::Null),
+        any::<bool>().prop_map(Value::from),
+        any::<i64>().prop_map(Value::from),
+        any::<u64>().prop_map(Value::from),
+        any::<f64>().prop_map(|f| serde_json::Number::from_f64(f).map_or(Value::Null, Value::Number)),
+        Just(json!(1e300)),
+        Just(json!(-0.5)),
+        ".{0,40}".prop_map(Value::from),
+        Just(json!("18446744073709551616")),
+        Just(json!([])),
+        Just(json!({})),
+        Just(json!(["seal:acme", 1, null, {}])),
+        Just(json!({"namespace": 1, "serviceaccount": "x"})),
+    ]
+}
+
+/// Sets the value at a JSON pointer, creating the last key under an existing object.
+fn set_claim(claims: &mut Value, path: &str, value: Value) {
+    if let Some(v) = claims.pointer_mut(path) {
+        *v = value;
+        return;
+    }
+    let (parent, key) = path.rsplit_once('/').unwrap();
+    if let Some(Value::Object(o)) = claims.pointer_mut(parent) {
+        o.insert(key.to_string(), value);
+    }
+}
+
+#[test]
+fn fuzz_bases_are_valid() {
+    for i in 0..5 {
+        let (provider, claims, signer) = valid_token(i);
+        fuzz_verify(provider, jwt(header_for(signer), &claims, signer)).unwrap();
+    }
+    let digest = codec::labeled_digest(PROOF_CONTEXT_LABEL, &ctx());
+    for (method, url, headers, body) in sts_requests() {
+        sigv4::check(&method, &url, &headers, &body, Some(&digest)).unwrap();
+    }
+    sigv4::parse_response(role_response().as_bytes()).unwrap();
+}
+
+type StsRequest = (String, String, Vec<(String, Bearer)>, String);
+
+/// A presigned GET and a header-signed POST that `sigv4::check` accepts.
+fn sts_requests() -> Vec<StsRequest> {
+    let b = binding();
+    let headers = |h: &[(&str, &str)]| h.iter().map(|(n, v)| (n.to_string(), Bearer::new(v.to_string()))).collect();
+    let auth = "AWS4-HMAC-SHA256 Credential=ASIAEXAMPLE/20300101/us-east-1/sts/aws4_request, \
+                SignedHeaders=content-type;host;x-amz-date;x-amz-security-token;x-seal-binding, Signature=abcdef";
+    let regional = "sts.us-east-1.amazonaws.com";
+    vec![
+        (
+            "GET".into(),
+            presigned_url(BINDING_HOST, "host%3Bx-seal-binding", ""),
+            headers(&[("Host", BINDING_HOST), ("X-Seal-Binding", &b)]),
+            String::new(),
+        ),
+        (
+            "POST".into(),
+            format!("https://{regional}/"),
+            headers(&[
+                ("host", regional),
+                ("authorization", auth),
+                ("content-type", "application/x-www-form-urlencoded; charset=utf-8"),
+                ("x-amz-date", "20300101T000000Z"),
+                ("x-amz-security-token", "tok"),
+                ("x-seal-binding", &b),
+            ]),
+            "Action=GetCallerIdentity&Version=2011-06-15".into(),
+        ),
+    ]
+}
+
+fn mutate(s: &str, at: proptest::sample::Index, byte: u8) -> String {
+    let mut bytes = s.as_bytes().to_vec();
+    if bytes.is_empty() {
+        bytes.push(byte);
+    } else {
+        let i = at.index(bytes.len());
+        bytes[i] = byte;
+    }
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
+mod never_panic {
+    use super::*;
+    use proptest::prelude::*;
+    use proptest::sample::Index;
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(128))]
+
+        #[test]
+        fn arbitrary_bytes_never_panic(bytes in proptest::collection::vec(any::<u8>(), 0..2048), p in 0..4usize) {
+            let text = String::from_utf8_lossy(&bytes).into_owned();
+            let _ = fuzz_verify(PROVIDERS[p], text.clone());
+            let _ = fuzz_verify(PROVIDERS[p], format!("{}.{}.{}", b64url(&bytes), b64url(&bytes), b64url(&bytes)));
+            let _ = fuzz_verify(PROVIDERS[p], jwt_raw(rs256("rsa-1").to_string().as_bytes(), &bytes, Signer::Rsa));
+            let _ = sigv4::parse_response(&bytes);
+            let headers = vec![(text.clone(), Bearer::new(text.clone()))];
+            for method in ["GET", "POST"] {
+                let _ = sigv4::check(method, &text, &headers, &text, Some(&[0; 32]));
+                let _ = sigv4::check(method, &format!("https://sts.amazonaws.com/?{text}"), &headers, &text, None);
+            }
+        }
+
+        #[test]
+        fn mutated_tokens_never_panic(i in 0..5usize, at in any::<Index>(), byte in any::<u8>()) {
+            let (provider, claims, signer) = valid_token(i);
+            let token = jwt(header_for(signer), &claims, signer);
+            let _ = fuzz_verify(provider, mutate(&token, at, byte));
+        }
+
+        #[test]
+        fn mutated_claims_never_panic(i in 0..5usize, at in any::<Index>(), byte in any::<u8>()) {
+            let (provider, claims, signer) = valid_token(i);
+            let mut bytes = claims.to_string().into_bytes();
+            let j = at.index(bytes.len());
+            bytes[j] = byte;
+            let _ = fuzz_verify(provider, jwt_raw(header_for(signer).to_string().as_bytes(), &bytes, signer));
+        }
+
+        #[test]
+        fn odd_claim_values_never_panic(i in 0..5usize, path in any::<Index>(), value in odd_value()) {
+            let (provider, mut claims, signer) = valid_token(i);
+            set_claim(&mut claims, CLAIM_PATHS[path.index(CLAIM_PATHS.len())], value);
+            let _ = fuzz_verify(provider, jwt(header_for(signer), &claims, signer));
+        }
+
+        #[test]
+        fn mutated_sts_requests_never_panic(
+            r in 0..2usize, part in any::<Index>(), at in any::<Index>(), byte in any::<u8>(),
+        ) {
+            let (mut method, mut url, mut headers, mut body) = sts_requests().swap_remove(r);
+            let parts = 3 + 2 * headers.len();
+            match part.index(parts) {
+                0 => method = mutate(&method, at, byte),
+                1 => url = mutate(&url, at, byte),
+                2 => body = mutate(&body, at, byte),
+                n => {
+                    let (name, value) = &mut headers[(n - 3) / 2];
+                    if n % 2 == 1 {
+                        *name = mutate(name, at, byte);
+                    } else {
+                        *value = Bearer::new(mutate(value.expose(), at, byte));
+                    }
+                }
+            }
+            let digest = codec::labeled_digest(PROOF_CONTEXT_LABEL, &ctx());
+            let _ = sigv4::check(&method, &url, &headers, &body, Some(&digest));
+        }
+
+        #[test]
+        fn mutated_sts_responses_never_panic(at in any::<Index>(), byte in any::<u8>(), user_id in ".{0,40}", arn in ".{0,80}") {
+            let _ = sigv4::parse_response(mutate(&role_response(), at, byte).as_bytes());
+            let _ = sigv4::parse_response(sts_response(&user_id, &arn).as_bytes());
+        }
+    }
 }

@@ -46,8 +46,8 @@ const ALLOWED_HEADERS: &[&str] = &[
     BINDING_HEADER,
 ];
 
-/// A checked request, ready to replay.
-#[derive(Debug)]
+/// A checked request, ready to replay. No `Debug`: its headers carry the caller's
+/// `Authorization` and session token.
 pub(crate) struct StsCall {
     pub(crate) post: bool,
     pub(crate) url: String,

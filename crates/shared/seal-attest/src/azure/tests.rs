@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 
 use ciborium::Value;
 use coset::{CoseSign1, Label, TaggedCborSerializable};
+use proptest::prelude::*;
 
 use super::endorsement::{self, Endorsement};
 use super::report::{self, Hardware};
@@ -319,7 +320,10 @@ fn endorsement_is_base64() {
 #[test]
 fn conf_aks_endorsement_is_refused() {
     // Same root, but the ConfAKS EKU and feed.
-    assert_rejected(uvm(CONF_AKS), "issuer did:x509:0:sha256:I__iuL25oXEVFdTP_aBLx_eT1RPHbCQ_ECBQfYZpt9s::eku:1.3.6.1.4.1.311.76.59.1.5 is not trusted");
+    assert_rejected(
+        uvm(CONF_AKS),
+        "issuer did:x509:0:sha256:I__iuL25oXEVFdTP_aBLx_eT1RPHbCQ_ECBQfYZpt9s::eku:1.3.6.1.4.1.311.76.59.1.5 is not trusted",
+    );
     // Claiming the ContainerPlat issuer and feed does not help: its leaf lacks the EKU.
     let forged = with_protected(CONF_AKS, |h| {
         set_text(h, "iss", endorsement::TRUSTED_ISSUER);
@@ -452,4 +456,98 @@ fn cwt_claims(h: &mut coset::Header) -> &mut Vec<(Value, Value)> {
 
 fn set_map(m: &mut [(Value, Value)], key: Value, value: Value) {
     m.iter_mut().find(|(k, _)| *k == key).expect("claim present").1 = value;
+}
+
+// --- arbitrary and mutated input ---
+
+/// Every accessor of a certificate the verifiers read, on whatever `der` parses to.
+fn exercise_cert(der: &[u8]) {
+    let _ = report::chain_pem_for(der);
+    let Ok(cert) = Cert::parse(der, "test") else { return };
+    let _ = (cert.validity(), cert.public_key_bytes(), cert.common_name(), cert.is_ca(), cert.p384_public_key());
+    let _ = cert.has_eku(&spki::ObjectIdentifier::new_unwrap("1.3.6.1.4.1.311.76.59.1.2"));
+    let _ = cert.extension(&spki::ObjectIdentifier::new_unwrap("1.3.6.1.4.1.3704.1.4"));
+    let _ = (cert.verify_pss_sha384(&cert), cert.verify_pkcs1v15(&cert), cert.verify_ecdsa_p384(&cert));
+}
+
+/// `(report, its VCEK)` for each recorded family and format.
+fn reports() -> [(&'static [u8], Vec<u8>); 4] {
+    [(MILAN, milan_vcek()), (GENOA, genoa_vcek()), (TURIN, turin_vcek()), (MILAN_V2, MILAN_V2_VCEK.to_vec())]
+}
+
+const ENDORSEMENTS: [&[u8]; 6] = [
+    UVM_0_2_9,
+    UVM_0_2_10,
+    CONF_AKS,
+    data!("ccf/int_svn.cose"),
+    data!("ccf/rsa_test1.cose"),
+    data!("aci/body.uvm_reference_info.bin"),
+];
+
+/// Up to eight byte overwrites.
+fn mutations() -> impl Strategy<Value = Vec<(prop::sample::Index, u8)>> {
+    proptest::collection::vec((any::<prop::sample::Index>(), any::<u8>()), 1..8)
+}
+
+fn mutate(bytes: &[u8], at: &[(prop::sample::Index, u8)]) -> Vec<u8> {
+    let mut out = bytes.to_vec();
+    for (i, b) in at {
+        let i = i.index(out.len());
+        out[i] = *b;
+    }
+    out
+}
+
+proptest! {
+    #[test]
+    fn arbitrary_bytes_never_panic(bytes in proptest::collection::vec(any::<u8>(), 0..2048)) {
+        let _ = hw(&bytes, &bytes);
+        let _ = hw(&bytes, &milan_vcek());
+        let mut sized = bytes.clone();
+        sized.resize(MILAN.len(), 0);
+        let _ = hw(&sized, &milan_vcek());
+        let _ = uvm(&bytes);
+        let _ = endorsement::verify(&String::from_utf8_lossy(&bytes));
+        let _ = endorsement::legacy_payload(&bytes);
+        let _ = Cert::parse_pem_chain(&bytes, "test");
+        exercise_cert(&bytes);
+    }
+
+    #[test]
+    fn mutated_reports_never_panic(at in mutations(), which in 0..4usize) {
+        let (report, vcek) = &reports()[which];
+        let _ = hw(&mutate(report, &at), vcek);
+    }
+
+    #[test]
+    fn mutated_vceks_never_panic(at in mutations(), which in 0..4usize) {
+        let (report, vcek) = &reports()[which];
+        let vcek = mutate(vcek, &at);
+        let _ = hw(report, &vcek);
+        exercise_cert(&vcek);
+    }
+
+    #[test]
+    fn mutated_endorsements_never_panic(at in mutations(), which in 0..6usize) {
+        let _ = uvm(&mutate(ENDORSEMENTS[which], &at));
+    }
+
+    /// The x5chain is read before the signature, so a changed certificate reaches every check.
+    #[test]
+    fn mutated_endorsement_chains_never_panic(at in mutations(), which in 0..6usize, entry in any::<prop::sample::Index>()) {
+        let forged = with_protected(ENDORSEMENTS[which], |h| {
+            let chain = x5chain(h);
+            let i = entry.index(chain.len());
+            if let Value::Bytes(der) = &mut chain[i] {
+                *der = mutate(der, &at);
+            }
+        });
+        let _ = uvm(&forged);
+    }
+
+    #[test]
+    fn mutated_legacy_payloads_never_panic(at in mutations(), which in 0..6usize) {
+        let sign1 = CoseSign1::from_tagged_slice(ENDORSEMENTS[which]).unwrap();
+        let _ = endorsement::legacy_payload(&mutate(sign1.payload.as_deref().unwrap(), &at));
+    }
 }

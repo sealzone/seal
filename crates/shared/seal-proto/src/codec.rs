@@ -36,10 +36,18 @@ pub fn b64url(bytes: &[u8]) -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
 }
 
+/// The error names where decoding failed, never the offending byte: secrets travel base64url
+/// encoded (`SecretVec`, bearer tokens), and error messages reach callers and logs.
 pub fn from_b64url(s: &str) -> Result<Vec<u8>, ProtoError> {
-    base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(s)
-        .map_err(|e| ProtoError::Malformed(format!("base64url: {e}")))
+    use base64::DecodeError;
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(s).map_err(|e| {
+        ProtoError::Malformed(match e {
+            DecodeError::InvalidByte(at, _) => format!("base64url: invalid character at offset {at}"),
+            DecodeError::InvalidLastSymbol(at, _) => format!("base64url: invalid last character at offset {at}"),
+            DecodeError::InvalidLength(len) => format!("base64url: invalid length {len}"),
+            DecodeError::InvalidPadding => "base64url: invalid padding".into(),
+        })
+    })
 }
 
 /// Serde helper: byte fields as base64url strings in JSON, bytes in CBOR.

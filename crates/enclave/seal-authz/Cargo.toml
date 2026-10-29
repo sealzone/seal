@@ -25,6 +25,7 @@ url.workspace = true
 seal-tlog = { workspace = true, features = ["dev"] }
 seal-net = { workspace = true, features = ["sim"] }
 p256.workspace = true
+proptest.workspace = true
 rsa.workspace = true
 sha2.workspace = true
 x509-cert.workspace = true

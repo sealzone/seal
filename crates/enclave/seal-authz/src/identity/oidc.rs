@@ -250,7 +250,7 @@ pub(crate) async fn verify(
 
     match provider {
         OidcProvider::Azure => {
-            let tid = azure_tid(&iss).expect("routed as Azure");
+            let tid = azure_tid(&iss).ok_or(AuthzError::BadProof("token issuer is not one the tenant names"))?;
             if need("tid")? != tid {
                 return Err(AuthzError::BadProof("token tid disagrees with its issuer"));
             }

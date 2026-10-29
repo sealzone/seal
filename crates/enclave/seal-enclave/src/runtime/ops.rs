@@ -187,8 +187,9 @@ impl Runtime {
             &aad,
         )
         .map_err(|_| fail(ErrorCode::BadRequest, "the upload does not decrypt"))?;
+        // The decoder's message can quote the decrypted payload, so it is not kept.
         let SealPayload { secret, policy } = codec::from_canonical(plaintext.expose())
-            .map_err(|e| fail(ErrorCode::BadRequest, format!("seal payload: {e}")))?;
+            .map_err(|_| fail(ErrorCode::BadRequest, "the seal payload is malformed"))?;
         policy.validate_secret(secret.expose()).map_err(|e| fail(ErrorCode::BadRequest, e.to_string()))?;
         let protocol = policy.destination().protocol();
         if !self.adapters.iter().any(|a| a.protocol() == protocol) {
@@ -491,7 +492,9 @@ impl Runtime {
             return refuse(ErrorCode::BadRequest, "invalid signal code");
         }
         // The source is derived from the signer: the unique enrolled key its signature names.
-        let signer = request.signatures[0].signer;
+        let Some(signer) = request.signatures.first().map(|s| s.signer) else {
+            return refuse(ErrorCode::BadRequest, "an external finding carries its signature");
+        };
         let named: Vec<(&String, &seal_proto::PublicKey)> =
             state.integrity.sources.iter().filter(|(_, key)| seal_crypto::sign::key_id(key) == signer).collect();
         if named.len() != 1 {

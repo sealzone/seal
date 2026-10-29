@@ -466,7 +466,8 @@ fn secret_b64<'de, D: serde::Deserializer<'de>>(d: D) -> Result<SecretVec, D::Er
             // Truncating keeps the allocation, so the `SecretVec` wipes all of it.
             out.truncate(*decoded.as_ref().unwrap_or(&0));
             let out = SecretVec::new(out);
-            decoded.map(|_| out).map_err(E::custom)
+            // The decoder's message names a symbol of the encoded secret, so it is not kept.
+            decoded.map(|_| out).map_err(|_| E::custom("plaintext is not standard base64"))
         }
     }
     d.deserialize_str(V)

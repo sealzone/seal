@@ -3,6 +3,7 @@
 //! `seal_attest::verify` are in `tests/gcp.rs`; sources in `tests/data/README.md`.
 
 use base64::Engine;
+use proptest::prelude::*;
 use rsa::pkcs1::DecodeRsaPrivateKey;
 use rsa::signature::{SignatureEncoding, Signer};
 use seal_proto::codec::b64url;
@@ -12,7 +13,10 @@ use seal_proto::{PlatformId, TrustedTime};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-use super::{baked_root, check_chain, leaf_key, measurement, verify_with_root, AUDIENCE, ISSUER, ROOT_PEM};
+use super::{
+    baked_root, check_chain, check_claims, decimal, leaf_key, lower_hex, measurement, verify_with_root, AUDIENCE,
+    ISSUER, ROOT_PEM,
+};
 use crate::x509::Cert;
 use crate::AttestError;
 
@@ -99,9 +103,14 @@ fn x5c(certs: &[&Cert]) -> Vec<String> {
 
 /// A compact JWS over `payload` with `header`, signed RS256 by the test leaf key.
 fn sign_raw(header: &Value, payload: &[u8]) -> String {
+    sign_bytes(header.to_string().as_bytes(), payload)
+}
+
+/// A compact JWS over `payload` with the header bytes as given, signed RS256 by the test leaf key.
+fn sign_bytes(header: &[u8], payload: &[u8]) -> String {
     let key = rsa::RsaPrivateKey::from_pkcs1_der(data!("test-ca/leaf-key.pkcs1.der")).unwrap();
     let signer = rsa::pkcs1v15::SigningKey::<Sha256>::new(key);
-    let input = format!("{}.{}", b64url(header.to_string().as_bytes()), b64url(payload));
+    let input = format!("{}.{}", b64url(header), b64url(payload));
     let signature = signer.sign(input.as_bytes()).to_vec();
     format!("{input}.{}", b64url(&signature))
 }
@@ -488,4 +497,84 @@ fn malformed_claims_refused() {
     );
     assert_rejected(check("not a token"), "token");
     assert_rejected(check("e30.e30.e30.e30"), "token");
+}
+
+// --- arbitrary and mutated input ---
+
+/// Up to eight byte overwrites.
+fn mutations() -> impl Strategy<Value = Vec<(prop::sample::Index, u8)>> {
+    proptest::collection::vec((any::<prop::sample::Index>(), any::<u8>()), 1..8)
+}
+
+fn mutate(bytes: &[u8], at: &[(prop::sample::Index, u8)]) -> Vec<u8> {
+    let mut out = bytes.to_vec();
+    for (i, b) in at {
+        let i = i.index(out.len());
+        out[i] = *b;
+    }
+    out
+}
+
+const REAL_TOKENS: [&[u8]; 6] = [
+    data!("tdx.jwt"),
+    data!("sev.jwt"),
+    data!("tdx-debug.jwt"),
+    data!("sev-debug.jwt"),
+    data!("tdx-no-nonce.jwt"),
+    data!("tdx-two-nonces.jwt"),
+];
+
+proptest! {
+    #[test]
+    fn arbitrary_bytes_never_panic(
+        a in proptest::collection::vec(any::<u8>(), 0..1024),
+        b in proptest::collection::vec(any::<u8>(), 0..1024),
+    ) {
+        let text = String::from_utf8_lossy(&a);
+        let _ = check(&text);
+        let _ = verify_with_root(&text, &AT, &baked_root().unwrap());
+        let _ = check(&format!("{}.{}.{}", b64url(&a), b64url(&b), b64url(&a)));
+        let _ = check(&sign_bytes(&a, &b));
+        let _ = check_claims(&a, &AT);
+        let _ = (measurement(&text), lower_hex::<32>(&text), decimal(&text));
+        let x5c = [text.to_string(), base64::engine::general_purpose::STANDARD.encode(&b), text.to_string()];
+        let _ = check_chain(&x5c, &AT, &test_root());
+    }
+
+    #[test]
+    fn mutated_tokens_never_panic(at in mutations(), which in 0..7usize) {
+        let token = match REAL_TOKENS.get(which) {
+            Some(t) => t.to_vec(),
+            None => sign(&claims()).into_bytes(),
+        };
+        let token = String::from_utf8_lossy(&mutate(&token, &at)).into_owned();
+        let _ = check(&token);
+        let _ = verify_with_root(&token, &AT, &baked_root().unwrap());
+    }
+
+    /// Re-signed after the change, so the claims reach every check and the signature verifies.
+    #[test]
+    fn mutated_claims_never_panic(at in mutations()) {
+        let c = chain();
+        let header = header(&[&c.leaf, &c.intermediate, &c.root]);
+        let _ = check(&sign_raw(&header, &mutate(claims().to_string().as_bytes(), &at)));
+    }
+
+    #[test]
+    fn mutated_headers_never_panic(at in mutations()) {
+        let c = chain();
+        let header = header(&[&c.leaf, &c.intermediate, &c.root]).to_string();
+        let _ = check(&sign_bytes(&mutate(header.as_bytes(), &at), claims().to_string().as_bytes()));
+    }
+
+    /// A changed certificate in an otherwise valid, signed token.
+    #[test]
+    fn mutated_chains_never_panic(at in mutations(), entry in 0..3usize) {
+        let c = chain();
+        let mut x5c = x5c(&[&c.leaf, &c.intermediate, &c.root]);
+        let der = base64::engine::general_purpose::STANDARD.decode(&x5c[entry]).unwrap();
+        x5c[entry] = base64::engine::general_purpose::STANDARD.encode(mutate(&der, &at));
+        let header = json!({"alg": "RS256", "kid": "test-kid", "typ": "JWT", "x5c": x5c});
+        let _ = check(&sign_raw(&header, claims().to_string().as_bytes()));
+    }
 }

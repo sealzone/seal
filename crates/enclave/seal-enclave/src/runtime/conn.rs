@@ -107,8 +107,9 @@ async fn read_preamble(mut stream: BoxStream) -> Result<(BoxStream, TunnelPreamb
     }
     let mut body = vec![0u8; len as usize];
     stream.read_exact(&mut body).await.map_err(io)?;
+    // The decoder's message can quote the preamble's session token, so it is not kept.
     let preamble =
-        codec::from_canonical(&body).map_err(|e| fail(ErrorCode::BadRequest, format!("tunnel preamble: {e}")))?;
+        codec::from_canonical(&body).map_err(|_| fail(ErrorCode::BadRequest, "malformed tunnel preamble"))?;
     Ok((stream, preamble))
 }
 

@@ -260,7 +260,10 @@ impl<T: DeserializeOwned, S: Send + Sync> FromRequest<S> for JsonBody<T> {
 
     async fn from_request(req: Request, state: &S) -> Result<Self, Failure> {
         let body = Bytes::from_request(req, state).await.map_err(|e| bad_request(format!("request body: {e}")))?;
-        serde_json::from_slice(&body).map(JsonBody).map_err(|e| bad_request(format!("request body: {e}")))
+        // serde_json's message can quote a value (a token, a JWT), so only where it failed is kept.
+        serde_json::from_slice(&body).map(JsonBody).map_err(|e| {
+            bad_request(format!("request body: {:?} error at line {}, column {}", e.classify(), e.line(), e.column()))
+        })
     }
 }
 

@@ -5,11 +5,15 @@
 use ciborium::Value;
 use coset::{iana, CoseSign1Builder, HeaderBuilder, TaggedCborSerializable};
 use p384::ecdsa::signature::Signer;
+use proptest::prelude::*;
 use seal_proto::release::Tcb;
 use seal_proto::{PlatformId, TrustedTime};
 use sha2::{Digest, Sha256};
 
-use super::{baked_root, measurement, verify_enclave_with_root, verify_tpm_with_root, TpmDocument, ROOT_PEM};
+use super::{
+    baked_root, instance_of, is_region, measurement, verify_enclave_with_root, verify_tpm_with_root, TpmDocument,
+    ROOT_PEM,
+};
 use crate::x509::Cert;
 use crate::AttestError;
 
@@ -71,8 +75,16 @@ fn remove(fields: &mut Vec<(Value, Value)>, name: &str) {
 }
 
 fn sign_with(fields: Vec<(Value, Value)>, alg: iana::Algorithm, key: &p384::ecdsa::SigningKey) -> Vec<u8> {
+    sign_payload(encode(fields), alg, key)
+}
+
+fn encode(fields: Vec<(Value, Value)>) -> Vec<u8> {
     let mut payload = Vec::new();
     ciborium::into_writer(&Value::Map(fields), &mut payload).unwrap();
+    payload
+}
+
+fn sign_payload(payload: Vec<u8>, alg: iana::Algorithm, key: &p384::ecdsa::SigningKey) -> Vec<u8> {
     CoseSign1Builder::new()
         .protected(HeaderBuilder::new().algorithm(alg).build())
         .payload(payload)
@@ -299,4 +311,77 @@ fn malformed_fields_refused() {
     assert_rejected(tpm(|f| f.push((Value::Text("nonce".into()), Value::Bytes(vec![1])))), "repeats nonce");
     assert_rejected(tpm(|f| f.push((Value::Integer(1.into()), Value::Null))), "not text");
     assert_rejected(verify_tpm_with_root(b"not cbor", &AT, &root()), "not a COSE_Sign1");
+}
+
+// --- arbitrary and mutated input ---
+
+/// Up to eight byte overwrites.
+fn mutations() -> impl Strategy<Value = Vec<(prop::sample::Index, u8)>> {
+    proptest::collection::vec((any::<prop::sample::Index>(), any::<u8>()), 1..8)
+}
+
+fn mutate(bytes: &[u8], at: &[(prop::sample::Index, u8)]) -> Vec<u8> {
+    let mut out = bytes.to_vec();
+    for (i, b) in at {
+        let i = i.index(out.len());
+        out[i] = *b;
+    }
+    out
+}
+
+/// Both kinds, checked against the test root.
+fn both(document: &[u8]) {
+    let _ = verify_enclave_with_root(document, &AT, &root());
+    let _ = verify_tpm_with_root(document, &AT, &root());
+}
+
+const PCRS_KEYS: [&str; 2] = ["pcrs", "nitrotpm_pcrs"];
+
+proptest! {
+    #[test]
+    fn arbitrary_bytes_never_panic(bytes in proptest::collection::vec(any::<u8>(), 0..2048)) {
+        both(&bytes);
+        let _ = super::verify_tpm(&bytes, &AT);
+        // Signed, so the payload reaches the CBOR field checks.
+        both(&sign_payload(bytes.clone(), iana::Algorithm::ES384, &key()));
+        let text = String::from_utf8_lossy(&bytes);
+        let _ = (instance_of(&text), is_region(&text));
+    }
+
+    #[test]
+    fn mutated_documents_never_panic(at in mutations(), kind in 0..3usize) {
+        let document = match PCRS_KEYS.get(kind) {
+            Some(k) => with(k, |_| {}),
+            None => include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/nitro/tpm.cbor")).to_vec(),
+        };
+        let document = mutate(&document, &at);
+        both(&document);
+        let _ = super::verify_tpm(&document, &TrustedTime { now: 1_793_165_986, radius: 2 });
+    }
+
+    /// Re-signed after the change, so the payload reaches every check and the signature verifies.
+    #[test]
+    fn mutated_payloads_never_panic(at in mutations(), kind in 0..2usize) {
+        let payload = mutate(&encode(fields(PCRS_KEYS[kind])), &at);
+        both(&sign_payload(payload, iana::Algorithm::ES384, &key()));
+    }
+
+    /// A changed certificate in an otherwise valid, signed document.
+    #[test]
+    fn mutated_certificates_never_panic(at in mutations(), kind in 0..2usize, entry in 0..3usize) {
+        let document = with(PCRS_KEYS[kind], |f| {
+            for (k, v) in f.iter_mut() {
+                match (k, v, entry) {
+                    (Value::Text(k), Value::Bytes(der), 0) if k == "certificate" => *der = mutate(der, &at),
+                    (Value::Text(k), Value::Array(bundle), 1 | 2) if k == "cabundle" => {
+                        if let Value::Bytes(der) = &mut bundle[entry - 1] {
+                            *der = mutate(der, &at);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        });
+        both(&document);
+    }
 }

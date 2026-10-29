@@ -173,7 +173,7 @@ fn legacy_claims(header: &coset::Header) -> Result<Claims, AttestError> {
     })
 }
 
-fn legacy_payload(payload: &[u8]) -> Result<([u8; 48], u64), AttestError> {
+pub(super) fn legacy_payload(payload: &[u8]) -> Result<([u8; 48], u64), AttestError> {
     let json: serde_json::Value =
         serde_json::from_slice(payload).map_err(|_| reject("UVM endorsement payload is not JSON"))?;
     let hex_m = json[LAUNCH_MEASUREMENT].as_str().ok_or_else(|| reject("UVM endorsement has no launch measurement"))?;
