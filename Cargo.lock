@@ -3140,7 +3140,7 @@ dependencies = [
 
 [[package]]
 name = "seal-adapter"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "async-trait",
  "proptest",
@@ -3155,11 +3155,11 @@ dependencies = [
 
 [[package]]
 name = "seal-adapter-clickhouse"
-version = "0.2.3"
+version = "0.2.4"
 
 [[package]]
 name = "seal-adapter-http"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "async-trait",
  "bytes",
@@ -3177,7 +3177,7 @@ dependencies = [
 
 [[package]]
 name = "seal-adapter-pg"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -3200,7 +3200,7 @@ dependencies = [
 
 [[package]]
 name = "seal-adapter-redis"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "async-trait",
  "bytes",
@@ -3219,7 +3219,7 @@ dependencies = [
 
 [[package]]
 name = "seal-authz"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "async-trait",
  "hex",
@@ -3244,7 +3244,7 @@ dependencies = [
 
 [[package]]
 name = "seal-cloud"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -3266,7 +3266,7 @@ dependencies = [
 
 [[package]]
 name = "seal-enclave"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "async-trait",
  "axum",
@@ -3305,7 +3305,7 @@ dependencies = [
 
 [[package]]
 name = "seal-ffi"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "sealzone",
  "sealzone-proto",
@@ -3318,7 +3318,7 @@ dependencies = [
 
 [[package]]
 name = "seal-guardian"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "aes-kw",
  "async-trait",
@@ -3350,14 +3350,14 @@ dependencies = [
 
 [[package]]
 name = "seal-integrity"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "sealzone-proto",
 ]
 
 [[package]]
 name = "seal-node"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "async-trait",
  "hex",
@@ -3375,7 +3375,7 @@ dependencies = [
 
 [[package]]
 name = "seal-py"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "async-trait",
  "hex",
@@ -3392,7 +3392,7 @@ dependencies = [
 
 [[package]]
 name = "seal-registrar"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "async-trait",
  "axum",
@@ -3417,7 +3417,7 @@ dependencies = [
 
 [[package]]
 name = "seal-release"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3443,7 +3443,7 @@ dependencies = [
 
 [[package]]
 name = "seal-sim"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3467,7 +3467,7 @@ dependencies = [
 
 [[package]]
 name = "seal-tee"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -3491,7 +3491,7 @@ dependencies = [
 
 [[package]]
 name = "sealzone"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "async-trait",
  "aws-config",
@@ -3524,7 +3524,7 @@ dependencies = [
 
 [[package]]
 name = "sealzone-attest"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "base64 0.22.1",
  "ciborium",
@@ -3546,7 +3546,7 @@ dependencies = [
 
 [[package]]
 name = "sealzone-cli"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "anstyle",
  "anyhow",
@@ -3578,7 +3578,7 @@ dependencies = [
 
 [[package]]
 name = "sealzone-control"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "async-trait",
  "axum",
@@ -3608,7 +3608,7 @@ dependencies = [
 
 [[package]]
 name = "sealzone-crypto"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "aes-gcm",
  "der",
@@ -3635,7 +3635,7 @@ dependencies = [
 
 [[package]]
 name = "sealzone-net"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "async-trait",
  "http-body-util",
@@ -3655,7 +3655,7 @@ dependencies = [
 
 [[package]]
 name = "sealzone-proto"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "base64 0.22.1",
  "ciborium",
@@ -3670,7 +3670,7 @@ dependencies = [
 
 [[package]]
 name = "sealzone-tlog"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "axum",
  "hex",
@@ -3686,7 +3686,7 @@ dependencies = [
 
 [[package]]
 name = "sealzone-verify"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "p256",
  "sealzone-attest",
@@ -3701,7 +3701,7 @@ dependencies = [
 
 [[package]]
 name = "sealzone-verify-wasm"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "getrandom 0.4.3",
  "p256",
