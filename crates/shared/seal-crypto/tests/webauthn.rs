@@ -36,7 +36,7 @@ impl Default for Assertion {
             flags: 0x05,
             kind: "webauthn.get".into(),
             challenge: b64url(&labeled_digest(LABEL, &MSG)),
-            origin: "https://admin.seal.zone".into(),
+            origin: "https://console.seal.zone".into(),
             cross_origin: Some(false),
         }
     }
@@ -103,9 +103,15 @@ fn rp_id_and_origin_are_checked() {
         check(&Assertion { rp_id: "evil.zone".into(), ..Default::default() }.sign()),
         Err(CryptoError::BadSignature)
     );
-    for origin in
-        ["https://evil.zone", "http://seal.zone", "https://notseal.zone", "https://seal.zone.evil", "seal.zone"]
-    {
+    for origin in [
+        "https://evil.zone",
+        "http://seal.zone",
+        "https://notseal.zone",
+        "https://seal.zone.evil",
+        "seal.zone",
+        "https://box.seal.zone",
+        "https://control.seal.zone",
+    ] {
         assert_eq!(
             check(&Assertion { origin: origin.into(), ..Default::default() }.sign()),
             Err(CryptoError::BadSignature),

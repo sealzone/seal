@@ -110,7 +110,7 @@ fn webauthn_signature() -> Vec<u8> {
     auth.extend_from_slice(&7u32.to_be_bytes());
     let challenge = b64url(&seal_proto::codec::labeled_digest("seal/test/v1", &1u8));
     let client = serde_json::to_vec(&serde_json::json!({
-        "type": "webauthn.get", "challenge": challenge, "origin": "https://admin.seal.zone", "crossOrigin": false,
+        "type": "webauthn.get", "challenge": challenge, "origin": "https://console.seal.zone", "crossOrigin": false,
     }))
     .unwrap();
     let signed = [&auth[..], &Sha256::digest(&client)[..]].concat();

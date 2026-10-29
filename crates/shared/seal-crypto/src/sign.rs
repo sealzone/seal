@@ -4,7 +4,7 @@
 //! Passkey (`SigAlg::WebAuthnEs256`) verification checks, in order: authenticator data of at
 //! least 37 bytes whose RP ID hash is SHA-256 of the key's `rp_id`; the UP (0x01) and UV (0x04)
 //! flags; `clientDataJSON` with `type == "webauthn.get"`, `challenge == base64url(message)`,
-//! an `https` origin whose host is `rp_id` or a subdomain of it, and no `crossOrigin: true`;
+//! the origin `https://<rp_id>` or `https://console.<rp_id>` (any port), and no `crossOrigin: true`;
 //! then the ES256 signature (DER, either `S` half) over
 //! `authenticator_data || SHA-256(client_data_json)`.
 
@@ -140,11 +140,16 @@ mod webauthn {
         (!host.is_empty() && !host.contains(['/', '?', '#', '@'])).then_some(host)
     }
 
+    /// Only the origins that sign documents: `https://<rp_id>` (the CLI, which talks to the
+    /// authenticator itself) and `https://console.<rp_id>` (the web console). A passkey for
+    /// `rp_id` works on every subdomain of it, so any other subdomain (one serving content
+    /// Seal does not write, such as a challenge machine's pages) could otherwise ask an admin
+    /// for a signature the browser shows as the console's.
     fn origin_matches(origin: &str, rp_id: &str) -> bool {
         let Some(host) = origin_host(origin) else { return false };
         let host = host.to_ascii_lowercase();
         let rp_id = rp_id.to_ascii_lowercase();
-        host == rp_id || host.strip_suffix(&rp_id).is_some_and(|prefix| prefix.ends_with('.'))
+        host == rp_id || host.strip_prefix("console.") == Some(rp_id.as_str())
     }
 
     pub(super) fn verify(
@@ -192,7 +197,11 @@ mod webauthn {
         #[test]
         fn origins() {
             assert!(origin_matches("https://seal.zone", "seal.zone"));
-            assert!(origin_matches("https://app.seal.zone", "seal.zone"));
+            assert!(origin_matches("https://console.seal.zone", "seal.zone"));
+            assert!(origin_matches("https://Console.Seal.Zone", "seal.zone"));
+            assert!(!origin_matches("https://box.seal.zone", "seal.zone"), "another subdomain");
+            assert!(!origin_matches("https://app.seal.zone", "seal.zone"));
+            assert!(!origin_matches("https://a.console.seal.zone", "seal.zone"));
             assert!(origin_matches("https://seal.zone:8443", "seal.zone"));
             assert!(origin_matches("https://Seal.Zone", "seal.zone"));
             assert!(!origin_matches("http://seal.zone", "seal.zone"));
