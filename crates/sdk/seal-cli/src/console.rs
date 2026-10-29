@@ -91,6 +91,26 @@ pub struct TenantDetail {
     /// The workspace's slug.
     #[serde(default)]
     pub workspace: Option<String>,
+    /// The enclave replicas Seal runs for the tenant.
+    #[serde(default)]
+    pub hosted: Vec<HostedReplica>,
+}
+
+#[derive(Deserialize)]
+pub struct HostedReplica {
+    pub endpoint: String,
+    pub state: String,
+}
+
+impl TenantDetail {
+    /// The endpoints of the Seal-hosted replicas that can serve: not stopped or being deleted.
+    pub fn serving_endpoints(&self) -> anyhow::Result<Vec<url::Url>> {
+        self.hosted
+            .iter()
+            .filter(|r| r.state != "stopped" && r.state != "deleting")
+            .map(|r| url::Url::parse(&r.endpoint).with_context(|| format!("the console's endpoint {}", r.endpoint)))
+            .collect()
+    }
 }
 
 #[derive(Serialize)]

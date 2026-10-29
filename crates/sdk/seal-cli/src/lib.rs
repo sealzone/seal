@@ -238,7 +238,7 @@ struct SecretArgs {
     #[arg(long, value_name = "TENANT[@ROOT]", env = "SEAL_TENANT", value_parser = parse_tenant_pin, help_heading = "Enclave")]
     tenant: Option<(TenantId, Option<TenantRootId>)>,
     /// An enclave replica of the tenant, as `seal deploy` prints it; repeat, or separate with
-    /// commas
+    /// commas (default: the replicas Seal runs for the tenant)
     #[arg(
         long = "endpoint",
         value_name = "URL",
@@ -569,9 +569,6 @@ fn read_secret() -> anyhow::Result<SecretBytes> {
 
 async fn seal_secret(env: &Env, args: SecretArgs) -> anyhow::Result<()> {
     ui::reserve_stdout();
-    if args.endpoints.is_empty() {
-        bail!("name an enclave replica of the tenant: --endpoint https://HOST:PORT (or SEAL_ENDPOINT); `seal deploy` prints it");
-    }
     // A named tenant keeps the root `seal use` verified when it is the same one.
     let (tenant, root_id) = match args.tenant {
         Some((tenant, root_id)) => {
@@ -583,7 +580,25 @@ async fn seal_secret(env: &Env, args: SecretArgs) -> anyhow::Result<()> {
             None => bail!("name the tenant: --tenant <tenant>@<root id> (its admins' `seal status` prints it), or `seal use <tenant>`"),
         },
     };
-    let mut builder = seal::Client::builder().endpoints(args.endpoints).tenant(tenant);
+    // No endpoint named: the replicas Seal runs for the tenant, as the console lists them.
+    let endpoints = if args.endpoints.is_empty() {
+        let console = env.console().await?;
+        if !console.signed_in() {
+            bail!(
+                "name an enclave replica of the tenant: --endpoint https://HOST:PORT (or SEAL_ENDPOINT), or `seal login` to use the replicas Seal runs for it"
+            );
+        }
+        let endpoints = console.tenant(&tenant).await?.serving_endpoints()?;
+        if endpoints.is_empty() {
+            bail!(
+                "Seal runs no enclave for {tenant}: enable one in the console (Deployments), or name your own with --endpoint (`seal deploy` prints it)"
+            );
+        }
+        endpoints
+    } else {
+        args.endpoints
+    };
+    let mut builder = seal::Client::builder().endpoints(endpoints).tenant(tenant.clone());
     if let Some(root_id) = root_id {
         builder = builder.root_id(root_id);
     }
@@ -753,10 +768,26 @@ async fn use_tenant(env: &mut Env, tenant: Option<TenantId>) -> anyhow::Result<(
         Some(t) => t,
         None => {
             let all = console::tenants(&console, None).await?;
-            let choices: Vec<(String, String)> = all
+            // Active tenants first; any other status (closed) leads its row, in red.
+            let mut choices: Vec<(bool, String, String)> = all
                 .iter()
-                .flat_map(|(w, ts)| ts.iter().map(move |t| (t.id.clone(), format!("{w} · {} · {}", t.plan, t.status))))
+                .flat_map(|(w, ts)| {
+                    ts.iter().map(move |t| {
+                        let about = format!("{w} · {}", t.plan);
+                        if t.status == "active" {
+                            (true, t.id.clone(), about)
+                        } else {
+                            (
+                                false,
+                                t.id.clone(),
+                                format!("{} {}", ui::accent(&t.status), ui::dim(&format!("· {about}"))),
+                            )
+                        }
+                    })
+                })
                 .collect();
+            choices.sort_by_key(|(active, _, _)| !active);
+            let choices: Vec<(String, String)> = choices.into_iter().map(|(_, id, about)| (id, about)).collect();
             if choices.is_empty() {
                 bail!("your workspaces hold no tenant yet: create one in the console");
             }
@@ -834,7 +865,8 @@ fn overview() {
     println!("Use secrets without holding them.\n");
     for (title, names) in SECTIONS {
         let names: Vec<String> = names.iter().map(|n| ui::accent(n)).collect();
-        println!("{:<18}{}", ui::bold(title), names.join(" · "));
+        // Padded by the plain title: the bold's escape codes would count toward a `{:<18}`.
+        println!("{}{}{}", ui::bold(title), " ".repeat(18usize.saturating_sub(title.len())), names.join(" · "));
     }
     println!("\nStart with `seal login`, then `seal use <tenant>`. `seal --help` lists every command.");
 }
