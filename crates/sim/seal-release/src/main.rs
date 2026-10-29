@@ -145,6 +145,10 @@ enum Command {
         /// The log: the policy must not loosen its current checkpoint's
         #[arg(long)]
         log: Option<url::Url>,
+        /// Revoke measurements or raise min_tcb without raising min_service_key_version: no
+        /// service key already released to the revoked builds or hardware is suspect
+        #[arg(long)]
+        keep_service_keys: bool,
     },
     /// A booted guardian's key, from its attested `GET /v1/identity`
     GuardianIdentity {
@@ -275,7 +279,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             }
             println!("{}", serde_json::to_string(&seal_guardian::keysource::release_policy(&host_data, &maa))?);
         }
-        Command::Policy { file, log } => {
+        Command::Policy { file, log, keep_service_keys } => {
             let policy: seal_proto::release::ReleaseConstraints =
                 serde_json::from_str(&read(&file)?).with_context(|| format!("{}", file.display()))?;
             let current = match log {
@@ -285,7 +289,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                     Some(log.checkpoint().await.context("the log's checkpoint")?.checkpoint.policy)
                 }
             };
-            policy::check(&policy, current.as_ref())?;
+            policy::check(&policy, current.as_ref(), keep_service_keys)?;
             println!("{}", serde_json::to_string(&policy)?);
         }
         Command::Publish {
