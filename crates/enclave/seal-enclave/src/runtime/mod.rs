@@ -104,6 +104,12 @@ pub(crate) struct Runtime {
     time: time::TimeBase,
     release: Mutex<ReleaseEvidence>,
     attestation: Mutex<Option<AttestationResponse>>,
+    /// Signs this replica's answers to attestation challenges (`ops::challenged_attestation`).
+    /// Generated here at start; never leaves this replica's memory.
+    challenge_key: seal_crypto::sign::SigningKey,
+    /// The latest periodic evidence over `challenge_key` (`ATTESTATION_KEY_LABEL`), with the
+    /// binding, release and certificate it was made with.
+    key_attestation: Mutex<Option<AttestationResponse>>,
     live: live::Registry,
     connections: AtomicU64,
     activity: hosted::Activity,
@@ -305,6 +311,8 @@ impl Runtime {
             time: time::TimeBase::new(time),
             release: Mutex::new(release),
             attestation: Mutex::new(None),
+            challenge_key: seal_crypto::sign::SigningKey::generate(&mut rng()),
+            key_attestation: Mutex::new(None),
             live: live::Registry::default(),
             connections: AtomicU64::new(0),
             activity: hosted::Activity::default(),
@@ -410,9 +418,11 @@ impl Runtime {
         Ok(claims)
     }
 
-    /// Attests the current binding at the clock's time. With `reload_release`, first replaces
-    /// the release evidence with the store's newest, if that still verifies (the old one is kept
-    /// otherwise, and goes stale for clients on its own).
+    /// Attests the current binding at the clock's time, and then the binding with the challenge
+    /// key (`ATTESTATION_KEY_LABEL`): two hardware reports (or Confidential Space tokens) per
+    /// period, however many clients ask. With `reload_release`, first replaces the release
+    /// evidence with the store's newest, if that still verifies (the old one is kept otherwise,
+    /// and goes stale for clients on its own).
     pub(crate) async fn attest(&self, reload_release: bool) -> Result<(), ServiceError> {
         let time = self.now().await?;
         if reload_release {
@@ -442,16 +452,28 @@ impl Runtime {
             ingest_public_key: self.service.ingest.public_key(),
             telemetry_public_keys: self.service.telemetry_public_keys.clone(),
         };
+        let attest = |report_data: [u8; 32]| async move {
+            self.cloud.attestor().attest(report_data).await.map_err(|e| fail(e.code(), format!("attestation: {e}")))
+        };
+        let release = lock(&self.release).clone();
         let report_data = seal_proto::codec::labeled_digest(seal_proto::api::ATTESTATION_BINDING_LABEL, &binding);
-        let evidence =
-            self.cloud.attestor().attest(report_data).await.map_err(|e| fail(e.code(), format!("attestation: {e}")))?;
         let response = AttestationResponse {
-            evidence,
-            binding,
-            release: lock(&self.release).clone(),
+            evidence: attest(report_data).await?,
+            binding: binding.clone(),
+            release: release.clone(),
             certificate: self.service.certificate.clone(),
         };
         *lock(&self.attestation) = Some(response);
+        let key_binding =
+            seal_proto::api::AttestationKeyBinding { binding, challenge_key: self.challenge_key.public_key() };
+        let report_data = seal_proto::codec::labeled_digest(seal_proto::api::ATTESTATION_KEY_LABEL, &key_binding);
+        let response = AttestationResponse {
+            evidence: attest(report_data).await?,
+            binding: key_binding.binding,
+            release,
+            certificate: self.service.certificate.clone(),
+        };
+        *lock(&self.key_attestation) = Some(response);
         Ok(())
     }
 }

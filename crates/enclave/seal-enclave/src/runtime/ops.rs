@@ -7,13 +7,14 @@
 use seal_proto::telemetry::RefusalContext;
 use std::net::SocketAddr;
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use seal_authz::{AuthzError, SealPermit, SessionPermit, TenantAuthorizer};
 use seal_crypto::blob::{BlobSealer, OpenedBlob};
 use seal_proto::api::{
-    AttestationResponse, EndRequest, ExtendRequest, ExtendResponse, IngestContext, SealPayload, SealRequest,
-    SealResponse, SessionRequest, SessionResponse, SignalRequest,
+    AttestationChallenge, AttestationResponse, ChallengedAttestation, EndRequest, ExtendRequest, ExtendResponse,
+    IngestContext, SealPayload, SealRequest, SealResponse, SessionRequest, SessionResponse, SignalRequest,
+    ATTESTATION_CHALLENGE_LABEL,
 };
 use seal_proto::blob::Blob;
 use seal_proto::freshness::{ProofTicket, ATTESTATION_MAX_AGE_SECS};
@@ -108,8 +109,32 @@ impl Runtime {
     }
 
     pub(crate) fn attestation(&self) -> Result<AttestationResponse, ServiceError> {
-        let response =
-            lock(&self.attestation).clone().ok_or_else(|| fail(ErrorCode::Unavailable, "not attested yet"))?;
+        self.fresh(&self.attestation)
+    }
+
+    /// The latest evidence over the challenge key, and its signature over `nonce` and the
+    /// exporter of the connection that asked (`ChallengedAttestation`). Under the same age rule
+    /// as `attestation`.
+    pub(crate) fn challenged_attestation(
+        &self,
+        nonce: [u8; 32],
+        tls_exporter: [u8; 32],
+    ) -> Result<ChallengedAttestation, ServiceError> {
+        let attested = self.fresh(&self.key_attestation)?;
+        let challenge = AttestationChallenge { nonce, tls_exporter };
+        Ok(ChallengedAttestation {
+            evidence: attested.evidence,
+            binding: attested.binding,
+            challenge_key: self.challenge_key.public_key(),
+            release: attested.release,
+            certificate: attested.certificate,
+            signature: self.challenge_key.sign(ATTESTATION_CHALLENGE_LABEL, &challenge),
+        })
+    }
+
+    /// `latest`, unless it is missing or `ATTESTATION_MAX_AGE_SECS` old.
+    fn fresh(&self, latest: &Mutex<Option<AttestationResponse>>) -> Result<AttestationResponse, ServiceError> {
+        let response = lock(latest).clone().ok_or_else(|| fail(ErrorCode::Unavailable, "not attested yet"))?;
         let age_limit = response.binding.attested_at.saturating_add(ATTESTATION_MAX_AGE_SECS);
         if self.time.estimate().earliest() >= age_limit {
             return Err(fail(ErrorCode::Unavailable, "the latest attestation is too old"));

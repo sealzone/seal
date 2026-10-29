@@ -3,6 +3,7 @@
 //! | Method | Path                | Request               | Response              | Authorized by |
 //! |--------|---------------------|-----------------------|-----------------------|---------------|
 //! | GET    | /v1/attestation     | (none)                | `AttestationResponse` | nobody (public) |
+//! | GET    | /v1/attestation?nonce=<b64url> | (none)     | `ChallengedAttestation` | nobody (public) |
 //! | POST   | /v1/tickets         | (empty)               | `ProofTicket`         | nobody (public) |
 //! | POST   | /v1/blobs           | `SealRequest`         | `SealResponse`        | nobody (public) |
 //! | POST   | /v1/sessions        | `SessionRequest`      | `SessionResponse`     | identity proof |
@@ -11,7 +12,10 @@
 //! | POST   | /v1/signals         | `SignalRequest`       | (empty)               | identity proof |
 //!
 //! `/v1/attestation` serves the enclave's latest periodic attestation
-//! (`freshness::ATTESTATION_REFRESH_SECS`); `/v1/tickets` is rate limited per connection source.
+//! (`freshness::ATTESTATION_REFRESH_SECS`). With `?nonce=` (32 bytes, base64url, the only
+//! parameter) it answers that challenge for the TLS connection it arrives on
+//! (`ChallengedAttestation`), which only TLS 1.3 connections can ask. `/v1/tickets` is rate
+//! limited per connection source.
 //!
 //! Tickets are for the enclave's one tenant (its tenant pin). Ending a session needs
 //! only its token: holding the token already allows using the session, and ending it only
@@ -62,6 +66,59 @@ pub struct AttestationResponse {
     /// names the tenant and root the enclave serves.
     pub certificate: crate::release::SignedServiceKeyCertificate,
 }
+
+/// `GET /v1/attestation?nonce=`: proof that the TLS connection it arrives on ends in a replica
+/// of an approved release that serves the attested keys, now. The service keys alone prove
+/// neither: every replica of a tenant and service key version shares them, so a holder of keys
+/// copied out of a build later revoked, or out of hardware later below `min_tcb`, could serve
+/// TLS with them and any replica's periodic attestation.
+///
+/// Every replica generates a challenge key in its own memory when it starts; it never leaves
+/// the replica. With each periodic attestation the replica also attests to it: `evidence`
+/// commits to `labeled_digest(ATTESTATION_KEY_LABEL, &AttestationKeyBinding)`, under the same
+/// age rule as `AttestationResponse`. Per challenge it signs `AttestationChallenge`: the
+/// caller's nonce and the TLS exporter of the connection the request came on, which only the
+/// two ends of that connection know. A relay holding the TLS key ends its own connection to an
+/// honest replica, whose exporter differs, so the signature it can obtain fails. One signature
+/// per challenge, no hardware report: answering costs the TEE nothing.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ChallengedAttestation {
+    /// The latest evidence over the challenge key; its report data is the
+    /// `AttestationKeyBinding`'s digest.
+    pub evidence: crate::Evidence,
+    pub binding: AttestationBinding,
+    pub challenge_key: PublicKey,
+    pub release: ReleaseEvidence,
+    pub certificate: crate::release::SignedServiceKeyCertificate,
+    /// `challenge_key`'s signature (`ATTESTATION_CHALLENGE_LABEL`) over the `AttestationChallenge`.
+    pub signature: crate::signed::Signature,
+}
+
+/// What a replica's challenge-key evidence commits to:
+/// `labeled_digest(ATTESTATION_KEY_LABEL, &AttestationKeyBinding)`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AttestationKeyBinding {
+    pub binding: AttestationBinding,
+    /// Ed25519; generated in the replica's memory at start, never released or stored.
+    pub challenge_key: PublicKey,
+}
+
+pub const ATTESTATION_KEY_LABEL: &str = "seal/attestation-key/v1";
+
+/// What `ChallengedAttestation::signature` signs.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AttestationChallenge {
+    /// The caller's, from the query.
+    #[serde(with = "codec::array_b64")]
+    pub nonce: [u8; 32],
+    /// The connection's TLS exporter (RFC 8446 section 7.5): label `ATTESTATION_EXPORTER_LABEL`,
+    /// no context, 32 bytes.
+    #[serde(with = "codec::array_b64")]
+    pub tls_exporter: [u8; 32],
+}
+
+pub const ATTESTATION_CHALLENGE_LABEL: &str = "seal/attestation-challenge/v1";
+pub const ATTESTATION_EXPORTER_LABEL: &[u8] = b"EXPORTER-seal-attestation-challenge-v1";
 
 /// HPKE plaintext of `SealRequest::sealed_payload`. Only the enclave ever decrypts it.
 #[derive(Debug, Serialize, Deserialize)]

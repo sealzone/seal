@@ -272,9 +272,10 @@ pub struct ServiceConfig {
 }
 
 /// Owns verification/authentication, authorization, key/cache lifetimes, and sessions.
-/// Operations mirror the enclave API (`seal_proto::api`): `attestation`, `ticket`, `seal`,
-/// `session`, `extend`, `end`, `signal`; the data plane enters through `serve_tunnel`, on the
-/// same port as the API (`api::serve` tells them apart by TLS ALPN).
+/// Operations mirror the enclave API (`seal_proto::api`): `attestation`,
+/// `challenged_attestation`, `ticket`, `seal`, `session`, `extend`, `end`, `signal`; the data
+/// plane enters through `serve_tunnel`, on the same port as the API (`api::serve` tells them
+/// apart by TLS ALPN).
 /// Every operation and every refusal is recorded through the `Telemetry` port.
 ///
 /// Background tasks, stopped when the service is dropped: the periodic attestation
@@ -339,6 +340,18 @@ impl SealService {
     /// call. `Unavailable` once the latest is `ATTESTATION_MAX_AGE_SECS` old.
     pub async fn attestation(&self) -> Result<AttestationResponse, ServiceError> {
         self.runtime.attestation()
+    }
+    /// The answer to an attestation challenge (`GET /v1/attestation?nonce=`): the latest
+    /// periodic evidence over this replica's challenge key, and that key's signature over
+    /// `nonce` and `tls_exporter`, the exporter of the TLS 1.3 connection that asked
+    /// (`seal_proto::api::ChallengedAttestation`). One signature, no hardware report.
+    /// `Unavailable` as `attestation`.
+    pub async fn challenged_attestation(
+        &self,
+        nonce: [u8; 32],
+        tls_exporter: [u8; 32],
+    ) -> Result<seal_proto::api::ChallengedAttestation, ServiceError> {
+        self.runtime.challenged_attestation(nonce, tls_exporter)
     }
     /// A proof ticket for this enclave's tenant.
     pub async fn ticket(&self) -> Result<seal_proto::freshness::ProofTicket, ServiceError> {

@@ -14,13 +14,24 @@
 //! response counts only if that key is the attested one, so the whole response came from
 //! the attested enclave.
 //! The client re-verifies every `ATTESTATION_REFRESH_SECS`.
+//!
+//! That periodic attestation proves which keys an approved release holds, not that a
+//! connection ends in one: every replica shares the keys, and a holder of keys copied out of a
+//! build since revoked could present the TLS key and replay a fresh attestation. So before a
+//! request that carries anything secret (a sealed secret, an identity proof, a session
+//! token), the client challenges the TLS connection it will send it on (`challenge`): a fresh
+//! nonce in `GET /v1/attestation?nonce=`, answered with a `ChallengedAttestation` whose
+//! challenge key signed the nonce and the connection's TLS 1.3 exporter
+//! (`seal_verify::attestation::verify_challenged`), for the keys this client verified. Any
+//! failure, an enclave that cannot answer included, is a `Verification` error before the
+//! request is sent.
 
 use std::sync::{Arc, Mutex};
 
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime as TlsTime};
 use rustls::{CertificateError, DigitallySignedStruct, SignatureScheme};
-use seal_proto::api::{AttestationBinding, AttestationResponse};
+use seal_proto::api::{AttestationBinding, AttestationResponse, ChallengedAttestation, ATTESTATION_EXPORTER_LABEL};
 use seal_proto::release::ServiceKeyCertificate;
 use seal_proto::{Measurement, PlatformId, TenantId, TenantRootId, UnixTime};
 use sha2::{Digest, Sha256};
@@ -137,6 +148,77 @@ pub(crate) fn check(
         config,
         tunnel_config: Arc::new(tunnel_config),
     })
+}
+
+/// The TLS exporter `ChallengedAttestation` binds (`ATTESTATION_EXPORTER_LABEL`, no context).
+/// TLS 1.3 only: a TLS 1.2 exporter without the extended master secret can be made equal on two
+/// connections by whoever ends one of them.
+pub(crate) fn tls_exporter<IO>(stream: &tokio_rustls::client::TlsStream<IO>) -> Result<[u8; 32], ClientError> {
+    let conn = stream.get_ref().1;
+    if conn.protocol_version() != Some(rustls::ProtocolVersion::TLSv1_3) {
+        return Err(fail("the enclave connection is not TLS 1.3, so it cannot be challenged"));
+    }
+    conn.export_keying_material([0u8; 32], ATTESTATION_EXPORTER_LABEL, None)
+        .map_err(|e| fail(format!("TLS exporter: {e}")))
+}
+
+/// Every check on a challenged attestation (module docs), given the nonce sent and the
+/// connection's exporter. Pure. The answer must attest exactly `enclave`'s keys, tenant and
+/// root: the request that follows was prepared for those.
+pub(crate) fn check_challenged(
+    response: &ChallengedAttestation,
+    nonce: &[u8; 32],
+    tls_exporter: &[u8; 32],
+    enclave: &VerifiedEnclave,
+    trust: &seal_verify::Trust,
+    expected: &Expected,
+    now: UnixTime,
+) -> Result<(), ClientError> {
+    let verified = seal_verify::attestation::verify_challenged(
+        response,
+        nonce,
+        tls_exporter,
+        trust,
+        &expected.tenant,
+        expected.root_id.as_ref(),
+        now,
+    )
+    .map_err(|e| fail(format!("challenged attestation: {e}")))?;
+    let (ours, theirs) = (&enclave.binding, &verified.binding);
+    if theirs.tls_spki_sha256 != ours.tls_spki_sha256
+        || theirs.ingest_public_key != ours.ingest_public_key
+        || theirs.service_key_version != ours.service_key_version
+        || verified.certificate.root_id != enclave.certificate.root_id
+    {
+        return Err(fail("the challenged attestation is for other keys than the verified enclave's"));
+    }
+    Ok(())
+}
+
+/// Challenges `conn` (TLS pinned to `enclave`'s key, whose exporter is `tls_exporter`) with a
+/// fresh nonce and checks the answer (`check_challenged`). A network failure is `Network`;
+/// an enclave error is its code; anything else, an enclave that answers without the
+/// challenge included, is `Verification`.
+pub(crate) async fn challenge(
+    conn: &mut transport::Http1,
+    authority: &str,
+    tls_exporter: &[u8; 32],
+    enclave: &VerifiedEnclave,
+    trust: &seal_verify::Trust,
+    expected: &Expected,
+) -> Result<(), ClientError> {
+    let nonce = *seal_crypto::Key32::generate(&mut seal_crypto::UnwrapErr(seal_crypto::SysRng)).expose();
+    let path = format!("/v1/attestation?nonce={}", seal_proto::codec::b64url(&nonce));
+    let (status, body) = conn
+        .send(hyper::Method::GET, authority, &path, &[("accept", "application/json")], None)
+        .await
+        .map_err(|e| ClientError::Network(format!("{authority}: attestation challenge: {e}")))?;
+    if status != 200 {
+        return Err(crate::client::api_error(status, &body));
+    }
+    let response: ChallengedAttestation = serde_json::from_slice(&body)
+        .map_err(|_| fail("the enclave did not answer the attestation challenge (a release older than this SDK?)"))?;
+    check_challenged(&response, &nonce, tls_exporter, enclave, trust, expected, crate::client::now())
 }
 
 /// Fetches `GET /v1/attestation` from `endpoint` and checks it (`check`). Network failures

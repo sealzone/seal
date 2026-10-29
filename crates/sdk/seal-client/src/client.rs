@@ -247,13 +247,14 @@ impl Client {
                 return Ok(ticket);
             }
         }
-        let body = self.call_raw(enclave, "/v1/tickets", Vec::new()).await?;
+        let body = self.call_raw(enclave, "/v1/tickets", Vec::new(), Challenge::No).await?;
         let ticket: ProofTicket = decode("/v1/tickets", &body)?;
         *self.inner.ticket.lock().unwrap_or_else(|e| e.into_inner()) = Some((spki, ticket.clone()));
         Ok(ticket)
     }
 
-    /// `POST path` with a JSON body, JSON response.
+    /// `POST path` with a JSON body, JSON response, on a connection that answered an attestation
+    /// challenge (`verify::challenge`) first.
     pub(crate) async fn call<B: Serialize, R: DeserializeOwned>(
         &self,
         enclave: &Arc<VerifiedEnclave>,
@@ -261,10 +262,10 @@ impl Client {
         body: &B,
     ) -> Result<R, ClientError> {
         let body = serde_json::to_vec(body).map_err(|e| ClientError::Invalid(e.to_string()))?;
-        decode(path, &self.call_raw(enclave, path, body).await?)
+        decode(path, &self.call_raw(enclave, path, body, Challenge::First).await?)
     }
 
-    /// `POST path` with a JSON body, empty response.
+    /// `POST path` with a JSON body, empty response, after a challenge as `call`.
     pub(crate) async fn call_empty<B: Serialize>(
         &self,
         enclave: &Arc<VerifiedEnclave>,
@@ -272,27 +273,35 @@ impl Client {
         body: &B,
     ) -> Result<(), ClientError> {
         let body = serde_json::to_vec(body).map_err(|e| ClientError::Invalid(e.to_string()))?;
-        self.call_raw(enclave, path, body).await.map(drop)
+        self.call_raw(enclave, path, body, Challenge::First).await.map(drop)
     }
 
-    /// One POST over TLS pinned to `enclave`'s key. Fails over to the next endpoint when
-    /// nothing was sent; when no endpoint is reachable, retries for up to `UNREACHABLE_WAIT_SECS`.
+    /// One POST over TLS pinned to `enclave`'s key, after a challenge on the same connection
+    /// when `challenge` says so. Fails over to the next endpoint when nothing was sent; when no
+    /// endpoint is reachable, retries for up to `UNREACHABLE_WAIT_SECS`.
     async fn call_raw(
         &self,
         enclave: &Arc<VerifiedEnclave>,
         path: &str,
         body: Vec<u8>,
+        challenge: Challenge,
     ) -> Result<Vec<u8>, ClientError> {
-        match self.call_once(enclave, path, &body).await {
+        match self.call_once(enclave, path, &body, challenge).await {
             Pass::Answered(result) => result,
             Pass::Unreachable(missed) => {
-                retry::while_unreachable(missed, || self.call_once(enclave, path, &body)).await
+                retry::while_unreachable(missed, || self.call_once(enclave, path, &body, challenge)).await
             }
         }
     }
 
     /// `call_raw`'s pass over the endpoints, from the one that answered last.
-    async fn call_once(&self, enclave: &Arc<VerifiedEnclave>, path: &str, body: &[u8]) -> Pass<Vec<u8>> {
+    async fn call_once(
+        &self,
+        enclave: &Arc<VerifiedEnclave>,
+        path: &str,
+        body: &[u8],
+        challenge: Challenge,
+    ) -> Pass<Vec<u8>> {
         let n = self.inner.endpoints.len();
         let start = self.inner.current.load(Ordering::Relaxed);
         let mut last = ClientError::Network("no enclave endpoints".into());
@@ -312,12 +321,24 @@ impl Client {
             };
             self.inner.current.store(index, Ordering::Relaxed);
             let authority = verify::authority(&host, port);
-            let headers = [("accept", "application/json")];
-            let request = Some(body.to_vec());
-            let exchange = transport::exchange(stream, hyper::Method::POST, &authority, path, &headers, request);
+            let exchange = async {
+                let exporter = match challenge {
+                    Challenge::First => Some(verify::tls_exporter(&stream)?),
+                    Challenge::No => None,
+                };
+                let network = |e: String| ClientError::Network(format!("{authority}{path}: {e}"));
+                let mut conn = transport::Http1::handshake(stream).await.map_err(network)?;
+                if let Some(exporter) = exporter {
+                    let (trust, expected) = (&self.inner.trust, &self.inner.expected);
+                    verify::challenge(&mut conn, &authority, &exporter, enclave, trust, expected).await?;
+                }
+                let headers = [("accept", "application/json")];
+                let request = Some(body.to_vec());
+                conn.send(hyper::Method::POST, &authority, path, &headers, request).await.map_err(network)
+            };
             return Pass::Answered(match tokio::time::timeout(transport::EXCHANGE_TIMEOUT, exchange).await {
                 Err(_) => Err(ClientError::Network(format!("{authority}{path}: timed out"))),
-                Ok(Err(e)) => Err(ClientError::Network(format!("{authority}{path}: {e}"))),
+                Ok(Err(e)) => Err(e),
                 Ok(Ok((status, body))) if (200..300).contains(&status) => Ok(body),
                 Ok(Ok((status, body))) => Err(match api_error(status, &body) {
                     ClientError::Seal { code: ErrorCode::ResealRequired, .. } => reseal_required(enclave.platform()),
@@ -327,6 +348,14 @@ impl Client {
         }
         Pass::Unreachable(last)
     }
+}
+
+/// Whether a call challenges its connection first (`verify::challenge`): every call that
+/// carries a secret, a proof or a token does; only `/v1/tickets` does not.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Challenge {
+    First,
+    No,
 }
 
 /// `verify_any`'s result as a pass: `Network` means no replica could be verified.

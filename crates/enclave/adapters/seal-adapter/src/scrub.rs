@@ -8,9 +8,11 @@
 //!   `\uXXXX` with `XX` in either case (Go's `&`, .NET's `+`), and the short
 //!   escapes `\"`, `\\`, `\/` (PHP), `\b`, `\f`, `\n`, `\r`, `\t`;
 //! - base64, standard and URL-safe, padded or not, at any alignment (inside `Basic` auth, a
-//!   JWT, a JSON field), itself escaped as above. Only the stable core is masked: the one or
-//!   two characters at each edge that also carry neighbouring bytes stay. Needles shorter
-//!   than `MIN_SECRET_BYTES` get no base64 forms, whose cores would be a few common characters.
+//!   JWT, a JSON field), itself escaped as above. The characters at each edge that carry
+//!   some of the needle's bits and some of a neighbouring byte's are masked too, whatever the
+//!   neighbour (any character whose needle bits are right matches there), so no bit of the
+//!   needle stays visible. Needles shorter than `MIN_SECRET_BYTES` get no base64 forms, whose
+//!   characters would be a few common ones.
 //!
 //! Not masked: anything else the upstream computes from the secret (hex, a hash, a substring,
 //! double escaping, HTML entities, MIME base64 with line breaks), or compressed data.
@@ -19,7 +21,9 @@
 //! return chosen text: is this exact text the secret? That is why secrets shorter than
 //! `seal_proto::policy::MIN_SECRET_BYTES` are never sealed: a response listing every candidate
 //! of a short length would find them. A needle of any length is still masked: passing an echo
-//! through would be worse.
+//! through would be worse. Nothing else about the scrubber depends on how much of the text
+//! resembles the secret: neither what it releases and when (`Scrubber`), nor the work it does
+//! per byte (`Engine`).
 
 use seal_proto::policy::MIN_SECRET_BYTES;
 use zeroize::{Zeroize, Zeroizing};
@@ -31,22 +35,27 @@ use zeroize::{Zeroize, Zeroizing};
 ///
 /// What it releases, and when, depends only on how many bytes arrived, never on what they
 /// were: it always holds back the last `window` bytes (one less than the longest spelling of
-/// any pattern, six bytes per byte of a needle or base64 core), whether or not they could
-/// start an occurrence, and `flush` releases them all at a protocol message boundary, so a
-/// request/response protocol never stalls. A stream with no message boundaries calls `release`
-/// when its upstream goes quiet, a moment set by arrival times alone: the held bytes go out and
-/// stay as context, so an occurrence that resumes after the pause still has its unsent rest
-/// masked (only what went out before the pause is past masking). Holding back only a tail that might be the
-/// secret's beginning would frame the output by how much of the secret an echo matched: an
-/// upstream that echoes chosen text would then be a prefix oracle for the secret.
+/// any pattern, six bytes per position), whether or not they could start an occurrence, and
+/// `flush` releases them all at a protocol message boundary, so a request/response protocol
+/// never stalls. A stream with no message boundaries calls `release` when its upstream goes
+/// quiet, a moment set by arrival times alone: the held bytes go out and stay as context, so
+/// an occurrence that resumes after the pause still has its unsent rest masked (only what went
+/// out before the pause is past masking). Holding back only a tail that might be the secret's
+/// beginning would frame the output by how much of the secret an echo matched: an upstream
+/// that echoes chosen text would then be a prefix oracle for the secret.
 ///
 /// Sees only the bytes as sent: a secret inside compressed data passes, which is why adapters
-/// refuse response compression. Needles are zeroized on drop.
+/// refuse response compression. Patterns, their tables and the match state are zeroized on drop.
 pub struct Scrubber {
-    /// Each needle and its base64 cores, matched byte by byte in any spelling.
-    patterns: Vec<Zeroizing<Vec<u8>>>,
-    /// The held-back tail as received (unmasked), so an occurrence that starts in it is still
-    /// found when the rest arrives.
+    /// Each needle and its base64 forms, one byte class per position.
+    patterns: Vec<Pattern>,
+    /// Every pattern at once, fed each byte as it arrives; `None` without patterns.
+    engine: Option<Engine>,
+    /// Per pattern: its reversed engine, built at its first complete occurrence, which finds
+    /// where that occurrence starts.
+    reversed: Vec<Option<Engine>>,
+    /// The held-back tail as received (unmasked), so an occurrence that starts in it can still
+    /// be masked when it completes.
     carry: Vec<u8>,
     /// Per byte of `carry`: already covered by a complete occurrence.
     carry_masked: Vec<bool>,
@@ -54,56 +63,69 @@ pub struct Scrubber {
     carry_sent: usize,
     /// Bytes always held back: no occurrence still open can start earlier.
     window: usize,
-    /// Scratch for `scan`, kept to avoid an allocation per byte.
-    active: Vec<Partial>,
-    next: Vec<Partial>,
 }
 
 pub const MASK: u8 = b'*';
 
+/// The longest spelling of any byte (`\u00XX`).
+const LONGEST_SPELLING: usize = 6;
+
 impl Scrubber {
     /// Empty needles are ignored.
     pub fn new(needles: Vec<Zeroizing<Vec<u8>>>) -> Self {
-        let mut patterns: Vec<Zeroizing<Vec<u8>>> = Vec::new();
-        for needle in needles.into_iter().filter(|n| !n.is_empty()) {
-            let cores = if needle.len() >= MIN_SECRET_BYTES { base64_cores(&needle) } else { Vec::new() };
-            for p in std::iter::once(needle).chain(cores) {
+        let mut patterns: Vec<Pattern> = Vec::new();
+        let needles: Vec<&[u8]> = needles.iter().map(|n| n.as_slice()).filter(|n| !n.is_empty()).collect();
+        // A needle that contains another one with base64 forms needs none of its own: the
+        // other's forms already mask every character carrying its bytes.
+        let encodes = |n: &[u8]| n.len() >= MIN_SECRET_BYTES;
+        let covered = |n: &[u8]| needles.iter().any(|m| m.len() < n.len() && encodes(m) && contains(n, m));
+        for &needle in &needles {
+            let plain = Zeroizing::new(needle.iter().map(|&b| Class::of(b)).collect());
+            let encoded = if encodes(needle) && !covered(needle) { base64_patterns(needle) } else { Vec::new() };
+            for p in std::iter::once(plain).chain(encoded) {
                 if !patterns.contains(&p) {
                     patterns.push(p);
                 }
             }
         }
         let longest = patterns.iter().map(|p| p.len() * LONGEST_SPELLING).max().unwrap_or(0);
+        let engine = (!patterns.is_empty()).then(|| Engine::new(&patterns, false));
         Self {
+            reversed: patterns.iter().map(|_| None).collect(),
             patterns,
+            engine,
             carry: Vec::new(),
             carry_masked: Vec::new(),
             carry_sent: 0,
             window: longest.saturating_sub(1),
-            active: Vec::new(),
-            next: Vec::new(),
         }
     }
 
     /// Feed a chunk; returns bytes safe to forward now.
     pub fn push(&mut self, chunk: &[u8]) -> Vec<u8> {
-        if self.patterns.is_empty() {
+        let Some(engine) = self.engine.as_mut() else {
             return chunk.to_vec();
-        }
+        };
         let mut buf = std::mem::take(&mut self.carry);
+        let fresh = buf.len();
         buf.extend_from_slice(chunk);
         let mut masked = std::mem::take(&mut self.carry_masked);
         masked.resize(buf.len(), false);
 
-        // Mask every complete occurrence. The release point is fixed by the length alone (module
-        // docs): an occurrence still open is shorter than its longest spelling, so it starts
-        // inside the window.
-        let keep = buf.len().saturating_sub(self.window);
-        for pattern in &self.patterns {
-            let open = scan(pattern, &buf, &mut masked, &mut self.active, &mut self.next);
-            debug_assert!(open.is_none_or(|start| start >= keep));
+        // Mask every occurrence as it completes. An occurrence is at most `window + 1` bytes
+        // long, so it starts inside `buf`: the carry holds the last `window` bytes since the
+        // last message boundary.
+        for i in fresh..buf.len() {
+            if engine.step(buf[i], true) {
+                for q in engine.completed() {
+                    let start = start_of(&self.patterns[q], &mut self.reversed[q], &buf[..=i]);
+                    masked[start..=i].iter_mut().for_each(|m| *m = true);
+                }
+            }
         }
 
+        // The release point is fixed by the length alone (module docs).
+        let keep = buf.len().saturating_sub(self.window);
         let emit = keep.max(self.carry_sent);
         let out = apply(&buf[self.carry_sent..emit], &masked[self.carry_sent..emit]);
         self.carry = buf[keep..].to_vec();
@@ -132,12 +154,21 @@ impl Scrubber {
         self.carry.zeroize();
         self.carry_masked.clear();
         self.carry_sent = 0;
+        if let Some(engine) = self.engine.as_mut() {
+            engine.reset();
+        }
         out
     }
 
     /// End of stream: returns the held-back tail, scrubbed.
     pub fn finish(&mut self) -> Vec<u8> {
         self.flush()
+    }
+
+    /// Engine steps taken so far, in words: the scan's work, for tests.
+    #[cfg(test)]
+    fn work(&self) -> u64 {
+        self.engine.as_ref().map_or(0, |e| e.work) + self.reversed.iter().flatten().map(|e| e.work).sum::<u64>()
     }
 }
 
@@ -147,11 +178,65 @@ impl Drop for Scrubber {
     }
 }
 
-/// The base64 characters that depend only on the needle's bytes, for each of the three
-/// alignments the needle can have inside encoded data, standard and URL-safe alphabets.
-fn base64_cores(needle: &[u8]) -> Vec<Zeroizing<Vec<u8>>> {
+fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack.windows(needle.len()).any(|w| w == needle)
+}
+
+/// Where the occurrence of `pattern` that completes at the end of `buf` starts: the earliest
+/// start, when several spellings end there. Runs `pattern`'s reversed engine back from the end
+/// for a fixed number of bytes (the longest spelling, or all of `buf` if shorter).
+fn start_of(pattern: &Pattern, reversed: &mut Option<Engine>, buf: &[u8]) -> usize {
+    let engine = reversed.get_or_insert_with(|| {
+        let backwards: Pattern = Zeroizing::new(pattern.iter().rev().copied().collect());
+        Engine::new(std::slice::from_ref(&backwards), true)
+    });
+    engine.reset();
+    let end = buf.len() - 1;
+    let mut start = end;
+    for (k, &b) in buf.iter().rev().take(pattern.len() * LONGEST_SPELLING).enumerate() {
+        let done = engine.step(b, k == 0);
+        start = if done { end - k } else { start };
+    }
+    start
+}
+
+/// The bytes one position of a pattern matches: a set of 256.
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+struct Class([u64; 4]);
+
+impl Zeroize for Class {
+    fn zeroize(&mut self) {
+        self.0.zeroize();
+    }
+}
+
+impl Class {
+    fn of(b: u8) -> Self {
+        let mut c = Self::default();
+        c.add(b);
+        c
+    }
+    fn add(&mut self, b: u8) {
+        self.0[usize::from(b >> 6)] |= 1 << (b & 63);
+    }
+    fn members(&self) -> impl Iterator<Item = u8> + '_ {
+        (0..=255u8).filter(|&b| self.0[usize::from(b >> 6)] >> (b & 63) & 1 == 1)
+    }
+}
+
+type Pattern = Zeroizing<Vec<Class>>;
+
+/// The base64 forms of `needle`, for each of the three alignments it can have inside encoded
+/// data: one position per character that carries any of its bits. A character that also
+/// carries a neighbouring byte's bits matches every character agreeing on the needle's bits;
+/// each position takes either alphabet, standard or URL-safe.
+fn base64_patterns(needle: &[u8]) -> Vec<Pattern> {
     const STD: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut cores = Vec::new();
+    const URL: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    // Per character of a group: the bytes its bits come from and which of its bits each gives.
+    const FROM: [(usize, u8, usize, u8); 4] =
+        [(0, 0b11_1111, 0, 0), (0, 0b11_0000, 1, 0b00_1111), (1, 0b11_1100, 2, 0b00_0011), (2, 0b11_1111, 2, 0)];
+    let mut patterns = Vec::new();
     for lead in 0..3 {
         // `lead` unknown bytes before the needle, zeros after it to finish the last group.
         // Sized up front: a growing buffer would leave unzeroized copies behind.
@@ -160,7 +245,8 @@ fn base64_cores(needle: &[u8]) -> Vec<Zeroizing<Vec<u8>>> {
         bytes.resize(lead, 0);
         bytes.extend_from_slice(needle);
         bytes.resize(whole, 0);
-        let mut core = Zeroizing::new(Vec::with_capacity(whole / 3 * 4));
+        let ours = |i: usize| (lead..lead + needle.len()).contains(&i);
+        let mut pattern: Pattern = Zeroizing::new(Vec::with_capacity(whole / 3 * 4));
         for (g, group) in bytes.chunks(3).enumerate() {
             let sextets = [
                 group[0] >> 2,
@@ -168,134 +254,208 @@ fn base64_cores(needle: &[u8]) -> Vec<Zeroizing<Vec<u8>>> {
                 (group[1] & 0x0f) << 2 | group[2] >> 6,
                 group[2] & 0x3f,
             ];
-            // The bytes each character's six bits come from.
-            let from = [(0, 0), (0, 1), (1, 2), (2, 2)];
-            for (sextet, (lo, hi)) in sextets.into_iter().zip(from) {
-                if 3 * g + lo >= lead && 3 * g + hi < lead + needle.len() {
-                    core.push(STD[usize::from(sextet)]);
-                }
-            }
-        }
-        let url = Zeroizing::new(
-            core.iter()
-                .map(|&c| match c {
-                    b'+' => b'-',
-                    b'/' => b'_',
-                    c => c,
-                })
-                .collect::<Vec<u8>>(),
-        );
-        if url != core {
-            cores.push(url);
-        }
-        cores.push(core);
-    }
-    cores
-}
-
-/// One way of writing a byte: `bytes[..len]`, compared ASCII-case-insensitively if `fold`.
-struct Spelling {
-    bytes: [u8; 6],
-    len: usize,
-    fold: bool,
-}
-
-impl Spelling {
-    fn accepts(&self, at: usize, b: u8) -> bool {
-        let s = self.bytes[at];
-        s == b || (self.fold && s.eq_ignore_ascii_case(&b))
-    }
-}
-
-/// How many spellings `spelling` can return per byte.
-const SPELLINGS: usize = 5;
-
-/// The longest spelling of any byte (`\u00XX`).
-const LONGEST_SPELLING: usize = 6;
-
-/// The `n`th spelling of byte `b`, if it has one: plain, `%XX`, `\u00XX`, a short JSON escape,
-/// `+` for a space.
-fn spelling(b: u8, n: usize) -> Option<Spelling> {
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
-    let (hi, lo) = (HEX[usize::from(b >> 4)], HEX[usize::from(b & 0x0f)]);
-    let (bytes, len, fold) = match n {
-        0 => ([b, 0, 0, 0, 0, 0], 1, false),
-        1 => ([b'%', hi, lo, 0, 0, 0], 3, true),
-        2 => ([b'\\', b'u', b'0', b'0', hi, lo], 6, true),
-        3 => {
-            let short = match b {
-                b'"' | b'\\' | b'/' => b,
-                0x08 => b'b',
-                0x0c => b'f',
-                b'\n' => b'n',
-                b'\r' => b'r',
-                b'\t' => b't',
-                _ => return None,
-            };
-            ([b'\\', short, 0, 0, 0, 0], 2, false)
-        }
-        4 if b == b' ' => ([b'+', 0, 0, 0, 0, 0], 1, false),
-        _ => return None,
-    };
-    Some(Spelling { bytes, len, fold })
-}
-
-/// A started occurrence: `pattern[..pos]` is complete from `start`, and `at` bytes of the
-/// `spelling`th spelling of `pattern[pos]` are matched (`at == 0`: none chosen yet).
-#[derive(Clone, Copy)]
-struct Partial {
-    start: usize,
-    pos: usize,
-    spelling: usize,
-    at: usize,
-}
-
-/// Marks every occurrence of `pattern` in `buf` and returns the start of the earliest one
-/// still open at the end of `buf`.
-fn scan(
-    pattern: &[u8],
-    buf: &[u8],
-    masked: &mut [bool],
-    active: &mut Vec<Partial>,
-    next: &mut Vec<Partial>,
-) -> Option<usize> {
-    let first = pattern[0];
-    active.clear();
-    for (i, &b) in buf.iter().enumerate() {
-        next.clear();
-        let opens = b == first || b == b'%' || b == b'\\' || (first == b' ' && b == b'+');
-        let fresh = opens.then_some(Partial { start: i, pos: 0, spelling: 0, at: 0 });
-        for p in active.iter().copied().chain(fresh) {
-            let tries = if p.at == 0 { 0..SPELLINGS } else { p.spelling..p.spelling + 1 };
-            for n in tries {
-                let Some(s) = spelling(pattern[p.pos], n) else { continue };
-                if !s.accepts(p.at, b) {
+            for (sextet, (a, a_bits, b, b_bits)) in sextets.into_iter().zip(FROM) {
+                let known = if ours(3 * g + a) { a_bits } else { 0 } | if ours(3 * g + b) { b_bits } else { 0 };
+                if known == 0 {
                     continue;
                 }
-                let step = if p.at + 1 < s.len {
-                    Partial { spelling: n, at: p.at + 1, ..p }
-                } else if p.pos + 1 < pattern.len() {
-                    Partial { pos: p.pos + 1, spelling: 0, at: 0, ..p }
-                } else {
-                    masked[p.start..=i].iter_mut().for_each(|m| *m = true);
-                    continue;
-                };
-                // Two starts in the same state complete together: keep the earlier.
-                match next.iter_mut().find(|q| (q.pos, q.spelling, q.at) == (step.pos, step.spelling, step.at)) {
-                    Some(q) => q.start = q.start.min(step.start),
-                    None => next.push(step),
+                let mut class = Class::default();
+                for v in (0..64u8).filter(|v| v & known == sextet & known) {
+                    class.add(STD[usize::from(v)]);
+                    class.add(URL[usize::from(v)]);
                 }
+                pattern.push(class);
             }
         }
-        std::mem::swap(active, next);
+        patterns.push(pattern);
     }
-    active.iter().map(|p| p.start).min()
+    patterns
+}
+
+/// Every pattern as one bit-parallel automaton (shift-and over all spelling states): bit `p`
+/// of each state vector stands for position `p` of the patterns laid end to end, and each
+/// byte costs the same fixed sequence of word operations, over every word, whatever the
+/// bytes and however much of a pattern they match. A scan that followed only the partial
+/// matches alive (as a list) would take longer the more of an echo resembled the secret,
+/// a timing oracle as good as a prefix one once a response repeats a guess. What the step
+/// branches on is only the input byte, which the consumer knows.
+///
+/// A position is reached by one of its byte's spellings, read as a chain of bytes, with a
+/// state vector after each byte of the chain but its last (index into a word's `state`):
+/// - plain (a member of its class), or `+` for a space: one byte, straight to `done` (0);
+/// - `%` hi lo: 1 after `%`, 2 after hi;
+/// - `\u00` hi lo: 3 after `\`, 4 after `u`, 5 and 6 after the zeros, 7 after hi;
+/// - `\` and a short escape letter: 3 after `\`, shared with the one above.
+///
+/// Hex digits and the `u` match in either case. A class's escaped spellings take the high
+/// digit of any member with the low digit of any member, so at the edge of a base64 form (the
+/// only classes with several members) an escaped character that is no member can pass for one:
+/// at worst one character too many is masked, next to a complete occurrence.
+///
+/// Reversed (`reversed`: the pattern's positions back to front, each chain read backwards),
+/// the same tables find where an occurrence starts.
+struct Engine {
+    words: usize,
+    reversed: bool,
+    /// Per word, bit `p`: position `p` is the first (`.0`) or last (`.1`) of its pattern.
+    marks: Vec<(u64, u64)>,
+    /// Per pattern, in order: the bit index of its last position.
+    last: Vec<usize>,
+    /// `words` per row. `plain`: a row per byte, positions that byte spells plainly. `hi`,
+    /// `lo`: a row per hex digit (and an empty one), positions with a member whose high or
+    /// low digit it is. `short`: a row per short escape letter (and an empty one).
+    plain: Zeroizing<Vec<u64>>,
+    hi: Zeroizing<Vec<u64>>,
+    lo: Zeroizing<Vec<u64>>,
+    short: Zeroizing<Vec<u64>>,
+    /// `STATE` vectors per word: `done` (position complete), then the chain states.
+    state: Zeroizing<Vec<[u64; STATE]>>,
+    /// Words stepped, for tests.
+    #[cfg(test)]
+    work: u64,
+}
+
+const STATE: usize = 8;
+const SHORT: [(u8, u8); 8] = [
+    (b'"', b'"'),
+    (b'\\', b'\\'),
+    (b'/', b'/'),
+    (0x08, b'b'),
+    (0x0c, b'f'),
+    (b'\n', b'n'),
+    (b'\r', b'r'),
+    (b'\t', b't'),
+];
+/// Row of `hi`/`lo` for an input byte: its hex value in either case, 16 for no digit.
+const HEX_ROW: [u8; 256] = {
+    let mut rows = [16u8; 256];
+    let mut b = 0;
+    while b < 256 {
+        rows[b] = match b as u8 {
+            d @ b'0'..=b'9' => d - b'0',
+            d @ b'a'..=b'f' => d - b'a' + 10,
+            d @ b'A'..=b'F' => d - b'A' + 10,
+            _ => 16,
+        };
+        b += 1;
+    }
+    rows
+};
+/// Row of `short` for an input byte: its index in `SHORT` as an escape letter, 8 for none.
+const SHORT_ROW: [u8; 256] = {
+    let mut rows = [8u8; 256];
+    let mut i = 0;
+    while i < SHORT.len() {
+        rows[SHORT[i].1 as usize] = i as u8;
+        i += 1;
+    }
+    rows
+};
+
+impl Engine {
+    fn new(patterns: &[Pattern], reversed: bool) -> Self {
+        let positions: usize = patterns.iter().map(|p| p.len()).sum();
+        let words = positions.div_ceil(64);
+        let zeros = |rows: usize| Zeroizing::new(vec![0u64; rows * words]);
+        let mut e = Engine {
+            words,
+            reversed,
+            marks: vec![(0, 0); words],
+            last: Vec::with_capacity(patterns.len()),
+            plain: zeros(256),
+            hi: zeros(17),
+            lo: zeros(17),
+            short: zeros(9),
+            state: Zeroizing::new(vec![[0; STATE]; words]),
+            #[cfg(test)]
+            work: 0,
+        };
+        let mut p = 0;
+        for pattern in patterns {
+            e.marks[p / 64].0 |= 1 << (p % 64);
+            for class in pattern.iter() {
+                let (w, bit) = (p / 64, 1u64 << (p % 64));
+                for b in class.members() {
+                    e.plain[usize::from(b) * words + w] |= bit;
+                    if b == b' ' {
+                        e.plain[usize::from(b'+') * words + w] |= bit;
+                    }
+                    e.hi[usize::from(b >> 4) * words + w] |= bit;
+                    e.lo[usize::from(b & 0x0f) * words + w] |= bit;
+                    if let Some(i) = SHORT.iter().position(|&(s, _)| s == b) {
+                        e.short[i * words + w] |= bit;
+                    }
+                }
+                p += 1;
+            }
+            e.marks[(p - 1) / 64].1 |= 1 << ((p - 1) % 64);
+            e.last.push(p - 1);
+        }
+        e
+    }
+
+    /// Forgets every partial match.
+    fn reset(&mut self) {
+        self.state.fill([0; STATE]);
+    }
+
+    /// Takes byte `c`; an occurrence may start at it if `open`. Returns whether any pattern
+    /// completed (`completed` says which).
+    fn step(&mut self, c: u8, open: bool) -> bool {
+        let words = self.words;
+        let plain = &self.plain[usize::from(c) * words..][..words];
+        let hi = &self.hi[usize::from(HEX_ROW[usize::from(c)]) * words..][..words];
+        let lo = &self.lo[usize::from(HEX_ROW[usize::from(c)]) * words..][..words];
+        let short = &self.short[usize::from(SHORT_ROW[usize::from(c)]) * words..][..words];
+        let is = |x: u8| if c == x { !0u64 } else { 0 };
+        let (pct, slash, zero, u) = (is(b'%'), is(b'\\'), is(b'0'), if c | 0x20 == b'u' { !0u64 } else { 0 });
+        let open = if open { !0u64 } else { 0 };
+        let mut carry = 0;
+        let mut any = 0;
+        let tables = plain.iter().zip(hi).zip(lo).zip(short);
+        for ((s, &(starts, ends)), (((&plain, &hi), &lo), &short)) in self.state.iter_mut().zip(&self.marks).zip(tables)
+        {
+            let done = s[0];
+            // Positions whose predecessor is complete: shifted along, and every pattern's first.
+            let at = ((done << 1 | carry) & !starts) | (starts & open);
+            carry = done >> 63;
+            if self.reversed {
+                // Chains backwards: lo hi `%`; lo hi `0` `0` `u` `\`; letter `\`.
+                s[0] = (at & plain) | (s[2] & pct) | ((s[5] | s[6]) & slash);
+                s[6] = at & short;
+                s[5] = s[4] & u;
+                s[4] = s[3] & zero;
+                s[3] = s[2] & zero;
+                s[2] = s[1] & hi;
+                s[1] = at & lo;
+            } else {
+                s[0] = (at & plain) | ((s[2] | s[7]) & lo) | (s[3] & short);
+                s[7] = s[6] & hi;
+                s[6] = s[5] & zero;
+                s[5] = s[4] & zero;
+                s[4] = s[3] & u;
+                s[3] = at & slash;
+                s[2] = s[1] & hi;
+                s[1] = at & pct;
+            }
+            any |= s[0] & ends;
+        }
+        #[cfg(test)]
+        {
+            self.work += words as u64;
+        }
+        any != 0
+    }
+
+    /// The patterns that completed at the last step.
+    fn completed(&self) -> impl Iterator<Item = usize> + '_ {
+        self.last.iter().enumerate().filter(|(_, &p)| self.state[p / 64][0] >> (p % 64) & 1 == 1).map(|(q, _)| q)
+    }
 }
 
 fn apply(bytes: &[u8], masked: &[bool]) -> Vec<u8> {
     bytes.iter().zip(masked).map(|(&b, &m)| if m { MASK } else { b }).collect()
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -308,10 +468,46 @@ mod tests {
         Scrubber::new(needles.iter().map(|n| Zeroizing::new(n.to_vec())).collect())
     }
 
-    /// `input` is, as a whole, some spelling of `pattern`.
-    fn spelled(input: &[u8], pattern: &[u8]) -> bool {
-        let Some((&b, rest)) = pattern.split_first() else { return input.is_empty() };
-        (0..SPELLINGS).filter_map(|n| spelling(b, n)).any(|s| {
+    /// One way of writing a byte: `bytes[..len]`, compared ASCII-case-insensitively if `fold`.
+    struct Spelling {
+        bytes: [u8; 6],
+        len: usize,
+        fold: bool,
+    }
+
+    impl Spelling {
+        fn accepts(&self, at: usize, b: u8) -> bool {
+            let s = self.bytes[at];
+            s == b || (self.fold && s.eq_ignore_ascii_case(&b))
+        }
+    }
+
+    /// How many spellings `spelling` can return per byte.
+    const SPELLINGS: usize = 5;
+
+    /// The `n`th spelling of byte `b`, if it has one: plain, `%XX`, `\u00XX`, a short JSON
+    /// escape, `+` for a space. What `Engine` matches, written out one spelling at a time.
+    fn spelling(b: u8, n: usize) -> Option<Spelling> {
+        const HEX: &[u8; 16] = b"0123456789ABCDEF";
+        let (hi, lo) = (HEX[usize::from(b >> 4)], HEX[usize::from(b & 0x0f)]);
+        let (bytes, len, fold) = match n {
+            0 => ([b, 0, 0, 0, 0, 0], 1, false),
+            1 => ([b'%', hi, lo, 0, 0, 0], 3, true),
+            2 => ([b'\\', b'u', b'0', b'0', hi, lo], 6, true),
+            3 => {
+                let &(_, short) = SHORT.iter().find(|&&(s, _)| s == b)?;
+                ([b'\\', short, 0, 0, 0, 0], 2, false)
+            }
+            4 if b == b' ' => ([b'+', 0, 0, 0, 0, 0], 1, false),
+            _ => return None,
+        };
+        Some(Spelling { bytes, len, fold })
+    }
+
+    /// `input` is, as a whole, some spelling of `pattern`, one member of each class.
+    fn spelled(input: &[u8], pattern: &[Class]) -> bool {
+        let Some((class, rest)) = pattern.split_first() else { return input.is_empty() };
+        class.members().flat_map(|b| (0..SPELLINGS).filter_map(move |n| spelling(b, n))).any(|s| {
             input.len() >= s.len && (0..s.len).all(|k| s.accepts(k, input[k])) && spelled(&input[s.len..], rest)
         })
     }
@@ -459,13 +655,41 @@ mod tests {
     }
 
     #[test]
+    fn scan_work_never_depends_on_the_secret() {
+        // A timing oracle: scanning an echo that matches more of the secret must not take
+        // longer. Same echo, secrets it matches all but the last byte of, or not at all; and
+        // echoes of the same length, matching the secret's start or full of escape starts.
+        let secret: &[u8] = b"sk-live-9Qz7wPb3nX2mK8vR4tY6";
+        let work = |secret: &[u8], echo: &[u8]| {
+            let rendered = [b"Bearer ".as_slice(), secret].concat();
+            let mut s = scrubber(&[secret, &rendered]);
+            let body: Vec<u8> = echo.iter().copied().cycle().take(64 << 10).collect();
+            let out = run(&mut s, &body.chunks(4096).collect::<Vec<_>>());
+            assert!(!out.contains(&MASK));
+            s.work()
+        };
+        let echo = [&secret[..secret.len() - 1], b"# "].concat();
+        let unrelated = [b"X".as_slice(), &secret[1..]].concat();
+        assert_eq!(work(secret, &echo), work(&unrelated, &echo));
+        let base = work(secret, &[b'#'; 29]);
+        for echo in [
+            echo.as_slice(),
+            b"sk-live-9Qz7wPb3nX2mK8vR4tY# ",
+            b"%%%%%%%%%%%%%%%%%%%%%%%%%%%%%",
+            b"\\u00\\u00\\u00\\u00\\u00\\u00\\u00\\u00\\",
+        ] {
+            assert_eq!(work(secret, echo), base, "{}", String::from_utf8_lossy(echo));
+        }
+    }
+
+    #[test]
     fn masks_json_escapes() {
         // PHP `json_encode`: `/` as `\/`.
         check(&[SECRET], r#"{"key":""#, r"sk-live\/4f+a&b<c>=Z9q?~", r#""}"#);
         // Go `encoding/json`: `&`, `<`, `>` as lowercase `\u00XX`.
-        check(&[SECRET], r#"{"key":""#, r"sk-live/4f+a&b<c>=Z9q?~", r#""}"#);
+        check(&[SECRET], r#"{"key":""#, r"sk-live/4f+a\u0026b\u003cc\u003e=Z9q?~", r#""}"#);
         // .NET `System.Text.Json`: `+` too, uppercase.
-        check(&[SECRET], r#"{"key":""#, r"sk-live/4f+a&b<c>=Z9q?~", r#""}"#);
+        check(&[SECRET], r#"{"key":""#, r"sk-live/4f\u002Ba\u0026b\u003Cc\u003E=Z9q?~", r#""}"#);
         // Every encoder: `"` and `\`, control characters.
         check(&[b"tok\"en\\x\ty"], r#"{"key":""#, r#"tok\"en\\x\ty"#, r#""}"#);
         check(&[b"tok\"en\\x\ty"], r#"{"key":""#, r#"tok"en\x\u0009y"#, r#""}"#);
@@ -486,17 +710,49 @@ mod tests {
 
     #[test]
     fn masks_base64_at_every_alignment() {
-        // base64(SECRET + "!"), base64("x" + SECRET + "!"), base64("xy" + SECRET + "!"): the
-        // edge characters that also carry `x`, `y` or `!` stay.
-        check(&[SECRET], "", "c2stbGl2ZS80ZithJmI8Yz49WjlxP3", "4h");
-        check(&[SECRET], "eH", "NrLWxpdmUvNGYrYSZiPGM+PVo5cT9+", "IQ==");
-        check(&[SECRET], "eHl", "zay1saXZlLzRmK2EmYjxjPj1aOXE/f", "iE=");
+        // base64(SECRET + "!"), base64("x" + SECRET + "!"), base64("xy" + SECRET + "!"): every
+        // character carrying a bit of SECRET is masked, the edge ones shared with `x`, `y` or
+        // `!` included; those carrying only neighbouring bits stay.
+        check(&[SECRET], "", "c2stbGl2ZS80ZithJmI8Yz49WjlxP34", "h");
+        check(&[SECRET], "e", "HNrLWxpdmUvNGYrYSZiPGM+PVo5cT9+", "IQ==");
+        check(&[SECRET], "eH", "lzay1saXZlLzRmK2EmYjxjPj1aOXE/fi", "E=");
         // URL-safe, unpadded.
-        check(&[SECRET], "eH", "NrLWxpdmUvNGYrYSZiPGM-PVo5cT9-", "");
-        check(&[SECRET], "eHl", "zay1saXZlLzRmK2EmYjxjPj1aOXE_f", "g");
+        check(&[SECRET], "e", "HNrLWxpdmUvNGYrYSZiPGM-PVo5cT9-", "IQ");
+        check(&[SECRET], "eH", "lzay1saXZlLzRmK2EmYjxjPj1aOXE_fg", "");
         // `Basic base64("user:" + SECRET)`, and the same inside PHP JSON.
-        check(&[SECRET], "Authorization: Basic dXNlcjp", "zay1saXZlLzRmK2EmYjxjPj1aOXE/f", "g==");
-        check(&[SECRET], r#"{"auth":"Basic dXNlcjp"#, r"zay1saXZlLzRmK2EmYjxjPj1aOXE\/f", r#"g=="}"#);
+        check(&[SECRET], "Authorization: Basic dXNlcj", "pzay1saXZlLzRmK2EmYjxjPj1aOXE/fg", "==");
+        check(&[SECRET], r#"{"auth":"Basic dXNlcj"#, r"pzay1saXZlLzRmK2EmYjxjPj1aOXE\/fg", r#"=="}"#);
+    }
+
+    /// Standard base64 with padding.
+    fn base64(data: &[u8]) -> Vec<u8> {
+        const STD: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut out = Vec::new();
+        for group in data.chunks(3) {
+            let b = [group[0], *group.get(1).unwrap_or(&0), *group.get(2).unwrap_or(&0)];
+            let n = u32::from(b[0]) << 16 | u32::from(b[1]) << 8 | u32::from(b[2]);
+            for k in 0..4 {
+                out.push(if k <= group.len() { STD[(n >> (18 - 6 * k) & 63) as usize] } else { b'=' });
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn base64_leaves_no_bit_of_the_secret_visible() {
+        // Whatever the neighbouring bytes, the characters that carry any of the secret's bits
+        // are masked: an echo of an encoded secret shows none of it, not its first or last bits.
+        for before in [&b""[..], b"\x00", b"\xff\xff", b"u:", b"user:"] {
+            for after in [&b""[..], b"\x00", b"\xff", b"!?"] {
+                let encoded = base64(&[before, SECRET, after].concat());
+                let first = before.len() * 8 / 6;
+                let last = ((before.len() + SECRET.len()) * 8 - 1) / 6;
+                let out = run(&mut scrubber(&[SECRET]), &[&encoded]);
+                assert!(out[first..=last].iter().all(|&b| b == MASK), "{}", String::from_utf8_lossy(&out));
+                assert_eq!(out[..first], encoded[..first]);
+                assert_eq!(out[last + 1..], encoded[last + 1..]);
+            }
+        }
     }
 
     #[test]
@@ -522,8 +778,11 @@ mod tests {
         let mut s = scrubber(&[b"abc"]);
         assert_eq!(run(&mut s, &[b"YWJj %61bc"]), b"YWJj *****");
         assert_eq!(scrubber(&[b"abc"]).patterns.len(), 1);
-        // The secret and three base64 cores, two of them also URL-safe: the third has no `+` or `/`.
-        assert_eq!(scrubber(&[SECRET]).patterns.len(), 6);
+        // The secret and its base64 forms at three alignments, each taking either alphabet.
+        assert_eq!(scrubber(&[SECRET]).patterns.len(), 4);
+        // A needle holding another one with base64 forms gets none of its own.
+        let rendered = [b"Bearer ".as_slice(), SECRET].concat();
+        assert_eq!(scrubber(&[SECRET, &rendered]).patterns.len(), 5);
     }
 
     fn needle() -> impl Strategy<Value = Vec<u8>> {

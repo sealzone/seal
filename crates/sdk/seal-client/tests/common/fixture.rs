@@ -99,6 +99,31 @@ enum Attest {
     ForeignGuardian,
 }
 
+/// How the fake enclave answers an attestation challenge (`GET /v1/attestation?nonce=`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Challenge {
+    Honest,
+    /// The periodic attestation, as an enclave older than the challenge does.
+    Unsupported,
+    /// The first answer it gave, again (another nonce, another connection).
+    Replay,
+    /// Signs another nonce than the one asked.
+    WrongNonce,
+    /// Signs the exporter of another connection.
+    WrongExporter,
+    /// Signs the challenge under another label.
+    WrongSignatureLabel,
+    /// Evidence over the key binding under the periodic attestation's label.
+    WrongEvidenceLabel,
+    /// The periodic attestation's evidence, which does not vouch for the challenge key.
+    PeriodicEvidence,
+    /// A sound answer for the keys of another root of the tenant, which the guardian certified
+    /// too, not the ones the TLS server presents.
+    OtherBinding,
+    /// Key evidence from 200 s ago.
+    Stale,
+}
+
 /// What the fake enclave saw.
 #[derive(Default)]
 struct Seen {
@@ -108,6 +133,8 @@ struct Seen {
     ends: Vec<String>,
     signals: Vec<(String, Severity)>,
     connects: Vec<(String, [u8; 32])>,
+    /// Attestation challenges, with the exporter of the connection each came on.
+    challenges: Vec<[u8; 32]>,
     /// Tunnel connections whose TLS handshake completed.
     tunnel_handshakes: usize,
     tunnel_extends: Vec<String>,
@@ -125,6 +152,10 @@ struct Enclave {
     master: PlatformMasterKey,
     release: ReleaseEvidence,
     attest: Mutex<Attest>,
+    challenge: Mutex<Challenge>,
+    challenge_key: SigningKey,
+    /// The first challenged answer, for `Challenge::Replay`.
+    answered: Mutex<Option<serde_json::Value>>,
     seen: Mutex<Seen>,
     /// Session tokens' lifetime from start.
     session_secs: Mutex<u64>,
@@ -207,6 +238,9 @@ impl Fixture {
             master,
             release,
             attest: Mutex::new(Attest::Honest),
+            challenge: Mutex::new(Challenge::Honest),
+            challenge_key: SigningKey::from_seed(&[77; 32]),
+            answered: Mutex::new(None),
             seen: Mutex::default(),
             session_secs: Mutex::new(600),
             extend_error: Mutex::new(None),
@@ -243,6 +277,10 @@ impl Fixture {
 
     fn attest(&self, mode: Attest) {
         *self.enclave.attest.lock().unwrap() = mode;
+    }
+
+    fn challenge(&self, mode: Challenge) {
+        *self.enclave.challenge.lock().unwrap() = mode;
     }
 
     fn seen<R>(&self, f: impl FnOnce(&Seen) -> R) -> R {
@@ -300,6 +338,62 @@ impl Enclave {
             json.as_object_mut().unwrap().remove("certificate");
         }
         json
+    }
+
+    /// `GET /v1/attestation?nonce=` on a connection whose exporter is `exporter`, as
+    /// `Challenge` says.
+    fn challenged(&self, nonce: [u8; 32], exporter: Option<[u8; 32]>) -> serde_json::Value {
+        let mode = *self.challenge.lock().unwrap();
+        self.seen.lock().unwrap().challenges.push(exporter.unwrap_or_default());
+        match mode {
+            Challenge::Unsupported => return self.attestation(),
+            Challenge::Replay => {
+                if let Some(first) = self.answered.lock().unwrap().clone() {
+                    return first;
+                }
+            }
+            _ => {}
+        }
+        let other_root;
+        let keys = if mode == Challenge::OtherBinding {
+            let released = self.master.release_service(&acme(), &TenantRootId([7; 32]), ServiceKeyVersion(1));
+            other_root = ServiceKeys::from_released(PlatformId::Sim, &released).unwrap();
+            &other_root
+        } else {
+            &self.keys
+        };
+        let binding = AttestationBinding {
+            attested_at: if mode == Challenge::Stale { now() - 200 } else { now() },
+            service_key_version: ServiceKeyVersion(1),
+            tls_spki_sha256: keys.tls.spki_sha256(),
+            ingest_public_key: keys.ingest.public_key(),
+            telemetry_public_keys: keys.telemetry_public_keys.clone(),
+        };
+        let key_binding =
+            AttestationKeyBinding { binding: binding.clone(), challenge_key: self.challenge_key.public_key() };
+        let report_data = match mode {
+            Challenge::WrongEvidenceLabel => labeled_digest(ATTESTATION_BINDING_LABEL, &key_binding),
+            Challenge::PeriodicEvidence => labeled_digest(ATTESTATION_BINDING_LABEL, &binding),
+            _ => labeled_digest(ATTESTATION_KEY_LABEL, &key_binding),
+        };
+        let document = seal_attest::sim::Document { measurement: MEASUREMENT, report_data, tcb: Default::default() };
+        let challenge = AttestationChallenge {
+            nonce: if mode == Challenge::WrongNonce { [0; 32] } else { nonce },
+            tls_exporter: if mode == Challenge::WrongExporter { [0; 32] } else { exporter.unwrap_or_default() },
+        };
+        let label =
+            if mode == Challenge::WrongSignatureLabel { ATTESTATION_KEY_LABEL } else { ATTESTATION_CHALLENGE_LABEL };
+        let answer = serde_json::to_value(ChallengedAttestation {
+            evidence: seal_proto::Evidence::Sim { document: seal_attest::sim::sign(&document) },
+            binding,
+            challenge_key: self.challenge_key.public_key(),
+            release: self.release.clone(),
+            certificate: keys.certificate.clone(),
+            signature: self.challenge_key.sign(label, &challenge),
+        })
+        .unwrap();
+        self.answered.lock().unwrap().get_or_insert(answer.clone());
+        answer
     }
 
     /// The enclave's side of `RequestAuthenticator` for app keys.
@@ -438,6 +532,8 @@ async fn serve(enclave: Arc<Enclave>, listener: TcpListener, tls: Arc<rustls::Se
             let Ok(start) = acceptor.await else { return };
             let is_tunnel = start.client_hello().alpn().is_some_and(|mut a| a.any(|p| p == ALPN));
             let Ok(tls) = start.into_stream(tls).await else { return };
+            let exporter = (tls.get_ref().1.protocol_version() == Some(rustls::ProtocolVersion::TLSv1_3))
+                .then(|| tls.get_ref().1.export_keying_material([0u8; 32], ATTESTATION_EXPORTER_LABEL, None).unwrap());
             if is_tunnel {
                 enclave.seen.lock().unwrap().tunnel_handshakes += 1;
                 return tunnel(enclave, tls).await;
@@ -446,9 +542,18 @@ async fn serve(enclave: Arc<Enclave>, listener: TcpListener, tls: Arc<rustls::Se
                 let enclave = enclave.clone();
                 async move {
                     let path = req.uri().path().to_string();
+                    let nonce = req
+                        .uri()
+                        .query()
+                        .and_then(|q| q.strip_prefix("nonce="))
+                        .map(|n| <[u8; 32]>::try_from(seal_proto::codec::from_b64url(n).unwrap()).unwrap());
                     let body = req.into_body().collect().await.unwrap().to_bytes();
                     let (status, body) = if path == "/v1/attestation" {
-                        (200, serde_json::to_vec(&enclave.attestation()).unwrap())
+                        let answer = match nonce {
+                            Some(nonce) => enclave.challenged(nonce, exporter),
+                            None => enclave.attestation(),
+                        };
+                        (200, serde_json::to_vec(&answer).unwrap())
                     } else {
                         match enclave.route(&path, &body) {
                             Ok(b) => (200, b),

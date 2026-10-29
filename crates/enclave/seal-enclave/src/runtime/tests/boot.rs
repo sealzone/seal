@@ -34,6 +34,34 @@ async fn boots_in_order_and_attests_its_certified_keys() {
     assert_eq!(attestation.binding.tls_spki_sha256, keys.tls.spki_sha256());
 }
 
+#[tokio::test]
+async fn answers_challenges_with_its_attested_challenge_key() {
+    use seal_proto::api::ChallengedAttestation;
+
+    let h = Boot::new().start().await.map_err(|(e, _)| e).unwrap();
+    let trust = h.world.trust();
+    let root_id = h.world.root_id;
+    let verify = |answer: &ChallengedAttestation, nonce: &[u8; 32], exporter: &[u8; 32]| {
+        seal_verify::attestation::verify_challenged(answer, nonce, exporter, &trust, &acme(), Some(&root_id), wall())
+    };
+    let (nonce, exporter) = ([1; 32], [2; 32]);
+    let answer = h.service.challenged_attestation(nonce, exporter).await.unwrap();
+    let verified = verify(&answer, &nonce, &exporter).unwrap();
+    let periodic = h.attestation().await;
+    assert_eq!(verified.binding, periodic.binding, "the keys the periodic attestation binds");
+    assert_eq!(verified.measurement, MEASUREMENT);
+
+    // It signs only the challenge it was given: another nonce or connection fails.
+    assert!(verify(&answer, &[3; 32], &exporter).is_err());
+    assert!(verify(&answer, &nonce, &[3; 32]).is_err());
+    let other = h.service.challenged_attestation([4; 32], exporter).await.unwrap();
+    assert_eq!(other.challenge_key, answer.challenge_key, "one key per replica");
+    assert!(verify(&other, &nonce, &exporter).is_err());
+    // The periodic evidence does not vouch for the challenge key.
+    let replayed = ChallengedAttestation { evidence: periodic.evidence.clone(), ..answer.clone() };
+    assert!(verify(&replayed, &nonce, &exporter).is_err());
+}
+
 async fn refused(boot: Boot) -> (ErrorCode, Vec<&'static str>) {
     match boot.start().await {
         Ok(_) => panic!("boot succeeded"),

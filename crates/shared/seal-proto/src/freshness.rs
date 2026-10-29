@@ -11,8 +11,10 @@ use crate::{codec, UnixTime};
 /// endpoint costs nothing to call.
 pub const ATTESTATION_REFRESH_SECS: u64 = 30;
 /// Clients accept an attestation whose `attested_at` is within this of their own clock, in
-/// either direction. Replaying a recent one gains nothing: the TLS handshake still needs the
-/// attested key.
+/// either direction. A replayed recent one convinces only a client that also gets the TLS
+/// handshake with the attested key, which every replica of those keys shares; so before
+/// anything secret goes out, the SDK also asks the connection it goes on for a
+/// `crate::api::ChallengedAttestation`, which a replay cannot answer.
 pub const ATTESTATION_MAX_AGE_SECS: u64 = 120;
 
 /// Guardian-issued and stateless, so any guardian instance verifies it and no one can exhaust

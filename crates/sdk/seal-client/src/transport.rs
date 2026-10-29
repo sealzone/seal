@@ -1,5 +1,6 @@
-//! Byte transport: TLS to the enclave under a `verify` config, one HTTP/1.1 exchange per
-//! connection, and plain HTTP for the link-local metadata endpoints identity providers call.
+//! Byte transport: TLS to the enclave under a `verify` config, HTTP/1.1 over it (one exchange,
+//! or a challenge and then the request on one connection), and plain HTTP for the link-local
+//! metadata endpoints identity providers call.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -94,32 +95,63 @@ pub(crate) async fn exchange<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
-    let mut req = hyper::Request::builder().method(method).uri(path).header(hyper::header::HOST, authority);
-    for (name, value) in headers {
-        req = req.header(*name, *value);
+    Http1::handshake(stream).await?.send(method, authority, path, headers, body).await
+}
+
+/// An HTTP/1.1 connection that takes requests in turn (keep-alive), so a challenge and the
+/// request it vouches for travel on one TLS connection.
+pub(crate) struct Http1 {
+    sender: hyper::client::conn::http1::SendRequest<Full<Bytes>>,
+    _conn: AbortOnDrop,
+}
+
+impl Http1 {
+    pub(crate) async fn handshake<S>(stream: S) -> Result<Self, String>
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    {
+        let (sender, conn) =
+            hyper::client::conn::http1::handshake(TokioIo::new(stream)).await.map_err(|e| e.to_string())?;
+        let conn = AbortOnDrop(tokio::spawn(async move {
+            if let Err(e) = conn.await {
+                tracing::debug!(error = %e, "connection ended");
+            }
+        }));
+        Ok(Self { sender, _conn: conn })
     }
-    if body.is_some() && !headers.iter().any(|(n, _)| n.eq_ignore_ascii_case("content-type")) {
-        req = req.header(hyper::header::CONTENT_TYPE, "application/json");
+
+    /// One request, its whole response read. Header values are never echoed into errors: they
+    /// carry bearer credentials.
+    pub(crate) async fn send(
+        &mut self,
+        method: hyper::Method,
+        authority: &str,
+        path: &str,
+        headers: &[(&str, &str)],
+        body: Option<Vec<u8>>,
+    ) -> Result<(u16, Vec<u8>), String> {
+        let mut req = hyper::Request::builder().method(method).uri(path).header(hyper::header::HOST, authority);
+        for (name, value) in headers {
+            req = req.header(*name, *value);
+        }
+        if body.is_some() && !headers.iter().any(|(n, _)| n.eq_ignore_ascii_case("content-type")) {
+            req = req.header(hyper::header::CONTENT_TYPE, "application/json");
+        }
+        let req = req
+            .body(Full::new(Bytes::from(body.unwrap_or_default())))
+            .map_err(|_| "invalid request header".to_string())?;
+        self.sender.ready().await.map_err(|e| e.to_string())?;
+        let resp = self.sender.send_request(req).await.map_err(|e| e.to_string())?;
+        let status = resp.status().as_u16();
+        let body = Limited::new(resp.into_body(), MAX_BODY).collect().await.map_err(|e| {
+            if e.is::<http_body_util::LengthLimitError>() {
+                "response body too large".to_string()
+            } else {
+                e.to_string()
+            }
+        })?;
+        Ok((status, body.to_bytes().to_vec()))
     }
-    let req =
-        req.body(Full::new(Bytes::from(body.unwrap_or_default()))).map_err(|_| "invalid request header".to_string())?;
-    let (mut sender, conn) =
-        hyper::client::conn::http1::handshake(TokioIo::new(stream)).await.map_err(|e| e.to_string())?;
-    let _conn = AbortOnDrop(tokio::spawn(async move {
-        if let Err(e) = conn.await {
-            tracing::debug!(error = %e, "connection ended");
-        }
-    }));
-    let resp = sender.send_request(req).await.map_err(|e| e.to_string())?;
-    let status = resp.status().as_u16();
-    let body = Limited::new(resp.into_body(), MAX_BODY).collect().await.map_err(|e| {
-        if e.is::<http_body_util::LengthLimitError>() {
-            "response body too large".to_string()
-        } else {
-            e.to_string()
-        }
-    })?;
-    Ok((status, body.to_bytes().to_vec()))
 }
 
 /// A GET over plain HTTP, for metadata endpoints that only speak it (Azure IMDS, the GCP

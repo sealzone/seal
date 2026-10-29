@@ -8,6 +8,10 @@
 //! - Errors: `ErrorCode::http_status()` with an `ApiError` body whose message is fixed per code.
 //!   `ServiceError::detail` is logged at debug level and never sent. Unknown paths and methods
 //!   are `BadRequest`.
+//! - `GET /v1/attestation?nonce=<b64url of 32 bytes>` (the only parameter; anything else is
+//!   `BadRequest`) answers the challenge for the connection it arrives on, whose TLS 1.3
+//!   exporter the listener records (`Source`); a TLS 1.2 connection is `BadRequest`. The
+//!   answer is one signature over the latest periodic evidence, so it needs no rate limit.
 //! - `POST /v1/tickets` and `POST /v1/blobs`, which anyone may call, are rate limited per
 //!   connection source (the peer's IPv4 address, or its IPv6 /64): a bucket of `TICKET_BURST`
 //!   tickets refilled at `TICKETS_PER_SEC`, and one of `SEAL_BURST` seals refilled at
@@ -41,15 +45,15 @@ use std::time::Duration;
 use async_trait::async_trait;
 use axum::body::Bytes;
 use axum::extract::connect_info::{ConnectInfo, Connected};
-use axum::extract::{DefaultBodyLimit, FromRequest, Request, State};
+use axum::extract::{DefaultBodyLimit, FromRequest, RawQuery, Request, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::serve::{IncomingStream, Listener};
 use axum::{Extension, Json, Router};
 use seal_proto::api::{
-    ApiError, AttestationResponse, EndRequest, ExtendRequest, ExtendResponse, SealRequest, SealResponse,
-    SessionRequest, SessionResponse, SignalRequest,
+    ApiError, AttestationResponse, ChallengedAttestation, EndRequest, ExtendRequest, ExtendResponse, SealRequest,
+    SealResponse, SessionRequest, SessionResponse, SignalRequest,
 };
 use seal_proto::freshness::ProofTicket;
 use seal_proto::tunnel::ALPN;
@@ -96,6 +100,11 @@ const API_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
 #[async_trait]
 trait Api: Send + Sync + 'static {
     async fn attestation(&self) -> Result<AttestationResponse, ServiceError>;
+    async fn challenged_attestation(
+        &self,
+        nonce: [u8; 32],
+        tls_exporter: [u8; 32],
+    ) -> Result<ChallengedAttestation, ServiceError>;
     async fn ticket(&self) -> Result<ProofTicket, ServiceError>;
     async fn seal(&self, request: SealRequest) -> Result<SealResponse, ServiceError>;
     // `source`: the connection's peer address, for the apps' network rules.
@@ -113,6 +122,13 @@ trait Api: Send + Sync + 'static {
 impl Api for SealService {
     async fn attestation(&self) -> Result<AttestationResponse, ServiceError> {
         SealService::attestation(self).await
+    }
+    async fn challenged_attestation(
+        &self,
+        nonce: [u8; 32],
+        tls_exporter: [u8; 32],
+    ) -> Result<ChallengedAttestation, ServiceError> {
+        SealService::challenged_attestation(self, nonce, tls_exporter).await
     }
     async fn ticket(&self) -> Result<ProofTicket, ServiceError> {
         SealService::ticket(self).await
@@ -271,8 +287,24 @@ async fn unknown() -> Failure {
     bad_request("no such route".into())
 }
 
-async fn attestation<S: Api>(State(state): State<AppState<S>>) -> Result<Json<AttestationResponse>, Failure> {
-    Ok(Json(state.service.attestation().await?))
+/// The periodic attestation, or with `nonce=` the answer to that challenge for this connection.
+async fn attestation<S: Api>(
+    State(state): State<AppState<S>>,
+    source: Option<Extension<ConnectInfo<Source>>>,
+    RawQuery(query): RawQuery,
+) -> Result<Response, Failure> {
+    let Some(query) = query else {
+        return Ok(Json(state.service.attestation().await?).into_response());
+    };
+    let nonce = query
+        .strip_prefix("nonce=")
+        .and_then(|value| seal_proto::codec::from_b64url(value).ok())
+        .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok())
+        .ok_or_else(|| bad_request("attestation query: not nonce=<32 bytes, base64url>".into()))?;
+    let tls_exporter = source
+        .and_then(|Extension(ConnectInfo(Source(_, exporter)))| exporter)
+        .ok_or_else(|| bad_request("an attestation challenge needs a TLS 1.3 connection".into()))?;
+    Ok(Json(state.service.challenged_attestation(nonce, tls_exporter).await?).into_response())
 }
 
 async fn ticket<S: Api>(
@@ -294,7 +326,7 @@ async fn seal<S: Api>(
 
 /// `BudgetExceeded` once the connection's source is over `limiter`'s rate.
 fn limited(limiter: &RateLimiter, what: &str, source: Option<Extension<ConnectInfo<Source>>>) -> Result<(), Failure> {
-    let source = source.map(|Extension(ConnectInfo(Source(addr)))| bucket_key(addr.ip()));
+    let source = source.map(|Extension(ConnectInfo(Source(addr, _)))| bucket_key(addr.ip()));
     match limiter.allow(source, Instant::now()) {
         true => Ok(()),
         false => Err(Failure(crate::fail(ErrorCode::BudgetExceeded, format!("{what} rate limit for {source:?}")))),
@@ -319,7 +351,7 @@ async fn extend<S: Api>(
 
 /// The connection's peer address and port, if the listener recorded one.
 fn peer(source: Option<Extension<ConnectInfo<Source>>>) -> Option<SocketAddr> {
-    source.map(|Extension(ConnectInfo(Source(addr)))| addr)
+    source.map(|Extension(ConnectInfo(Source(addr, _)))| addr)
 }
 
 async fn end<S: Api>(
@@ -402,13 +434,18 @@ impl RateLimiter {
     }
 }
 
-/// The peer of an API connection, as `ConnectInfo`.
+/// The peer of an API connection and, for TLS 1.3, the connection's exporter for attestation
+/// challenges (`seal_proto::api::ATTESTATION_EXPORTER_LABEL`), as `ConnectInfo`.
 #[derive(Clone, Copy, Debug)]
-struct Source(SocketAddr);
+struct Source(SocketAddr, Option<[u8; 32]>);
 
 impl Connected<IncomingStream<'_, TlsListener>> for Source {
     fn connect_info(stream: IncomingStream<'_, TlsListener>) -> Self {
-        Source(*stream.remote_addr())
+        let tls = stream.io().tls.get_ref().1;
+        let exporter = (tls.protocol_version() == Some(rustls::ProtocolVersion::TLSv1_3))
+            .then(|| tls.export_keying_material([0u8; 32], seal_proto::api::ATTESTATION_EXPORTER_LABEL, None).ok())
+            .flatten();
+        Source(*stream.remote_addr(), exporter)
     }
 }
 
@@ -696,6 +733,8 @@ pub(crate) mod tests {
     #[derive(Default)]
     struct Fake {
         calls: Mutex<Vec<String>>,
+        /// The TLS exporter the last challenge came with.
+        exporter: Mutex<Option<[u8; 32]>>,
     }
 
     impl Fake {
@@ -713,6 +752,15 @@ pub(crate) mod tests {
         async fn attestation(&self) -> Result<AttestationResponse, ServiceError> {
             self.called("attestation");
             Err(fail(ErrorCode::Internal))
+        }
+        async fn challenged_attestation(
+            &self,
+            nonce: [u8; 32],
+            tls_exporter: [u8; 32],
+        ) -> Result<ChallengedAttestation, ServiceError> {
+            self.called(format!("challenge {}", nonce[0]));
+            *self.exporter.lock().unwrap() = Some(tls_exporter);
+            Err(fail(ErrorCode::Unavailable))
         }
         async fn ticket(&self) -> Result<ProofTicket, ServiceError> {
             self.called("ticket");
@@ -968,6 +1016,62 @@ pub(crate) mod tests {
         let closed = tokio::time::timeout(Duration::from_secs(5), tls.read_to_end(&mut rest)).await;
         assert!(closed.is_ok(), "closed when idle");
         assert!(start.elapsed() >= idle - Duration::from_millis(100), "{:?}", start.elapsed());
+    }
+
+    #[tokio::test]
+    async fn a_challenge_reaches_the_service_with_its_connections_tls_exporter() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let fake = Arc::new(Fake::default());
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let tunnels = Arc::new(FakeTunnels { admit: false.into() });
+        let router = routes_with(fake.clone(), Limits::default());
+        let config = tls_config(&tls_key(), &[HOST.to_string()]);
+        tokio::spawn(serve_router(router, listener, config, tunnels, PortLimits::default(), std::future::pending()));
+        // `GET path` on a new connection with `versions`: the response and the connection's exporter.
+        let get = |path: String, versions: &'static [&'static rustls::SupportedProtocolVersion]| async move {
+            let mut roots = rustls::RootCertStore::empty();
+            let ca = tls_key().ca_certificate_der(&[HOST.to_string()]).unwrap();
+            roots.add(rustls::pki_types::CertificateDer::from(ca)).unwrap();
+            let config =
+                rustls::ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+                    .with_protocol_versions(versions)
+                    .unwrap()
+                    .with_root_certificates(roots)
+                    .with_no_client_auth();
+            let tcp = TcpStream::connect(addr).await.unwrap();
+            let name = rustls::pki_types::ServerName::try_from(HOST).unwrap();
+            let mut tls = tokio_rustls::TlsConnector::from(Arc::new(config)).connect(name, tcp).await.unwrap();
+            let label = seal_proto::api::ATTESTATION_EXPORTER_LABEL;
+            let exporter = tls.get_ref().1.export_keying_material([0u8; 32], label, None).unwrap();
+            let request = format!("GET {path} HTTP/1.1\r\nhost: {HOST}\r\nconnection: close\r\n\r\n");
+            tls.write_all(request.as_bytes()).await.unwrap();
+            let mut got = Vec::new();
+            tls.read_to_end(&mut got).await.unwrap();
+            (String::from_utf8_lossy(&got).into_owned(), exporter)
+        };
+        static TLS13: [&rustls::SupportedProtocolVersion; 1] = [&rustls::version::TLS13];
+        static TLS12: [&rustls::SupportedProtocolVersion; 1] = [&rustls::version::TLS12];
+        let (tls13, tls12) = (&TLS13[..], &TLS12[..]);
+        let status = |code: ErrorCode| format!("HTTP/1.1 {}", code.http_status());
+
+        let nonce = seal_proto::codec::b64url(&[7; 32]);
+        let (response, exporter) = get(format!("/v1/attestation?nonce={nonce}"), tls13).await;
+        assert!(response.starts_with(&status(ErrorCode::Unavailable)), "{response}");
+        assert_eq!(*fake.exporter.lock().unwrap(), Some(exporter), "the exporter of the connection that asked");
+        let (_, other) = get(format!("/v1/attestation?nonce={nonce}"), tls13).await;
+        assert_ne!(other, exporter, "every connection has its own");
+        assert_eq!(*fake.exporter.lock().unwrap(), Some(other));
+
+        for query in ["nonce=AAAA", "nonce=", "other=1", &format!("nonce={nonce}&x=1"), &format!("x=1&nonce={nonce}")] {
+            let (response, _) = get(format!("/v1/attestation?{query}"), tls13).await;
+            assert!(response.starts_with(&status(ErrorCode::BadRequest)), "{query}: {response}");
+        }
+        // TLS 1.2 has no exporter it may use.
+        let (response, _) = get(format!("/v1/attestation?nonce={nonce}"), tls12).await;
+        assert!(response.starts_with(&status(ErrorCode::BadRequest)), "{response}");
+        assert_eq!(*fake.calls.lock().unwrap(), ["challenge 7", "challenge 7"]);
     }
 
     /// Serves `router` over HTTPS (`serve_router`) for `HOST` on a local port; an HTTPS client

@@ -231,6 +231,67 @@ async fn seals_to_the_attested_ingest_key() {
     assert_eq!(f.seen(|s| s.sealed.len()), 1);
 }
 
+/// Every call that carries a secret, a proof or a token first challenges the connection it goes
+/// on; any answer but an honest one for this nonce, this connection and the verified keys is a
+/// verification error, and nothing is sent.
+#[tokio::test]
+async fn challenges_the_connection_before_sending_anything_secret() {
+    let f = Fixture::new().await;
+    let client = f.client().await;
+    let blob = f.blob("https://api.example.com/v1");
+    client.seal(b"sk-live-0123456789", "https://api.example.com/v1", ["checkout"]).await.unwrap();
+    let mut session = client.session(&blob).http().await.unwrap();
+    session.extend().await.unwrap();
+    client.signal("edr-alert", Severity::High).await.unwrap();
+    let challenges = f.seen(|s| s.challenges.clone());
+    assert_eq!(challenges.len(), 4, "seal, session, extend, signal; never the ticket");
+    assert!(challenges.iter().all(|e| *e != [0; 32]), "each on a TLS 1.3 connection");
+    for (i, e) in challenges.iter().enumerate() {
+        assert!(!challenges[..i].contains(e), "each on a connection of its own");
+    }
+
+    for mode in [
+        Challenge::Unsupported,
+        Challenge::Replay,
+        Challenge::WrongNonce,
+        Challenge::WrongExporter,
+        Challenge::WrongSignatureLabel,
+        Challenge::WrongEvidenceLabel,
+        Challenge::PeriodicEvidence,
+        Challenge::OtherBinding,
+        Challenge::Stale,
+    ] {
+        f.challenge(mode);
+        let err = client.seal(b"sk-live-0123456789", "https://api.example.com/v1", ["checkout"]).await.unwrap_err();
+        assert!(matches!(err, ClientError::Verification(_)), "{mode:?}: {err}");
+        assert_eq!(err.code(), ErrorCode::VerificationFailed);
+        let Err(err) = client.session(&blob).http().await else { panic!("{mode:?}: a session started") };
+        assert!(matches!(err, ClientError::Verification(_)), "{mode:?}: {err}");
+        let err = session.extend().await.unwrap_err();
+        assert!(matches!(err, ClientError::Verification(_)), "{mode:?}: {err}");
+    }
+    // A client without a root id accepts any root of the tenant, but not keys other than the
+    // ones it verified.
+    f.challenge(Challenge::OtherBinding);
+    let unpinned = Client::builder()
+        .endpoints([f.endpoint()])
+        .tenant(acme())
+        .trust(f.trust.clone())
+        .identity(Arc::new(AppKeyIdentity::from_seed(&APP_KEY_SEED)))
+        .connect()
+        .await
+        .unwrap();
+    let Err(err) = unpinned.session(&blob).http().await else { panic!("a session started") };
+    assert!(matches!(&err, ClientError::Verification(m) if m.contains("other keys")), "{err}");
+    assert_eq!(f.seen(|s| (s.sealed.len(), s.sessions.len(), s.extends.len())), (1, 1, 1), "nothing more was sent");
+
+    // The periodic attestation still verifies: connecting needs no challenge.
+    f.client().await;
+    f.challenge(Challenge::Honest);
+    client.seal(b"sk-live-0123456789", "https://api.example.com/v1", ["checkout"]).await.unwrap();
+    assert_eq!(f.seen(|s| s.sealed.len()), 2);
+}
+
 #[tokio::test]
 async fn signals_about_itself() {
     let f = Fixture::new().await;

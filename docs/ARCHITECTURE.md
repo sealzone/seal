@@ -248,7 +248,8 @@ with `restartPolicy: Never` its ACI container group then stops.
 `<tenant>.enclave.seal.zone` points at Seal's front door, a TCP front that reads only the TLS
 SNI. On a connection it starts the stopped replica, holds the connection until the replica
 serves, and splices it through after a PROXY protocol v2 header naming the client's address.
-TLS stays end to end, pinned to the attested key.
+TLS stays end to end, pinned to the attested key, so the replica answers the SDK's attestation
+challenge for that very connection (its TLS exporter) before anything secret is sent.
 
 The SDK knows nothing of hosting. A client that reaches no replica retries for up to
 `UNREACHABLE_WAIT_SECS` (120 s). What a hosted replica serves, and whether it idles, come only
@@ -386,7 +387,8 @@ and optional encryption; the CLI, the Rust, Python, Node and Go SDKs and the bro
 the Azure platform (customer enclaves, Seal's hosted replicas, Seal's guardian on Key Vault
 Premium), GCP Confidential Space and the sim platform; customer-deployed enclaves pinned to one
 tenant (`seal deploy azure`, `seal deploy upgrade`); blobs wrapped per platform (HPKE to
-certified wrap keys); periodic attestation; sessions with 10-minute tokens, extended every 5
+certified wrap keys); periodic attestation, and challenged attestation on every SDK connection
+that carries a secret, proof or token; sessions with 10-minute tokens, extended every 5
 minutes and ended server-side on close or on an integrity finding; upstream key pins in the
 sealed policy; per-tenant keys with guardian certificates; deployment identities; the integrity
 interfaces, with the artifact-hash check enforced (CONTRACT.md); self-hosted guardians on

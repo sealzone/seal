@@ -49,6 +49,7 @@ guardian freezes.
 | `HostedMode` | Marks the tenant's signed deployment entry for Seal's hosted replicas. With `HostedMode::Sessions`, those replicas seal and serve sessions like the tenant's own replicas, and exit when idle |
 | front door | The Seal-run TCP front that `<tenant>.enclave.seal.zone` resolves to. It reads only the TLS SNI, starts the tenant's stopped hosted replica, holds the connection until the replica serves, then writes a PROXY protocol v2 header naming the client's address and splices the connection through after it. TLS stays end to end. The SDK only retries unreachable endpoints for `UNREACHABLE_WAIT_SECS` |
 | periodic attestation | The enclave attests every `ATTESTATION_REFRESH_SECS` (30 s) and serves that attestation to every client. Clients accept it within `ATTESTATION_MAX_AGE_SECS` (120 s) |
+| challenged attestation | `GET /v1/attestation?nonce=`: a replica's answer, on the TLS connection that asked, signed by a challenge key its periodic evidence attests. The SDK requires one on the connection before it sends a secret, a proof or a token |
 | `ProofTicket`, `TicketKey` | A stateless, MAC'd challenge that an identity proof binds to, and the key that issues it |
 | `ConsumerTier`, `PlatformTier` | One assurance floor per attacker. `ConsumerTier` (Base < Hardened) is how much the *endpoint* proved. Base is identity, grants and the artifact rule. Hardened adds verified integrity evidence at every start and extend. `PlatformTier` is how well the *enclave* is protected |
 | `SpkiPin` | The SHA-256 of an upstream key that the sealed policy requires in the upstream's certificate chain |
@@ -185,6 +186,24 @@ with seal.session(blob) as s:                          # HttpSession or Database
   tenant's co-signature protect SDK traffic too, and an enclave that made up its own keys is
   refused. A root id (from `SEAL_TENANT=<tenant>@<root id>` or `ClientBuilder::root_id`)
   also makes the client refuse enclaves serving another chain for the tenant's name.
+- **Challenged attestation.** The periodic attestation proves which keys an approved release
+  holds, not that a connection ends in one. Every replica of a tenant and service key version
+  shares the service keys, so whoever copied them out of a build later revoked, or out of
+  hardware later below `min_tcb`, could present the TLS key and replay any replica's
+  attestation. So every call that carries a sealed secret, an identity proof or a session
+  token (seal, session start, extend, end, signal; not tickets) first sends `GET
+  /v1/attestation?nonce=<32 random bytes, base64url>` on the TLS connection it will use. The
+  answer (`ChallengedAttestation`) must verify as the periodic one does, for exactly the keys
+  the client verified, with evidence committing to the binding and the replica's challenge
+  key (`ATTESTATION_KEY_LABEL`) and that key's signature over the nonce and the connection's
+  TLS 1.3 exporter (`ATTESTATION_CHALLENGE_LABEL`, exporter label
+  `EXPORTER-seal-attestation-challenge-v1`). Only the two ends of a connection know its
+  exporter, so a relay holding the keys cannot pass on an honest replica's answer. Anything
+  else, an enclave that cannot answer included, is `VerificationFailed`, and the call is not
+  sent. Tunnels carry the session token without a challenge. The browser verifier
+  (`seal-verify-wasm`) seals through a relay, with no connection to the replica to
+  challenge, so its seals rest on the ingest key alone: that key is safe until
+  `min_service_key_version` passes it.
 - **`seal(secret, to, apps)`** builds the `SecretPolicy`, so every policy check applies. It
   HPKE-seals the secret and policy to the attested ingest key and returns the `seal1.…` text.
   It needs a root id: a client without one fails with `Invalid` (`BadRequest`) before
@@ -692,7 +711,8 @@ The enclave's internal ports and components are in the crate docs and
 - **Attestation.** `attestation()` keeps answering while the tenant state is stale, when
   everything else fails closed. It fails only once the latest periodic attestation is
   `ATTESTATION_MAX_AGE_SECS` old. The served release evidence carries a checkpoint within
-  `FRESH_CHECKPOINT_SECS`, and every verifier checks it.
+  `FRESH_CHECKPOINT_SECS`, and every verifier checks it. Challenges are answered under the
+  same rule, and only on TLS 1.3 connections (`BadRequest` otherwise).
 - **Compiled-in timing.** `STATE_RELOAD_SECS` (30), `TENANT_KEY_CACHE_SECS` (900),
   `TELEMETRY_FLUSH_SECS` (5), `TELEMETRY_BUFFER_ENTRIES` (10 000) and `HOSTED_IDLE_SECS`
   (900; sim builds take `hosted_idle_secs` in `SEAL_ENCLAVE_CONFIG`). Compile-time checks
@@ -765,10 +785,19 @@ Who may read and write a tenant's documents (the crate docs hold the full route 
 ## Binding and freshness
 
 - **Periodic attestation** (`GET /v1/attestation`). The binding carries `attested_at`, the
-  enclave's trusted time, instead of a client challenge. A replayed recent attestation gains
-  nothing, because the TLS handshake still needs the attested key. An old one is refused
-  after `ATTESTATION_MAX_AGE_SECS`. One hardware report or Confidential Space token per 30 s
-  serves every client.
+  enclave's trusted time, instead of a client challenge. An old one is refused after
+  `ATTESTATION_MAX_AGE_SECS`. A replayed recent one convinces only a client that also gets
+  the TLS handshake with the attested key, which a holder of copied service keys can do, so
+  the SDK sends nothing secret on its strength alone (challenged attestation, above).
+- **Challenged attestation** (`GET /v1/attestation?nonce=`). Each replica generates an
+  Ed25519 challenge key in its own memory at start; it is never released, stored or shared.
+  With each periodic attestation the replica also attests
+  `labeled_digest(ATTESTATION_KEY_LABEL, AttestationKeyBinding { binding, challenge_key })`,
+  so two hardware reports or Confidential Space tokens per 30 s serve every client. Each
+  challenge costs one signature and no report, so a flood of challenges cannot exhaust the
+  TEE or Google's per-project token quota, and the route has no rate limit of its own. The
+  signature binds the connection through its TLS 1.3 exporter. TLS 1.2 is refused, since
+  its exporter without the extended master secret can be made equal on two connections.
 - `GuardianChallenge` is stateless and MAC'd with the platform's challenge key, so any
   guardian instance verifies it and nobody can exhaust it. Reuse within its 60 s is
   harmless, because a replayed `KeyRequest` only gets keys sealed again to the original
@@ -904,7 +933,8 @@ Who may read and write a tenant's documents (the crate docs hold the full route 
   allows, including creating a credential of its own, and adapters cannot reliably stop it.
   Upstream least privilege is the control.
 - **Scrubbing.** Response scrubbing masks the secret plain, under one layer of JSON or URL
-  escaping, and in base64 (standard or URL-safe, any alignment, its stable core only). It
+  escaping, and in base64 (standard or URL-safe, any alignment, every character carrying
+  any of its bits, the edge ones shared with neighbouring bytes included). It
   does not catch any other transformation an upstream echoes: hex, a hash, a substring,
   double escaping. A secret inside an LZ4, ZSTD or gzip frame
   never appears whole, so adapters refuse response compression. HTTP asks for `identity`,
@@ -917,8 +947,12 @@ Who may read and write a tenant's documents (the crate docs hold the full route 
   end of a body, or, for HTTP, once the upstream has sent nothing for `QUIET_RELEASE`
   (100 ms). So echoing a guess cannot tell how much of the secret it matches. An echo of the
   secret itself that the upstream pauses in the middle of for that long goes out unmasked up
-  to the pause. The time the scrubber spends scanning still varies slightly with how much
-  of an echo resembles the secret, far below network jitter for one response.
+  to the pause. Scanning costs the same per byte whatever the bytes are and however much of
+  the secret they match: one bit-parallel automaton steps over every spelling state of
+  every pattern at each byte. That cost grows with the secret's length: about 8 ms per MiB
+  of response for a 28-byte HTTP key and 170 ms per MiB for a 1 KiB one, on one core.
+  The secret's length is not hidden: masking keeps it, and an upstream's header size limit
+  can reveal the injected header's.
 - **Postgres cancels** reach only the replica holding the connection. One sent to another
   replica does nothing. A tunnel sends its connections to the replica that last answered, so
   a cancel lands there unless that replica stopped answering in between.
