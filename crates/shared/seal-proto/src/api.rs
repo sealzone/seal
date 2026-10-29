@@ -3,7 +3,7 @@
 //! | Method | Path                | Request               | Response              | Authorized by |
 //! |--------|---------------------|-----------------------|-----------------------|---------------|
 //! | GET    | /v1/attestation     | (none)                | `AttestationResponse` | nobody (public) |
-//! | GET    | /v1/attestation?nonce=<b64url> | (none)     | `ChallengedAttestation` | nobody (public) |
+//! | GET    | /v1/attestation?nonce=`<b64url>` | (none)     | `ChallengedAttestation` | nobody (public) |
 //! | POST   | /v1/tickets         | (empty)               | `ProofTicket`         | nobody (public) |
 //! | POST   | /v1/blobs           | `SealRequest`         | `SealResponse`        | nobody (public) |
 //! | POST   | /v1/sessions        | `SessionRequest`      | `SessionResponse`     | identity proof |
