@@ -552,6 +552,22 @@ fn build() -> Vec<Vector> {
     );
 
     v.cbor(
+        "telemetry/entry-session-from",
+        &TelemetryEntry {
+            at: 1_900_000_505,
+            tenant: tenant(),
+            identity: Some(app_key_id()),
+            event: TelemetryEvent::Session {
+                session_id: [0x82; 16],
+                app: app(),
+                blob_id: BlobId([1; 8]),
+                tier: seal_proto::session::ConsumerTier::Base,
+                from: Some("203.0.113.7:51234".parse().unwrap()),
+            },
+        },
+    );
+
+    v.cbor(
         "telemetry/entry-refused-outside-networks",
         &TelemetryEntry {
             at: 1_900_000_504,

@@ -105,6 +105,15 @@ async fn seal_session_request_extend_end() {
 }
 
 #[tokio::test]
+async fn a_session_records_the_address_and_port_it_came_from() {
+    let h = Boot::new().start().await.map_err(|(e, _)| e).unwrap();
+    let blob = h.seal().await.unwrap().blob;
+    let from: std::net::SocketAddr = "203.0.113.7:51234".parse().unwrap();
+    h.start_from(CONSUMER, &blob, None, Some(from)).await.unwrap();
+    assert!(matches!(h.events().last().unwrap(), TelemetryEvent::Session { from: Some(f), .. } if *f == from));
+}
+
+#[tokio::test]
 async fn refuses_callers_without_grants() {
     let h = Boot::new().start().await.map_err(|(e, _)| e).unwrap();
     // Anyone may seal; a stranger cannot start sessions.

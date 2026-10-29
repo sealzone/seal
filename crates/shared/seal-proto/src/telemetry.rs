@@ -121,13 +121,17 @@ pub enum TelemetryEvent {
     /// Someone sealed a blob (sealing is open, so no identity). `destination` is the policy's
     /// `to` (never a password).
     Seal { blob_id: BlobId, destination: String, apps: BTreeSet<AppName> },
-    /// A consumer started a session.
+    /// A consumer started a session. `from` is the address and port it connected from, as the
+    /// enclave saw it (on a Seal-hosted replica, from the front door's PROXY header); absent when
+    /// unknown, and in entries written before it was recorded, which encode as they did.
     Session {
         #[serde(with = "codec::array_b64")]
         session_id: [u8; 16],
         app: AppName,
         blob_id: BlobId,
         tier: ConsumerTier,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        from: Option<std::net::SocketAddr>,
     },
     /// The session was extended with a fresh identity proof.
     Extend {

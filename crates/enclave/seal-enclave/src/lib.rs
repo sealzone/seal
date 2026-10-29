@@ -356,13 +356,13 @@ impl SealService {
     /// takes a `SessionPermit` and issues the token from it (the runtime's `issue_session`, the
     /// sole issuance path: the token carries the blob still sealed, never the plaintext). A
     /// failed artifact rule is signed, recorded and applied as an `artifact-mismatch` signal
-    /// before the refusal (`IntegrityFailed`). `source` is the request's peer address, which
-    /// the apps' network rules (`TenantState::app_networks`) are checked against; an unknown
-    /// one (`None`) passes none.
+    /// before the refusal (`IntegrityFailed`). `source` is the request's peer address and port:
+    /// the apps' network rules (`TenantState::app_networks`) are checked against its address
+    /// (an unknown one, `None`, passes none), and the session's telemetry records it.
     pub async fn session(
         &self,
         request: SessionRequest,
-        source: Option<std::net::IpAddr>,
+        source: Option<std::net::SocketAddr>,
     ) -> Result<SessionResponse, ServiceError> {
         self.runtime.session(request, source).await
     }
@@ -372,7 +372,7 @@ impl SealService {
     pub async fn extend(
         &self,
         request: ExtendRequest,
-        source: Option<std::net::IpAddr>,
+        source: Option<std::net::SocketAddr>,
     ) -> Result<ExtendResponse, ServiceError> {
         self.runtime.extend(request, source).await
     }

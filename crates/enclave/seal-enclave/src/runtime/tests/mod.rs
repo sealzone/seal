@@ -584,6 +584,17 @@ impl Harness {
         blob: &str,
         endpoint: Option<EndpointReport>,
     ) -> Result<SessionResponse, ServiceError> {
+        self.start_from(consumer, blob, endpoint, None).await
+    }
+
+    /// `start` from the peer `from`.
+    pub async fn start_from(
+        &self,
+        consumer: u8,
+        blob: &str,
+        endpoint: Option<EndpointReport>,
+        from: Option<std::net::SocketAddr>,
+    ) -> Result<SessionResponse, ServiceError> {
         let placeholder = ProofPurpose::Session { request_digest: [0; 32] };
         let mut request = SessionRequest {
             blob: blob.into(),
@@ -594,7 +605,7 @@ impl Harness {
         };
         request.context.purpose = request.expected_purpose();
         request.proof = proof(consumer, &request.context);
-        self.service.session(request, None).await
+        self.service.session(request, from).await
     }
 
     /// A sealed blob and a session on it for `CONSUMER`.

@@ -5,7 +5,7 @@
 //! telemetry entry.
 
 use seal_proto::telemetry::RefusalContext;
-use std::net::IpAddr;
+use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -208,7 +208,7 @@ impl Runtime {
     pub(crate) async fn session(
         &self,
         request: SessionRequest,
-        source: Option<IpAddr>,
+        source: Option<SocketAddr>,
     ) -> Result<SessionResponse, ServiceError> {
         let result = self.session_refusable(request, source).await;
         self.refused(Operation::Session, result)
@@ -217,7 +217,7 @@ impl Runtime {
     async fn session_refusable(
         &self,
         request: SessionRequest,
-        source: Option<IpAddr>,
+        source: Option<SocketAddr>,
     ) -> Result<SessionResponse, Refusal> {
         let (time, tenant) = self.serving_now().await?;
         let authenticated = self.authenticator.session(request, &tenant, &time).await?;
@@ -240,14 +240,14 @@ impl Runtime {
         // The tier the endpoint earned from this request: Hardened needs verified evidence
         // from every enrolled provider.
         let offered = offered_tier(attested);
-        let authorizer = TenantAuthorizer::new(&tenant).with_source(source);
+        let authorizer = TenantAuthorizer::new(&tenant).with_source(source.map(|s| s.ip()));
         let permit = match authorizer.session(&authenticated, &opened, offered, &time) {
             Ok(permit) => permit,
             Err(e) => {
                 return Err(self.decision_refused(e, attested, opened.blob(), &identity, &time).await).by(&identity)
             }
         };
-        self.issue_session(permit, &time).by(&identity)
+        self.issue_session(permit, &time, source).by(&identity)
     }
 
     /// The sole session issuance path: the claims come from the permit (its exact request,
@@ -256,6 +256,7 @@ impl Runtime {
         &self,
         permit: SessionPermit<'_>,
         time: &TrustedTime,
+        from: Option<SocketAddr>,
     ) -> Result<SessionResponse, ServiceError> {
         let caller = permit.request().caller();
         let (opened, decision) = (permit.opened(), permit.decision());
@@ -290,6 +291,7 @@ impl Runtime {
                 app: decision.app.clone(),
                 blob_id: blob.header.blob_id,
                 tier: decision.tier,
+                from,
             },
         );
         Ok(SessionResponse {
@@ -323,7 +325,7 @@ impl Runtime {
     pub(crate) async fn extend(
         &self,
         request: ExtendRequest,
-        source: Option<IpAddr>,
+        source: Option<SocketAddr>,
     ) -> Result<ExtendResponse, ServiceError> {
         let result = self.extend_refusable(request, source).await;
         self.refused(Operation::Extend, result)
@@ -332,7 +334,7 @@ impl Runtime {
     async fn extend_refusable(
         &self,
         request: ExtendRequest,
-        source: Option<IpAddr>,
+        source: Option<SocketAddr>,
     ) -> Result<ExtendResponse, Refusal> {
         let (time, tenant) = self.serving_now().await?;
         let current = self.redeem(request.token.expose())?;
@@ -348,7 +350,7 @@ impl Runtime {
         // Recomputed from the fresh report on every extend: a hardened blob stops working
         // within one extend of its endpoint's attestation going silent.
         let offered = offered_tier(attested);
-        let authorizer = TenantAuthorizer::new(&tenant).with_source(source);
+        let authorizer = TenantAuthorizer::new(&tenant).with_source(source.map(|s| s.ip()));
         let permit = match authorizer.extend(&authenticated, &current, offered, &time) {
             Ok(permit) => permit,
             Err(e) => {

@@ -74,8 +74,12 @@ trait Api: Send + Sync + 'static {
     async fn ticket(&self) -> Result<ProofTicket, ServiceError>;
     async fn seal(&self, request: SealRequest) -> Result<SealResponse, ServiceError>;
     // `source`: the connection's peer address, for the apps' network rules.
-    async fn session(&self, request: SessionRequest, source: Option<IpAddr>) -> Result<SessionResponse, ServiceError>;
-    async fn extend(&self, request: ExtendRequest, source: Option<IpAddr>) -> Result<ExtendResponse, ServiceError>;
+    async fn session(
+        &self,
+        request: SessionRequest,
+        source: Option<SocketAddr>,
+    ) -> Result<SessionResponse, ServiceError>;
+    async fn extend(&self, request: ExtendRequest, source: Option<SocketAddr>) -> Result<ExtendResponse, ServiceError>;
     async fn end(&self, request: EndRequest) -> Result<(), ServiceError>;
     async fn signal(&self, request: SignalRequest) -> Result<(), ServiceError>;
 }
@@ -91,10 +95,14 @@ impl Api for SealService {
     async fn seal(&self, request: SealRequest) -> Result<SealResponse, ServiceError> {
         SealService::seal(self, request).await
     }
-    async fn session(&self, request: SessionRequest, source: Option<IpAddr>) -> Result<SessionResponse, ServiceError> {
+    async fn session(
+        &self,
+        request: SessionRequest,
+        source: Option<SocketAddr>,
+    ) -> Result<SessionResponse, ServiceError> {
         SealService::session(self, request, source).await
     }
-    async fn extend(&self, request: ExtendRequest, source: Option<IpAddr>) -> Result<ExtendResponse, ServiceError> {
+    async fn extend(&self, request: ExtendRequest, source: Option<SocketAddr>) -> Result<ExtendResponse, ServiceError> {
         SealService::extend(self, request, source).await
     }
     async fn end(&self, request: EndRequest) -> Result<(), ServiceError> {
@@ -280,9 +288,9 @@ async fn extend<S: Api>(
     Ok(Json(state.service.extend(request, peer(source)).await?))
 }
 
-/// The connection's peer address, if the listener recorded one.
-fn peer(source: Option<Extension<ConnectInfo<Source>>>) -> Option<IpAddr> {
-    source.map(|Extension(ConnectInfo(Source(addr)))| addr.ip())
+/// The connection's peer address and port, if the listener recorded one.
+fn peer(source: Option<Extension<ConnectInfo<Source>>>) -> Option<SocketAddr> {
+    source.map(|Extension(ConnectInfo(Source(addr)))| addr)
 }
 
 async fn end<S: Api>(
@@ -536,7 +544,7 @@ pub(crate) mod tests {
         async fn session(
             &self,
             _request: SessionRequest,
-            _source: Option<IpAddr>,
+            _source: Option<SocketAddr>,
         ) -> Result<SessionResponse, ServiceError> {
             self.called("session");
             Err(fail(ErrorCode::NotAllowed))
@@ -544,7 +552,7 @@ pub(crate) mod tests {
         async fn extend(
             &self,
             request: ExtendRequest,
-            _source: Option<IpAddr>,
+            _source: Option<SocketAddr>,
         ) -> Result<ExtendResponse, ServiceError> {
             self.called(format!("extend {}", request.token.expose()));
             Ok(ExtendResponse { token: Bearer::new("sealtok_new".into()), expires_at: 1_000 })
