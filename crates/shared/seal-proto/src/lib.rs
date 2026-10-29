@@ -8,6 +8,8 @@
 //! Rule for all types here: maps are `BTreeMap`/`BTreeSet`, never `HashMap`,
 //! and struct field order is part of the format.
 
+#![forbid(unsafe_code)]
+
 pub mod api;
 pub mod blob;
 pub mod codec;
