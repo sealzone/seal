@@ -6,6 +6,9 @@
 //!               [--origin dev.log.seal.zone/v1]
 //! ```
 //!
+//! The seed may come from `SEAL_TLOG_SEED` instead of `--seed`, which keeps it out of the
+//! process's arguments (readable by every local user).
+//!
 //! `--origin` names the log in its checkpoints (a staging log served as `log.seal.zone` takes
 //! `log.seal.zone/v1`); a log directory keeps the origin it was created with.
 //!
@@ -137,6 +140,9 @@ fn parse_args() -> Result<Args, String> {
         quorum: 2,
         origin: seal_tlog::dev::ORIGIN.into(),
     };
+    if let Some(seed) = std::env::var("SEAL_TLOG_SEED").ok().filter(|s| !s.is_empty()) {
+        args.seed = parse_seed(&seed)?;
+    }
     let mut dir = None;
     let mut it = std::env::args().skip(1);
     while let Some(flag) = it.next() {
