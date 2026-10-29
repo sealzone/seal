@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="https://seal.zone"><img src="docs/assets/banner.svg" alt="Seal: impossible to steal. Keep your keys yours. $5,000 to the first person who steals our key." width="100%"></a>
+  <a href="https://seal.zone"><img src="docs/assets/seal-banner.svg" alt="Seal: impossible to steal. Keep your keys yours. $5,000 to the first person who steals our key." width="100%"></a>
 </p>
 
 <p align="center">
