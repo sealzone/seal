@@ -12,6 +12,7 @@ from world import SECRET, World, get
 IDLE_SECS = 5  # how long the hosted replica stays up idle (`HOSTED_IDLE_SECS` in a release)
 HOSTED = {"kind": "confidential_space", "project_number": 2, "service_account": "t-acme@hosted.sim.seal.zone"}
 RESTART_SECS = 3  # how long the stopped replica takes to come back
+RESTARTED_IDLE_SECS = 30  # the restarted replica's idle exit, past the client's retries
 
 
 def test_a_hosted_replica_serves_idles_out_and_clients_wait_for_it(world: World) -> None:
@@ -36,8 +37,12 @@ def test_a_hosted_replica_serves_idles_out_and_clients_wait_for_it(world: World)
 
     # The SDK finds nothing listening and keeps retrying; it seals once the replica is back. (Seal's
     # front door starts a stopped hosted replica on the connection; here the test starts it.)
+    # The restarted replica stays up longer than the client's retry backoff and a seal's round
+    # trips (seals do not keep a replica up), so the client reaches it before it idles out.
+    config_2 = world.replica_config("hosted-2", ip="127.0.0.3", hosted_idle_secs=RESTARTED_IDLE_SECS)
+
     def start_hosted_again() -> None:
-        world.start("hosted-2", "seal-enclave", env=world.replica_env(config, HOSTED))
+        world.start("hosted-2", "seal-enclave", env=world.replica_env(config_2, HOSTED))
 
     restart = threading.Timer(RESTART_SECS, start_hosted_again)
     started = time.monotonic()
@@ -48,7 +53,7 @@ def test_a_hosted_replica_serves_idles_out_and_clients_wait_for_it(world: World)
     assert time.monotonic() - started > RESTART_SECS, "sealed by the restarted replica"
 
     # Telemetry of both hosted boots is complete: each idle exit sends its last batch.
-    assert world.procs["hosted-2"].wait(timeout=IDLE_SECS + 30) == 0
+    assert world.procs["hosted-2"].wait(timeout=RESTARTED_IDLE_SECS + 30) == 0
     world.stop_replica(1)
     certificates = str(world.path("control/tenants/acme/service-key-certificates.json"))
     out = world.admin("telemetry", "--certificates", certificates)
