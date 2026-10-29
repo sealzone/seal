@@ -13,7 +13,7 @@
 #     --output type=registry,name=<registry>/enclave:<tag>,rewrite-timestamp=true .
 #
 # The launch policy (Confidential Space reads these labels; they are part of the digest): the
-# operator may set SEAL_TENANT (tee-env-SEAL_TENANT) and nothing else, and the container's
+# operator may set SEAL_TENANT (tee-env-SEAL_TENANT) and the exit timer SEAL_EXIT_AFTER_SECS, nothing else, and the container's
 # logs never leave the VM. Nitro starts CMD as root from / and ignores ENTRYPOINT, USER and
 # WORKDIR, so the image uses CMD only.
 
@@ -37,7 +37,7 @@ RUN --network=none --mount=type=cache,target=/src/target \
  && install -m 0755 target/release/seal-enclave /seal-enclave
 
 FROM gcr.io/distroless/cc-debian13@sha256:3ee00291cf386ec52a552e6a858d555debd74776eb4bfa53fa3df2cd6677515e
-LABEL "tee.launch_policy.allow_env_override"="SEAL_TENANT"
+LABEL "tee.launch_policy.allow_env_override"="SEAL_TENANT,SEAL_EXIT_AFTER_SECS"
 LABEL "tee.launch_policy.log_redirect"="never"
 # Confidential Space opens only the ports the image exposes: the API, HTTPS, Postgres and Redis.
 EXPOSE 8443

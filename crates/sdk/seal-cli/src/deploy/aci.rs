@@ -351,7 +351,7 @@ pub mod tests {
         let release = ReleaseTemplate::parse(&example()).unwrap();
         assert_eq!(release.policy, POLICY);
         let hex: String = release.host_data.iter().map(|b| format!("{b:02x}")).collect();
-        assert_eq!(hex, "31b48ec95799650d7d39788fed54612394fa9667261237e72284ed2e7e604552", "sha256sum of the file");
+        assert_eq!(hex, "293733f9e01278d2fd7657f77ec76dd192e6587de1c6a9630ff8fbafbd6160c6", "sha256sum of the file");
         assert_eq!(release.measurement, seal_attest::azure::measurement(&release.host_data));
         assert_eq!(release.container.name, "seal-enclave");
         assert_eq!(release.container.ports, [8443]);

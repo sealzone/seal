@@ -713,7 +713,15 @@ The enclave's internal ports and components are in the crate docs and
   flight only holds off the drain until it ends. Once draining, later operations fail with
   `Unavailable` after authenticating, and data-plane connections are closed. The replica
   stops accepting, lets open API requests finish, ships the `last` telemetry batch and
-  exits 0. Customer replicas never exit.
+  exits 0. Customer replicas never exit on their own, unless their deployer sets the exit
+  timer.
+- **Exit timer.** A deployer may set `SEAL_EXIT_AFTER_SECS` (whole seconds, 60 to 604 800) on
+  any replica: that long after start it stops accepting, lets open API requests finish, ships
+  the `last` telemetry batch and exits 0, as on SIGTERM. It is for short-lived replicas whose
+  host stops them with no grace (an ACI stop or delete kills the container within a second),
+  so their telemetry still ends cleanly. The deployer can stop a replica anyway, so the timer
+  decides nothing it couldn't; the release's container and launch policies allow it, digits
+  only. A value outside the range refuses to boot.
 - **Tenant pin.** A `TenantPin` (`<tenant>@<root id>`, delivered as each cloud allows) pins a
   deployment to one tenant and its root chain. Every other tenant or chain is refused with
   `NotAllowed` (sessions, extends, ends, signals, session tokens). A seal upload for another

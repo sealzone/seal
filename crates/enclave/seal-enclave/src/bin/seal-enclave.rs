@@ -1,8 +1,9 @@
 //! The enclave binary: detects its cloud, builds the runtime's `Components` over the guardian and
 //! the control plane, boots `SealService` and serves its one port: the API and the SDK tunnels
-//! (`seal_enclave::api::serve`). On SIGTERM or Ctrl-C, or
-//! when a Seal-hosted replica has been idle for `HOSTED_IDLE_SECS` (`SealService::idle_exit`),
-//! it stops accepting, lets open API requests finish (up to `API_DRAIN`), ships telemetry's
+//! (`seal_enclave::api::serve`). On SIGTERM or Ctrl-C, when a Seal-hosted replica has been
+//! idle for `HOSTED_IDLE_SECS` (`SealService::idle_exit`), or when the deployer's exit timer
+//! runs out (`SEAL_EXIT_AFTER_SECS`, seconds after start, `EXIT_AFTER_SECS` apart), it stops
+//! accepting, lets open API requests finish (up to `API_DRAIN`), ships telemetry's
 //! final batch (`ControlTelemetry::shutdown`) and exits with status 0: a Confidential Space VM
 //! with restart policy `Never` then stops.
 //!
@@ -113,7 +114,32 @@ fn config() -> Result<Config, String> {
     sim::config()
 }
 
+/// Optional: seconds after start at which the replica exits cleanly, as on SIGTERM. For short-lived
+/// replicas whose host would otherwise kill them (a stop or delete gives no grace), so their
+/// telemetry still ends with its final batch. Set by the deployer, which can stop the replica
+/// anyway, so it decides nothing it couldn't before.
+const EXIT_AFTER_VAR: &str = "SEAL_EXIT_AFTER_SECS";
+
+/// The range `SEAL_EXIT_AFTER_SECS` may take: a minute to a week.
+const EXIT_AFTER_SECS: std::ops::RangeInclusive<u64> = 60..=604_800;
+
+/// `SEAL_EXIT_AFTER_SECS`, checked: unset or empty is no timer; anything else must be whole
+/// seconds in `EXIT_AFTER_SECS`.
+fn exit_after(value: Option<&str>) -> Result<Option<Duration>, String> {
+    let Some(value) = value.filter(|v| !v.is_empty()) else { return Ok(None) };
+    match value.parse::<u64>() {
+        Ok(secs) if EXIT_AFTER_SECS.contains(&secs) => Ok(Some(Duration::from_secs(secs))),
+        _ => Err(format!(
+            "{EXIT_AFTER_VAR} must be whole seconds from {} to {}",
+            EXIT_AFTER_SECS.start(),
+            EXIT_AFTER_SECS.end()
+        )),
+    }
+}
+
 async fn run() -> Result<(), String> {
+    let started = tokio::time::Instant::now();
+    let exit_after = exit_after(std::env::var(EXIT_AFTER_VAR).ok().as_deref())?;
     let config = config()?;
     let cloud = Cloud::detect().map_err(|e| format!("cloud: {e}"))?;
     let pin = cloud.tenant_pin().clone();
@@ -181,6 +207,10 @@ async fn run() -> Result<(), String> {
             tracing::info!(secs = config.hosted_idle.as_secs(), "hosted replica idle: shutting down");
             None
         }
+        _ = until(exit_after.map(|after| started + after)) => {
+            tracing::info!(secs = exit_after.map_or(0, |d| d.as_secs()), "exit timer: shutting down");
+            None
+        }
         ended = &mut api_task => {
             api_done = true;
             Some(match ended {
@@ -233,6 +263,14 @@ async fn stopped(mut stopping: watch::Receiver<bool>) {
         if stop || stopping.changed().await.is_err() {
             return;
         }
+    }
+}
+
+/// Resolves at `deadline`, or never without one.
+async fn until(deadline: Option<tokio::time::Instant>) {
+    match deadline {
+        Some(at) => tokio::time::sleep_until(at).await,
+        None => std::future::pending().await,
     }
 }
 
@@ -518,6 +556,18 @@ mod tests {
 
     /// The example release configuration committed in `deploy/example`.
     const EXAMPLE: &str = include_str!("../../../../../deploy/example/enclave.json");
+
+    #[test]
+    fn the_exit_timer_takes_whole_seconds_in_range() {
+        use std::time::Duration;
+        assert_eq!(super::exit_after(None), Ok(None));
+        assert_eq!(super::exit_after(Some("")), Ok(None));
+        assert_eq!(super::exit_after(Some("600")), Ok(Some(Duration::from_secs(600))));
+        assert_eq!(super::exit_after(Some("60")), Ok(Some(Duration::from_secs(60))));
+        for bad in ["59", "604801", "10m", "-5", " 600", "6e2"] {
+            assert!(super::exit_after(Some(bad)).is_err(), "{bad}");
+        }
+    }
 
     fn parse(value: &serde_json::Value) -> Result<super::Config, String> {
         file::parse(value.to_string().as_bytes(), SimSettings::Refuse)

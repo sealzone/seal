@@ -6,7 +6,8 @@
 //!   `atlas-mount-resolv-conf`, `msi-atlas-adapter`, `atlas-netstats`, copied from Microsoft's
 //!   infra fragment), replacing any of the same name.
 //! - Seal's container: not elevated, no exec processes, and its operator-set variables allowed
-//!   only by anchored re2 rules (`Component::Enclave`: the tenant pin, `TENANT_RULE`, required;
+//!   only by anchored re2 rules (`Component::Enclave`: the tenant pin, `TENANT_RULE`, required, and
+//!   the exit timer, `EXIT_AFTER_RULE`, optional;
 //!   `Component::Guardian`: `CEREMONY_RULE`, `WRAPPED_ROOTS_RULE`, `SUCCEED_FROM_RULE` and
 //!   `RELEASES_RULE`, optional), in place of
 //!   every rule the generator wrote for them (from the template's placeholder values). Every
@@ -38,6 +39,10 @@ use sha2::{Digest, Sha256};
 /// lowercase hex digits.
 const TENANT_RULE: &str = "^SEAL_TENANT=[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?@[0-9a-f]{64}$";
 
+/// The enclave's exit timer (`SEAL_EXIT_AFTER_SECS`, whole seconds), or none (ACI passes a
+/// variable set to `""` as its bare name). The enclave checks the range itself.
+const EXIT_AFTER_RULE: &str = "^SEAL_EXIT_AFTER_SECS(=[0-9]{0,6})?$";
+
 /// The guardian's root ceremony switch (`1` runs it).
 const CEREMONY_RULE: &str = "^SEAL_GUARDIAN_CEREMONY=[01]?$";
 
@@ -62,7 +67,7 @@ pub const MAA_EASTUS: &str = "https://sharedeus.eus.attest.azure.net";
 /// The operator-set variables of `component`'s container: name, rule, required.
 fn operator_rules(component: Component) -> &'static [(&'static str, &'static str, bool)] {
     match component {
-        Component::Enclave => &[("SEAL_TENANT", TENANT_RULE, true)],
+        Component::Enclave => &[("SEAL_TENANT", TENANT_RULE, true), ("SEAL_EXIT_AFTER_SECS", EXIT_AFTER_RULE, false)],
         Component::Guardian => &[
             ("SEAL_GUARDIAN_CEREMONY", CEREMONY_RULE, false),
             ("SEAL_GUARDIAN_WRAPPED_ROOTS", WRAPPED_ROOTS_RULE, false),
@@ -412,9 +417,14 @@ mod tests {
     fn a_conforming_policy_is_unchanged() {
         let policy = captured();
         assert_eq!(hex(&host_data(&policy)), CAPTURED_HOST_DATA);
+        // The capture predates the exit timer: the rewrite adds its rule and nothing else, and
+        // rewriting the result changes nothing.
         let rewritten = rewrite(&policy, "main", &aci(), Component::Enclave).unwrap();
-        assert_eq!(rewritten, policy);
-        assert_eq!(rewrite(&rewritten, "main", &aci(), Component::Enclave).unwrap(), policy);
+        let mut expected = containers(&policy);
+        let timer = json!({"pattern": EXIT_AFTER_RULE, "required": false, "strategy": "re2"});
+        expected[0]["env_rules"].as_array_mut().unwrap().push(timer);
+        assert_eq!(containers(&rewritten), expected);
+        assert_eq!(rewrite(&rewritten, "main", &aci(), Component::Enclave).unwrap(), rewritten);
         // So is the example's, as `seal-release aci-policy` wrote it from acipolicygen 2.4 output.
         let example = include_str!("../../../../deploy/example/aci-policy.rego");
         assert_eq!(rewrite(example, "seal-enclave", &aci(), Component::Enclave).unwrap(), example);
@@ -439,6 +449,9 @@ mod tests {
         let tenant: Vec<&Value> =
             rules.iter().filter(|r| env_name_of(r["pattern"].as_str().unwrap()) == "SEAL_TENANT").collect();
         assert_eq!(tenant, [&json!({"pattern": TENANT_RULE, "required": true, "strategy": "re2"})]);
+        let timer: Vec<&Value> =
+            rules.iter().filter(|r| env_name_of(r["pattern"].as_str().unwrap()) == "SEAL_EXIT_AFTER_SECS").collect();
+        assert_eq!(timer, [&json!({"pattern": EXIT_AFTER_RULE, "required": false, "strategy": "re2"})]);
         for var in INJECTED {
             assert!(rules.iter().any(|r| env_name_of(r["pattern"].as_str().unwrap()) == var), "{var}");
         }
