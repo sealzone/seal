@@ -14,7 +14,7 @@ members = [
 exclude = ["crates/sdk/seal-go"]
 
 [workspace.package]
-version = "0.2.5"
+version = "0.2.6"
 edition = "2021"
 rust-version = "1.92"
 license = "Apache-2.0"
@@ -23,27 +23,27 @@ repository = "https://github.com/sealzone/seal"
 
 [workspace.dependencies]
 # internal
-seal-proto = { path = "crates/shared/seal-proto", version = "0.2.5", package = "sealzone-proto" }
-seal-crypto = { path = "crates/shared/seal-crypto", version = "0.2.5", package = "sealzone-crypto" }
-seal-attest = { path = "crates/shared/seal-attest", version = "0.2.5", package = "sealzone-attest" }
-seal-tee = { path = "crates/shared/seal-tee", version = "0.2.5" }
-seal-tlog = { path = "crates/shared/seal-tlog", version = "0.2.5", package = "sealzone-tlog" }
-seal-net = { path = "crates/shared/seal-net", version = "0.2.5", package = "sealzone-net" }
-seal-verify = { path = "crates/shared/seal-verify", version = "0.2.5", package = "sealzone-verify" }
-seal-authz = { path = "crates/enclave/seal-authz", version = "0.2.5" }
-seal-integrity = { path = "crates/enclave/seal-integrity", version = "0.2.5" }
-seal-cloud = { path = "crates/enclave/seal-cloud", version = "0.2.5" }
-seal-guardian = { path = "crates/guardian/seal-guardian", version = "0.2.5" }
-seal-control = { path = "crates/control-plane/seal-control", version = "0.2.5", package = "sealzone-control" }
-seal-adapter = { path = "crates/enclave/adapters/seal-adapter", version = "0.2.5" }
-seal-adapter-http = { path = "crates/enclave/adapters/seal-adapter-http", version = "0.2.5" }
-seal-adapter-pg = { path = "crates/enclave/adapters/seal-adapter-pg", version = "0.2.5" }
-seal-adapter-redis = { path = "crates/enclave/adapters/seal-adapter-redis", version = "0.2.5" }
-seal-adapter-clickhouse = { path = "crates/enclave/adapters/seal-adapter-clickhouse", version = "0.2.5" }
-seal-client = { path = "crates/sdk/seal-client", version = "0.2.5", package = "sealzone" }
+seal-proto = { path = "crates/shared/seal-proto", version = "0.2.6", package = "sealzone-proto" }
+seal-crypto = { path = "crates/shared/seal-crypto", version = "0.2.6", package = "sealzone-crypto" }
+seal-attest = { path = "crates/shared/seal-attest", version = "0.2.6", package = "sealzone-attest" }
+seal-tee = { path = "crates/shared/seal-tee", version = "0.2.6" }
+seal-tlog = { path = "crates/shared/seal-tlog", version = "0.2.6", package = "sealzone-tlog" }
+seal-net = { path = "crates/shared/seal-net", version = "0.2.6", package = "sealzone-net" }
+seal-verify = { path = "crates/shared/seal-verify", version = "0.2.6", package = "sealzone-verify" }
+seal-authz = { path = "crates/enclave/seal-authz", version = "0.2.6" }
+seal-integrity = { path = "crates/enclave/seal-integrity", version = "0.2.6" }
+seal-cloud = { path = "crates/enclave/seal-cloud", version = "0.2.6" }
+seal-guardian = { path = "crates/guardian/seal-guardian", version = "0.2.6" }
+seal-control = { path = "crates/control-plane/seal-control", version = "0.2.6", package = "sealzone-control" }
+seal-adapter = { path = "crates/enclave/adapters/seal-adapter", version = "0.2.6" }
+seal-adapter-http = { path = "crates/enclave/adapters/seal-adapter-http", version = "0.2.6" }
+seal-adapter-pg = { path = "crates/enclave/adapters/seal-adapter-pg", version = "0.2.6" }
+seal-adapter-redis = { path = "crates/enclave/adapters/seal-adapter-redis", version = "0.2.6" }
+seal-adapter-clickhouse = { path = "crates/enclave/adapters/seal-adapter-clickhouse", version = "0.2.6" }
+seal-client = { path = "crates/sdk/seal-client", version = "0.2.6", package = "sealzone" }
 # Without `passkey` (libudev on Linux): seal-py turns it on where it builds without it.
-seal-cli = { path = "crates/sdk/seal-cli", version = "0.2.5", package = "sealzone-cli", default-features = false }
-seal-sim = { path = "crates/sim/seal-sim", version = "0.2.5" }
+seal-cli = { path = "crates/sdk/seal-cli", version = "0.2.6", package = "sealzone-cli", default-features = false }
+seal-sim = { path = "crates/sim/seal-sim", version = "0.2.6" }
 # external. Every crate takes versions from here. Read docs/DEPS.md before adding or upgrading.
 async-trait = "0.1"
 base64 = "0.22"

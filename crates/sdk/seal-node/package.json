@@ -1,6 +1,6 @@
 {
   "name": "@sealzone/sdk",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "description": "Seal: use secrets without holding them.",
   "license": "Apache-2.0",
   "homepage": "https://seal.zone",
@@ -42,12 +42,12 @@
     ]
   },
   "optionalDependencies": {
-    "@sealzone/sdk-linux-x64-gnu": "0.2.5",
-    "@sealzone/sdk-linux-arm64-gnu": "0.2.5",
-    "@sealzone/sdk-linux-x64-musl": "0.2.5",
-    "@sealzone/sdk-linux-arm64-musl": "0.2.5",
-    "@sealzone/sdk-darwin-x64": "0.2.5",
-    "@sealzone/sdk-darwin-arm64": "0.2.5"
+    "@sealzone/sdk-linux-x64-gnu": "0.2.6",
+    "@sealzone/sdk-linux-arm64-gnu": "0.2.6",
+    "@sealzone/sdk-linux-x64-musl": "0.2.6",
+    "@sealzone/sdk-linux-arm64-musl": "0.2.6",
+    "@sealzone/sdk-darwin-x64": "0.2.6",
+    "@sealzone/sdk-darwin-arm64": "0.2.6"
   },
   "scripts": {
     "build": "./build.sh --release",
