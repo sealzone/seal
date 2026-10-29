@@ -203,7 +203,8 @@ jobs:
             [[ "$dir" == npm/sdk/ ]] && continue
             npm publish --access public "$dir"
           done
-          npm publish --access public npm/sdk
+          # A path, not `npm/sdk`: npm reads owner/name as a GitHub repository.
+          npm publish --access public ./npm/sdk/
 
   publish-go:
     needs: [check, go]
