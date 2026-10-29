@@ -10,7 +10,7 @@ runs:
       run: |
         trust=crates/sdk/seal-client/release-trust.json
         if [[ ! -f "$trust" ]]; then
-          echo "::error::$trust is missing: commit Seal's production trust.json there (see RELEASING.md)"; exit 1
+          echo "::error::$trust is missing: commit Seal's production trust.json there (see CONTRIBUTING.md, Release trust)"; exit 1
         fi
         if grep -qf <(sed -n 's/.*"\([0-9a-f]\{64\}\)".*/\1/p' deploy/example/trust.json | sort -u) "$trust"; then
           echo "::error::$trust holds keys of deploy/example/trust.json (the development trust)"; exit 1

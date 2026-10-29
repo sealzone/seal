@@ -1,8 +1,8 @@
 # End-to-end tests
 
-The whole system on one machine: Seal's own binaries (log, guardian, control plane, enclave
-replicas, the `seal` CLI) run as local processes on the simulator, and the tests drive them the
-way people do, through the Python SDK and the CLI.
+These tests run the whole system on one machine. Seal's own binaries (log, guardian, control
+plane, enclave replicas, the `seal` CLI) run as local processes on the simulator. The tests
+drive them the way people do, through the Python SDK and the CLI.
 
 ```sh
 scripts/e2e.sh                  # build everything, run every test (about two minutes)
@@ -10,14 +10,15 @@ scripts/e2e.sh -k failover      # one test, or any pytest arguments
 SEAL_SIM_KEEP=1 scripts/e2e.sh  # keep each test's configs and logs
 ```
 
-Needs Rust, Python 3.9+, and Docker or Podman (`SEAL_CONTAINER_RUNTIME=podman` to choose). The
-Node and Go SDK tests also need Node.js and Go, and are skipped without them.
+The tests need Rust, Python 3.9+, and Docker or Podman. Set `SEAL_CONTAINER_RUNTIME=podman`
+to choose Podman. The Node and Go SDK tests also need Node.js and Go, and they are skipped
+without them.
 
 ## How a test reads
 
-Each test gets its own fresh system, `world`, already booted: tenant `acme` with app
-`checkout`, one enclave replica, and an HTTPS upstream that records what it
-receives. The test adds what it needs and checks what happens.
+Each test gets its own fresh system, `world`, already booted. It has tenant `acme` with app
+`checkout`, one enclave replica, and an HTTPS upstream that records what it receives. The
+test adds what it needs and checks what happens.
 
 ```python
 def test_clients_and_live_tunnels_fail_over(world: World) -> None:
@@ -29,24 +30,24 @@ def test_clients_and_live_tunnels_fail_over(world: World) -> None:
     assert get(live.url, live.key)[0] == 200, "the live tunnel fails over to replica 2"
 ```
 
-`world.py` is the whole harness. What a test can do:
+`world.py` is the whole harness. A test can use these calls:
 
 | Call | What it does |
 | --- | --- |
 | `world.admin("revoke", "app", "checkout", "--yes")` | the `seal` CLI as the tenant's admin, signing with its admin key file |
 | `world.seal_with_cli(secret, to)` | seal with the CLI, with no identity (anyone may); returns the blob |
-| `world.client(key=None)` | an SDK client acting as the app (or as `key`; `world.stranger_key` is a key no grant names) |
+| `world.client(key=None)` | an SDK client acting as the app, or as `key`. `world.stranger_key` is a key no grant names. |
 | `world.start_replica(n)` / `stop_replica(n)` | replica n on 127.0.0.n |
 | `world.stop("control")` / `start_control()` | take the control plane down and back |
 | `world.start_postgres()` / `start_redis()` | a Postgres or Redis upstream in a container; returns what to seal to |
 | `world.upstream_seen()` | every request the HTTPS upstream received |
 | `world.log("replica-1")` | a process's log |
-| `get(url, key, context=, at=)` | one request through a session: `(status, body)` |
+| `get(url, key, context=, at=)` | one request through a session; returns `(status, body)` |
 | `eventually("what", check)` | wait until `check()` holds |
 | `make_world(release_stale_in=10)` | a world with options, instead of `world` |
 
-Replicas reload tenant state every second here (`STATE_RELOAD_SECS`, 30 s, in a release), so
-admin changes show up within a second or two.
+Here replicas reload tenant state every second, so admin changes show up within a second or
+two. In a release, `STATE_RELOAD_SECS` is 30 s.
 
 ## The tests
 
@@ -70,9 +71,9 @@ admin changes show up within a second or two.
 
 ## Adding a test
 
-Pick the file whose topic fits (or start a new `test_<topic>.py`), take `world`, and write
+Pick the file whose topic fits, or start a new `test_<topic>.py`. Take `world`, and write
 the scenario top to bottom with a short comment per step. Name the test after what it shows.
-If it needs something `world.py` cannot do yet, add one small method there.
+If the test needs something `world.py` cannot do yet, add one small method there.
 
-When a test fails, it prints the last lines of every process's log; `SEAL_SIM_KEEP=1` keeps
-them all under `/tmp/seal-e2e-<test>.*/`.
+A failing test prints the last lines of every process's log. With `SEAL_SIM_KEEP=1`, the
+logs are all kept under `/tmp/seal-e2e-<test>.*/`.

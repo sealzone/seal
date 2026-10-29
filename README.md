@@ -1,91 +1,146 @@
+<p align="center">
+  <a href="https://seal.zone"><img src="docs/assets/banner.svg" alt="Seal: impossible to steal. Keep your keys yours. $5,000 to the first person who steals our key." width="100%"></a>
+</p>
+
+<p align="center">
+  <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-f2ede6?style=flat-square&labelColor=1d1a18"></a>
+  <a href="#status"><img alt="Status: pre-release" src="https://img.shields.io/badge/status-pre--release-b9b1a7?style=flat-square&labelColor=1d1a18"></a>
+  <a href="https://seal.zone/challenge"><img alt="Steal our key: $5,000" src="https://img.shields.io/badge/steal%20our%20key-%245%2C000-e5402f?style=flat-square&labelColor=1d1a18"></a>
+</p>
+
 # Seal
 
-Use secrets without holding them. Anyone seals a secret (an API key, a database password)
-for named apps; one of those apps starts a session on the sealed blob and gets a stand-in, while an
-attested enclave injects the real secret on the way to the upstream. The app, its host and
-Seal's own control plane never see the secret.
+**Keep your keys yours.** Seal your secrets in hardware, safe even when hackers take over your
+servers.
+
+Your app needs an API key. Today that key sits in an environment variable, and anyone who gets
+a shell on the box can print it.
+
+With Seal, the app never has the key. You seal the secret for the apps allowed to use it. An
+app that starts a session gets a stand-in, and an attested enclave puts the real secret into
+each request on its way to the upstream. The app doesn't hold the secret. Neither does its
+host, and neither does Seal.
 
 ```python
 import seal
 
 blob = seal.seal(secret, to="https://api.openai.com/v1", apps=["checkout"], header="x-api-key")
 
-with seal.session(blob) as s:      # the app gets a stand-in key; the enclave injects the real one
+with seal.session(blob) as s:      # s.key is a stand-in; the enclave injects the real key
     client = OpenAI(base_url=s.url, api_key=s.key)
 ```
 
-The same flow in Rust is `seal.seal(secret, to, apps).header(..).await?`, then
-`seal.session(&blob).http().await?`; both SDKs use the same names.
+Databases work the same way. A session on a sealed Postgres or Redis password gives the app a
+DSN, and the enclave logs in for it:
+
+```python
+with seal.session(db_blob) as db:
+    conn = psycopg.connect(db.dsn)
+```
+
+The Rust SDK uses the same names: `seal.seal(secret, to, apps).header(..).await?`, then
+`seal.session(&blob).http().await?`. Node/TypeScript and Go follow suit.
+
+## Steal our key
+
+<a href="https://seal.zone/challenge"><img src="docs/assets/challenge.svg" alt="The Seal challenge: steal the key, $5,000 to the first person who does. seal.zone/challenge" width="100%"></a>
+
+We think this works, so we put money on it. An AI chatbot runs on a Linux machine and calls a
+model with a real API key through Seal. Take a place in line at
+[seal.zone/challenge](https://seal.zone/challenge) and you get that machine for ten minutes,
+root shell included. Submit the key and the first correct one wins **$5,000**. The catch is
+that the key never touches that machine, which is the whole point.
+
+The machine is yours to break. Seal's servers and the other players are not. Agents can play
+too; the HTTP version is in [agents.txt](https://seal.zone/challenge/agents.txt). If you find
+a flaw that doesn't fit inside ten minutes, it still counts as a vulnerability: report it as
+[SECURITY.md](SECURITY.md) says.
 
 ## How it works
 
 ```
- app process ── SDK ──► enclave replica (TEE) ──► upstream (API, Postgres, Redis)
-                  │      verifies the caller, decrypts the blob, injects the secret
-                  │            ▲                         │
-   verifies the enclave        │ keys, at boot           │ signed telemetry, signals
-   against a signed release    │                         ▼
-                         guardian (TEE)            control plane (untrusted)
-                                                   transparency log + witnesses
+ app ── SDK ──► enclave (TEE) ──────────► upstream: an HTTP API, Postgres, Redis
+                  checks the app's identity,
+                  opens the blob, injects the secret
+                    ▲                   │
+         keys, at boot                  │ signed telemetry
+                    │                   ▼
+              guardian (TEE)       control plane (untrusted)
+                                   transparency log, witnesses
 ```
 
-- **Enclave**: runs in the customer's network on a confidential-computing platform (or as
-  Seal's hosted replica, for sealing from outside it), pinned to one tenant. It is the only place a blob is decrypted. It authorizes each app by its
-  cloud identity, then proxies HTTP, Postgres or Redis traffic with the real secret injected.
-- **Guardian**: holds the platform root in its own TEE and releases keys only to enclaves
-  whose attested measurement is a release signed by M of N release keys, logged, and past
-  its time lock.
-- **Control plane**: stores and serves signed tenant state, telemetry and signals. It is
-  untrusted: enclaves verify every document they get from it, so it can withhold data but
-  cannot grant access or read secrets.
-- **SDK**: verifies the enclave's attestation against the release trust before sending
-  anything, pins its TLS key, and fails over between replicas (`SEAL_ENDPOINT`).
+**The enclave** is the only place a sealed blob is ever opened. It runs on a
+confidential-computing platform in your own network, pinned to one tenant. Seal also hosts
+replicas for callers outside that network. For each session it checks the app's cloud
+identity against the tenant's grants, then proxies the app's HTTP, Postgres or Redis traffic
+with the real secret in place.
+
+**The guardian** holds the platform root key in its own TEE. It hands keys only to an enclave
+whose attested measurement matches a release that M of N release keys signed, that the
+transparency log recorded, and whose time lock has passed.
+
+**The control plane** stores signed tenant state, telemetry and signals. Seal runs it, and
+nothing trusts it. Enclaves verify every document it serves, so the worst it can do is
+withhold data. It can't grant access and it can't read a secret.
+
+**The SDK** checks the enclave's attestation against the release trust before it sends
+anything, pins the enclave's TLS key, and fails over between replicas (`SEAL_ENDPOINT`).
 
 ## Trust model
 
-- **Trusted**: the TEE hardware and its attestation (AMD SEV-SNP on Azure; Intel TDX and
-  Google's attestation service on Confidential Space), and the released enclave and guardian
-  code. Releases are reproducible from a source commit, signed by M of N release keys,
-  recorded in a transparency log checked by independent witnesses, and time-locked, so a
-  release is public before anything accepts it. Seal's guardian keeps its root in Azure Key
-  Vault under an immutable release policy, which adds Microsoft's attestation service and
-  HSMs.
-- **Not trusted**: the control plane, the hosts and cloud accounts the enclaves run in, the
-  network, and Seal's operators. Tenant state is signed by the tenant's own admins and
-  logged; a change that widens access waits out a public pending window. An untrusted party
-  can withhold service, never read a secret or grant access; the narrow, detectable
-  exceptions (a stale state replayed for up to 24 hours, a competing tenant root) are listed in
-  CONTRACT.md.
-- **Not protected**: what the app does with a session. An app that holds a session can make
-  any request the credential allows; the secret itself never reaches it.
+You trust the TEE hardware and its attestation: AMD SEV-SNP on Azure, and Intel TDX with
+Google's attestation service on Confidential Space. You also trust the released enclave and
+guardian code, which you don't have to take on faith:
 
-The full model is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), and the public interface
-(roles, SDK surface, wire format, known limits) in [docs/CONTRACT.md](docs/CONTRACT.md).
+- every release builds reproducibly from a source commit;
+- M of N release keys sign it;
+- it goes into a transparency log that independent witnesses check;
+- it is time-locked, so it is public before anything accepts it.
+
+Seal's guardian keeps its root in Azure Key Vault under an immutable release policy, which
+adds Microsoft's attestation service and HSMs to that list.
+
+You don't trust the control plane, the hosts and cloud accounts the enclaves run in, the
+network, or Seal's operators. The tenant's own admins sign its state, and every version is
+logged. A change that widens access waits out a public pending window first. An untrusted
+party can deny service. It can't read a secret or grant access. The exceptions are narrow and
+detectable (replaying a stale state for up to 24 hours, a competing tenant root), and
+[CONTRACT.md](docs/CONTRACT.md#known-limits-and-unresolved-items) lists them.
+
+Seal doesn't protect what an app does with its session. An app that holds a session can make
+any request the credential allows. It just can't take the credential with it.
+
+The full model is in [ARCHITECTURE.md](docs/ARCHITECTURE.md). The public interface (roles,
+SDK surface, wire format, known limits) is in [CONTRACT.md](docs/CONTRACT.md).
 
 ## Status
 
-Pre-release; interfaces may still change. Built: Azure confidential containers (SEV-SNP) and
-GCP Confidential Space (TDX) enclaves, the local simulator, HTTP header injection, Postgres
-and Redis, sessions through the SDK tunnel, the guardian with M-of-N releases, a transparency
-log and succession, signed tenant state, network rules, telemetry, the `seal` CLI and the
-Rust, Python, Node/TypeScript and Go SDKs. Designed but not built: AWS Nitro Enclaves, the
-ClickHouse adapter, and in-enclave integrity detectors (the artifact-hash check is enforced).
-Accepted limits and open items are listed in
-[docs/CONTRACT.md](docs/CONTRACT.md#known-limits-and-unresolved-items).
+Pre-release. Interfaces may still change.
 
-The SDKs and the CLI are not yet published to crates.io, PyPI or npm, and `seal.zone/go` does
-not serve the Go module yet; install them from source (below).
+| Built | Designed, not built yet |
+| --- | --- |
+| Enclaves on Azure confidential containers (SEV-SNP) and GCP Confidential Space (TDX) | AWS Nitro Enclaves |
+| HTTP header injection, Postgres, Redis | The ClickHouse adapter |
+| The guardian, M-of-N releases, the transparency log, succession | In-enclave integrity detectors (the artifact-hash check is enforced) |
+| Signed tenant state, network rules, telemetry | |
+| The `seal` CLI; Rust, Python, Node/TypeScript and Go SDKs; the local simulator | |
+
+The SDKs and the CLI aren't on crates.io, PyPI or npm yet, and `seal.zone/go` doesn't serve
+the Go module yet. Install them from source (below). Accepted limits and open items are in
+[CONTRACT.md](docs/CONTRACT.md#known-limits-and-unresolved-items).
 
 ## Getting started
 
-You need Rust (the toolchain is pinned in `rust-toolchain.toml` and installed by rustup),
-Docker or Podman (the demo and the end-to-end tests run Postgres and Redis in containers), and
-Python 3.9+ for the Python SDK and the end-to-end tests. Node.js and Go are needed only for
-those SDKs.
+You need:
 
-Run the whole system on the simulator: a release, a guardian, the control plane, a tenant
-created with the CLI, an enclave, an API key sealed with no identity, and an app using it without
-ever holding it.
+- Rust. `rust-toolchain.toml` pins the toolchain and rustup installs it.
+- Docker or Podman. The demo and the end-to-end tests run Postgres and Redis in containers.
+- Python 3.9+, for the Python SDK and the end-to-end tests.
+- Node.js and Go, only for those SDKs.
+
+One script runs the whole system on the simulator. It makes a release, starts a guardian, the
+control plane and an enclave, creates a tenant with the CLI, seals an API key, and has an app
+use the key without ever holding it:
 
 ```sh
 scripts/sim-demo.sh
@@ -95,11 +150,11 @@ Tests:
 
 ```sh
 cargo test --workspace              # unit and integration tests
-scripts/e2e.sh                      # the end-to-end tests on the simulator (tests/e2e)
+scripts/e2e.sh                      # end-to-end tests on the simulator (tests/e2e)
 scripts/py-test.sh                  # the Python SDK against the simulator
 ```
 
-Install the SDKs and CLI from source:
+Install the SDKs and the CLI from source:
 
 ```sh
 pip install ./crates/sdk/seal-py                # Python: import seal
@@ -116,48 +171,57 @@ seal = { package = "sealzone", git = "https://github.com/sealzone/seal" }
 ## The `seal` CLI
 
 ```sh
-seal login                       # a code you approve in the browser; the login stays in the OS keychain (or a private file without one)
-seal use acme                    # pick a tenant: its root chain and state are verified here
-seal status                      # admin keys, state in force, grants, pending changes
+seal login          # approve a code in the browser; the login is kept in the OS keychain
+seal use acme       # pick a tenant; its root chain and state are verified here
+seal status         # admin keys, the state in force, grants, pending changes
 seal grant app checkout azure --object-id OID --entra-tenant TID --audience api://seal-acme
 seal secret --to https://api.openai.com/v1 --app checkout --header authorization < key.txt > openai.blob
-seal deploy azure                # an enclave replica in the VNet your apps run in: asks which, makes its subnet, NAT gateway, identity and audience, then the grant
+seal deploy azure   # an enclave replica in the VNet your apps run in
 ```
 
-A change is shown as its differences from the state in force (and whether it waits the
-pending window), then proposed: the CLI opens the console, where the admins sign it with
-their passkeys, and reports it once it is logged. `--key-file admin.key` signs with an admin
-key file instead (`seal key create --out admin.key`, then `seal settings admins add KEY`); the
-CLI stores no key of its own. `seal --help` lists every command; `seal changes --watch` follows
-pending changes; `seal completion zsh` writes completions. Every build verifies against the
-trust compiled in from `crates/sdk/seal-client/release-trust.json` (Seal's production public
-keys); `--trust FILE` verifies against another, such as the simulator's, and building with
-`SEAL_RELEASE_TRUST=FILE` compiles another in.
+`seal deploy azure` asks which VNet, then creates the replica's subnet, NAT gateway, identity
+and audience, and the grant. Without an OS keychain, `seal login` keeps the login in a private
+file.
+
+Every change shows its diff against the state in force, and whether it has to wait the pending
+window. The CLI then opens the console, where your admins sign it with their passkeys, and
+reports back once the change is logged. The CLI stores no key of its own. To sign with a key
+file instead, create one with `seal key create --out admin.key`, add it with
+`seal settings admins add KEY`, and pass `--key-file admin.key`.
+
+A few more: `seal changes --watch` follows pending changes, `seal completion zsh` writes shell
+completions, and `seal --help` lists everything.
+
+Each build verifies tenants against the release trust compiled in from
+`crates/sdk/seal-client/release-trust.json`, which holds Seal's production public keys.
+`--trust FILE` verifies against another trust file, such as the simulator's. Building with
+`SEAL_RELEASE_TRUST=FILE` compiles a different one in.
 
 ## Repository
 
-| Path | What |
+| Path | What's there |
 | --- | --- |
-| `crates/shared/` | Protocol types, crypto, attestation checks, transparency log, verification |
-| `crates/enclave/` | The enclave runtime, authorization, per-cloud wiring, integrity, and upstream adapters |
+| `crates/shared/` | Protocol types, crypto, attestation checks, the transparency log, verification |
+| `crates/enclave/` | The enclave runtime, authorization, per-cloud wiring, integrity, upstream adapters |
 | `crates/guardian/` | The guardian and its key sources (Azure Key Vault, Cloud KMS) |
 | `crates/control-plane/` | The untrusted control plane and the tenant registrar |
-| `crates/sdk/` | The Rust SDK (`sealzone`), the `seal` CLI, the Python, Node/TypeScript and Go SDKs (bindings over the Rust one) and the browser verifier (WASM) |
+| `crates/sdk/` | The Rust SDK (`sealzone`), the `seal` CLI, the Python, Node/TypeScript and Go SDKs (bindings over the Rust one), the browser verifier (WASM) |
 | `crates/sim/` | The simulator and release tooling |
 | `deploy/` | Reproducible image builds and [example release configurations](deploy/example/README.md) |
 | `docs/` | [Architecture](docs/ARCHITECTURE.md), [interface contract](docs/CONTRACT.md), [dependency policy](docs/DEPS.md) |
 | `tests/e2e/` | [End-to-end tests](tests/e2e/README.md) on the simulator, through the Python SDK and the CLI |
-| `scripts/` | The demo, the test runners, the dependency checks, vendoring for image builds |
+| `scripts/` | The demo, test runners, dependency checks, vendoring for image builds |
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for building, testing and the rules a change follows,
-and [RELEASING.md](RELEASING.md) for how SDKs and images are released.
+[CONTRIBUTING.md](CONTRIBUTING.md) covers building, testing and the rules every change
+follows, and how SDKs and images are [released](CONTRIBUTING.md#releasing).
 
 ## Security
 
-Please report vulnerabilities privately; see [SECURITY.md](SECURITY.md).
+Report vulnerabilities privately, as [SECURITY.md](SECURITY.md) describes. Not in a public
+issue.
 
 ## License
 
-Apache-2.0; see [LICENSE](LICENSE).
+Apache-2.0. See [LICENSE](LICENSE).

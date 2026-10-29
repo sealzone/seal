@@ -1,56 +1,97 @@
 # seal.zone/go: the Seal SDK for Go
 
-Use secrets without holding them. Anyone seals a secret for named apps; one of those apps starts a
-session on the sealed blob and gets a stand-in, while the enclave injects the real secret on
-the way to the upstream.
+Seal lets apps use secrets they never hold, because an attested enclave injects each secret
+into the app's upstream traffic.
+
+## Install
 
 ```sh
 go get seal.zone/go
 ```
 
+## Example
+
 ```go
-import seal "seal.zone/go"
+package main
 
-client, err := seal.FromEnv(ctx)
+import (
+	"context"
+	"fmt"
+	"log"
+	"os"
 
-// Seal: required arguments positional, options after.
-blob, err := client.Seal(ctx, secret, "https://api.openai.com/v1", []string{"checkout"},
-    seal.WithHeader("x-api-key"))
+	seal "seal.zone/go"
+)
 
-// Use it: the app gets a stand-in key, the enclave injects the real one.
-s, err := client.Session(ctx, blob, seal.WithKind(seal.KindHTTP))
-defer s.Close(ctx)                       // ends the session everywhere
-// point the app's HTTP client at s.URL(), with s.Key() where the real key would go
+func main() {
+	ctx := context.Background()
+	client, err := seal.FromEnv(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Seal the secret. Required arguments are positional, options come after.
+	blob, err := client.Seal(ctx, []byte(os.Getenv("OPENAI_API_KEY")), "https://api.openai.com/v1",
+		[]string{"checkout"}, seal.WithHeader("x-api-key"))
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Use it. The app gets a stand-in key, and the enclave injects the real one.
+	s, err := client.Session(ctx, blob, seal.WithKind(seal.KindHTTP))
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer s.Close(ctx) // ends the session everywhere
+
+	// Point the app's HTTP client at s.URL(), with s.Key() where the real key would go.
+	fmt.Println(s.URL(), s.Key())
+}
 ```
 
-The same flow in Python is `seal.seal(secret, to=..., apps=[...])` and `seal.session(blob)`;
-every SDK uses the same names and error codes.
+Anyone can seal a secret for named apps. One of those apps then starts a session on the
+sealed blob and gets a stand-in. The enclave injects the real secret on the way to the
+upstream.
 
-`seal.FromEnv` reads `SEAL_ENDPOINT` (the tenant's enclave replicas, comma-separated),
-`SEAL_TENANT` (`<tenant>` or `<tenant>@<root id>`) and the first workload identity found
-(`SEAL_APP_KEY`, Azure managed identity with `SEAL_AZURE_AUDIENCE`, a Kubernetes projected
-token, GCP, GitHub Actions). `seal.Connect(ctx, seal.Options{...})` sets any of them
-explicitly: `Endpoints`, `Tenant`, `RootID`, `Identity` (`seal.AppKeyIdentity`,
-`seal.AzureManagedIdentity`, `seal.KubernetesIdentity`, `seal.GCPIdentity`,
-`seal.GitHubActionsIdentity`, `seal.AWSIdentity` in `--aws` builds) and `Trust`
-(`seal.TrustFile("trust.json")` or `seal.TrustJSON(b)`). Every client verifies the enclave
-before it sends anything. Anyone may seal; whether this workload may start sessions is decided
-by the enclave from the tenant's grants.
+The same flow in Python is `seal.seal(secret, to=..., apps=[...])` and `seal.session(blob)`.
+Every SDK uses the same names and error codes.
+
+## Configuration
+
+`seal.FromEnv` reads three things from the environment:
+
+- `SEAL_ENDPOINT`, the tenant's enclave replicas, comma-separated
+- `SEAL_TENANT`, as `<tenant>` or `<tenant>@<root id>`
+- the first workload identity it finds: `SEAL_APP_KEY`, Azure managed identity with
+  `SEAL_AZURE_AUDIENCE`, a Kubernetes projected token, GCP, or GitHub Actions
+
+`seal.Connect(ctx, seal.Options{...})` sets any of them explicitly. The fields are:
+
+- `Endpoints`
+- `Tenant`
+- `RootID`
+- `Identity`: `seal.AppKeyIdentity`, `seal.AzureManagedIdentity`, `seal.KubernetesIdentity`,
+  `seal.GCPIdentity`, `seal.GitHubActionsIdentity`, or `seal.AWSIdentity` in `--aws` builds
+- `Trust`: `seal.TrustFile("trust.json")` or `seal.TrustJSON(b)`
+
+Every client verifies the enclave before it sends anything. Anyone may seal. The enclave
+decides from the tenant's grants whether this workload may start sessions.
 
 ## Sessions
 
-`client.Session(ctx, blob, opts...)` returns a session of whichever kind the blob is: HTTP
-(`URL`, `Key`) or database (`DSN`, `Protocol`). `seal.WithKind(seal.KindHTTP)` or
-`seal.KindDatabase` asks for one and fails with `seal.ErrBadRequest` before anything is sent
-if the blob is the other kind. Every session has `Info`, `Receipts`, `Extend` and `Close`.
+`client.Session(ctx, blob, opts...)` returns a session of whichever kind the blob is. An HTTP
+session has `URL` and `Key`. A database session has `DSN` and `Protocol`. To ask for one
+kind, pass `seal.WithKind(seal.KindHTTP)` or `seal.KindDatabase`. If the blob is the other
+kind, the call fails with `seal.ErrBadRequest` before anything is sent. Every session has
+`Info`, `Receipts`, `Extend` and `Close`.
 
-- **The tunnel**: `URL` and `DSN` point at a local proxy on `127.0.0.1` that the SDK runs to
-  the enclave; `Key` (and the DSN's password) is a stand-in worthless outside this process's
-  tunnel. None of them change for the life of the session. The SDK extends the session before
-  every expiry with a fresh identity proof; `Extend` does it now.
-- **`Close`** ends the session on the server: every replica refuses its tokens from then on.
-  If it fails, the end may not have reached every replica; call it again. A session
-  garbage-collected without a successful close is ended in the background.
+- **The tunnel.** `URL` and `DSN` point at a local proxy on `127.0.0.1` that the SDK runs to
+  the enclave. `Key`, and the DSN's password, is a stand-in that is worthless outside this
+  process's tunnel. None of them change for the life of the session. The SDK extends the
+  session with a fresh identity proof before every expiry. `Extend` does it now.
+- **`Close`** ends the session on the server, and from then on every replica refuses its
+  tokens. If `Close` fails, the end may not have reached every replica, so call it again. A
+  session that is garbage-collected without a successful close is ended in the background.
 
 `seal.WithMinTier(seal.TierHardened)` refuses weaker sessions.
 
@@ -70,28 +111,32 @@ client.Signal(ctx, "edr-alert", seal.SeverityHigh)
 
 ## Errors and contexts
 
-Every Seal error is a `*seal.Error` with `Code` (a `seal.ErrorCode`, the same wire names as
-the other SDKs) and `Message`; `errors.Is(err, seal.ErrNotAllowed)` matches by code, with one
-sentinel per code: `ErrExpired`, `ErrNotAllowed`, `ErrTierTooLow`, `ErrIntegrityFailed`,
-`ErrUnavailable`, `ErrPolicyDenied`, `ErrBudgetExceeded`, `ErrSessionExpired`,
-`ErrSessionEnded`, `ErrVerificationFailed`, `ErrBadRequest`, `ErrInternal`,
-`ErrResealRequired`. `ErrVerificationFailed` means the enclave could not be verified; it is
-never retried silently.
+Every Seal error is a `*seal.Error` with a `Code` and a `Message`. `Code` is a
+`seal.ErrorCode`, with the same wire names as the other SDKs. `errors.Is(err,
+seal.ErrNotAllowed)` matches by code. There is one sentinel per code:
 
-Calls block their goroutine. A context cancels its call: the call returns `ctx.Err()` at once
-and the core drops what it was doing (a session it was starting is ended in the background).
+`ErrExpired`, `ErrNotAllowed`, `ErrTierTooLow`, `ErrIntegrityFailed`, `ErrUnavailable`,
+`ErrPolicyDenied`, `ErrBudgetExceeded`, `ErrSessionExpired`, `ErrSessionEnded`,
+`ErrVerificationFailed`, `ErrBadRequest`, `ErrInternal`, `ErrResealRequired`.
 
-Not in this version: the session callbacks of the other SDKs (`reload_with`, `on_reseal`,
-`endpoint_reporter`). Sessions report the hash of the running executable, the core's default,
-or what the seal host agent says about this process with `seal.WithHostAgent()` (or
-`seal.WithHostAgentAt(socket, appKey)`).
+`ErrVerificationFailed` means the enclave could not be verified. The SDK never retries it
+silently.
+
+Calls block their goroutine. A context cancels its call. The call returns `ctx.Err()` at
+once, and the core drops what it was doing. If it was starting a session, that session is
+ended in the background.
+
+This version does not have the session callbacks of the other SDKs (`reload_with`,
+`on_reseal`, `endpoint_reporter`). By default a session reports the hash of the running
+executable. With `seal.WithHostAgent()` or `seal.WithHostAgentAt(socket, appKey)`, it reports
+what the seal host agent says about this process instead.
 
 ## How it is built
 
-The package is a cgo binding over the Rust SDK core through `seal-ffi`
-(`crates/sdk/seal-ffi`, its C ABI in `seal.h`); attestation, identity proofs and tunnels are
-the core's. cgo links the static library from `lib/<GOOS>_<GOARCH>/libseal_ffi.a` with the
-header `lib/seal.h`. In this repository `build.sh` builds them (they are not committed); the
+The package is a cgo binding over the Rust SDK core, through `seal-ffi` (`crates/sdk/seal-ffi`,
+with its C ABI in `seal.h`). Attestation, identity proofs and tunnels all run in the core.
+cgo links the static library `lib/<GOOS>_<GOARCH>/libseal_ffi.a` with the header
+`lib/seal.h`. In this repository, `build.sh` builds them, and they are not committed. The
 published module carries them prebuilt.
 
 ```sh

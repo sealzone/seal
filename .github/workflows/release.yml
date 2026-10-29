@@ -3,7 +3,7 @@
 # with its prebuilt static libraries to github.com/sealzone/seal-go. Every build compiles in
 # the production release trust, crates/sdk/seal-client/release-trust.json. Enclave and
 # guardian images are released separately (seal-release, M-of-N signing).
-# See RELEASING.md for the secrets and variables this needs.
+# See CONTRIBUTING.md "Releasing" for the secrets and variables this needs.
 name: release
 
 on:
@@ -195,7 +195,7 @@ jobs:
       - name: Lay out the packages
         run: node crates/sdk/seal-node/npm-packages.mjs addons npm "${{ needs.check.outputs.version }}"
       # No token: each package trusts this workflow and environment (`npm trust github`, see
-      # RELEASING.md), and npm exchanges the job's OIDC token for a one-time publish token.
+      # CONTRIBUTING.md "Releasing"), and npm exchanges the job's OIDC token for a one-time publish token.
       - name: Publish the platform packages, then @sealzone/sdk
         if: env.PUBLISH == 'true'
         run: |
