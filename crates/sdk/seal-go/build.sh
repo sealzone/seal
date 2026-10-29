@@ -41,5 +41,11 @@ target=$(cargo metadata --format-version 1 --no-deps | sed -n 's/.*"target_direc
 platform="$(go env GOOS)_$(go env GOARCH)"
 mkdir -p "$here/lib/$platform"
 cp "$target/$profile/libseal_ffi.a" "$here/lib/$platform/libseal_ffi.a"
+# Go's linker uses neither the LLVM bitcode rustc embeds for cross-language LTO (two thirds of
+# the archive) nor debug info; without them the archive stays well under GitHub's 100 MB file
+# limit for the seal-go repository.
+if [[ $(go env GOOS) == linux ]]; then
+    strip --strip-debug --remove-section=.llvmbc --remove-section=.llvmcmd "$here/lib/$platform/libseal_ffi.a"
+fi
 cp crates/sdk/seal-ffi/seal.h "$here/lib/seal.h"
 echo "$here/lib/$platform/libseal_ffi.a (${profile}${features:+, ${features[*]}})"
