@@ -4,6 +4,11 @@
   "description": "Seal: use secrets without holding them.",
   "license": "Apache-2.0",
   "homepage": "https://seal.zone",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sealzone/seal.git",
+    "directory": "crates/sdk/seal-node"
+  },
   "main": "index.js",
   "types": "index.d.ts",
   "exports": {

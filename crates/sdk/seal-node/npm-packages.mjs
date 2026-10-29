@@ -36,6 +36,8 @@ for (const file of readdirSync(addons).filter((f) => /^seal\..+\.node$/.test(f))
     description: `The native addon of @sealzone/sdk for ${platform}.`,
     license: main.license,
     homepage: main.homepage,
+    // npm's trusted publishing and provenance match it against the publishing repository.
+    repository: main.repository,
     main: file,
     files: [file],
     ...fields(platform),

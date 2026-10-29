@@ -47,7 +47,7 @@ Windows is not built: neither the npm package nor the Go module supports it yet.
 | `crates/sdk/seal-client/release-trust.json`: the production trust (above), from the key ceremony | committed to this repository | every build |
 | crates.io trusted publisher for every published crate: this repository, workflow `release.yml`, environment `crates-io` (the first version of each crate is published by hand with a token; trusted publishing applies after) | crates.io | `publish-crates` |
 | PyPI trusted publisher for `sealzone`: this repository, workflow `release.yml`, environment `pypi` | pypi.org | `publish-pypi` |
-| `NPM_TOKEN`: an automation token of the `@sealzone` npm organization | secret in environment `npm` | `publish-npm` |
+| npm trusted publisher for each `@sealzone/sdk*` package: this repository, workflow `release.yml`, environment `npm` (`npm trust github <package> --file release.yml --repo sealzone/seal --env npm --allow-publish`; npm trusts only existing packages, so a package's first version is published by hand) | npmjs.com | `publish-npm` |
 | `SEAL_GO_DEPLOY_KEY`: a deploy key with write access to `sealzone/seal-go` | secret in environment `go` | `publish-go` |
 | `seal.zone/go` answers `go get` with `<meta name="go-import" content="seal.zone/go git https://github.com/sealzone/seal-go">` | the seal.zone website | Go users |
 

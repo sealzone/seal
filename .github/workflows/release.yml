@@ -183,25 +183,27 @@ jobs:
     runs-on: ubuntu-latest
     environment: npm
     permissions:
-      id-token: write # npm provenance
+      id-token: write # npm trusted publishing, which also signs provenance
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: "22", registry-url: "https://registry.npmjs.org" }
+      # Trusted publishing needs npm 11.5.1 or later; Node 22 ships 10.
+      - run: npm install -g npm@11
       - uses: actions/download-artifact@v4
         with: { pattern: "addon-*", path: addons, merge-multiple: true }
       - name: Lay out the packages
         run: node crates/sdk/seal-node/npm-packages.mjs addons npm "${{ needs.check.outputs.version }}"
+      # No token: each package trusts this workflow and environment (`npm trust github`, see
+      # RELEASING.md), and npm exchanges the job's OIDC token for a one-time publish token.
       - name: Publish the platform packages, then @sealzone/sdk
         if: env.PUBLISH == 'true'
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           for dir in npm/*/; do
             [[ "$dir" == npm/sdk/ ]] && continue
-            npm publish --access public --provenance "$dir"
+            npm publish --access public "$dir"
           done
-          npm publish --access public --provenance npm/sdk
+          npm publish --access public npm/sdk
 
   publish-go:
     needs: [check, go]
