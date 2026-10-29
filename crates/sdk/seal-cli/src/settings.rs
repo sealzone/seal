@@ -151,15 +151,25 @@ pub enum IntegrityCmd {
     },
 }
 
+/// The Seal host agent (App Integrity add-on) as an integrity source, and its root: Seal's CA, the
+/// same key for every tenant. The release pipeline's CA signs each agent release's leaf, the agent
+/// carries leaf and proof, and the enclave checks the proof against the key the tenant enrolled.
+const HOST_AGENT: &str = "host-agent";
+const HOST_AGENT_CA: &str = "42623498da78de07c9a3d3ef25ce3975eec0093c476fc9852956e8506670b4bd";
+
+fn host_agent_ca() -> PublicKey {
+    HOST_AGENT_CA.parse().expect("HOST_AGENT_CA is 64 hex digits")
+}
+
 #[derive(Subcommand, Debug)]
 pub enum SourceCmd {
     /// Trust signals signed by this source
     Add {
         /// The source's name: 1-64 of [a-z0-9-.]
         name: String,
-        /// Its Ed25519 public key (hex)
+        /// Its Ed25519 public key (hex); for host-agent, Seal's CA unless given
         #[arg(long, value_name = "HEX")]
-        public_key: PublicKey,
+        public_key: Option<PublicKey>,
     },
     /// Stop trusting a source
     Rm {
@@ -670,6 +680,11 @@ async fn integrity(env: &Env, cmd: IntegrityCmd) -> anyhow::Result<()> {
         IntegrityCmd::Source(SourceCmd::Add { name, public_key }) => Box::new(move |s| {
             seal_proto::integrity::validate_code(&name)
                 .map_err(|_| invalid("a source name is 1-64 chars of [a-z0-9-.]"))?;
+            let public_key = match public_key {
+                Some(key) => key,
+                None if name == HOST_AGENT => host_agent_ca(),
+                None => return Err(invalid(format!("name the key {name} signs with: --public-key HEX"))),
+            };
             s.integrity.sources.insert(name, public_key);
             Ok(())
         }),
@@ -789,4 +804,14 @@ pub async fn init(env: &mut Env, args: InitArgs) -> anyhow::Result<()> {
     say!("{}", ui::ok(&format!("created tenant {tenant}, root id {}", init.root_id)));
     println!("SEAL_TENANT={tenant}@{}", init.root_id);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_host_agent_ca_is_a_public_key() {
+        assert_eq!(host_agent_ca().to_string(), HOST_AGENT_CA);
+    }
 }
