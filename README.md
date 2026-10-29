@@ -45,8 +45,6 @@ The Rust SDK uses the same names: `seal.seal(secret, to, apps).header(..).await?
 
 ## Steal our key
 
-<a href="https://seal.zone/challenge"><img src="docs/assets/challenge.svg" alt="The Seal challenge: steal the key, $5,000 to the first person who does. seal.zone/challenge" width="100%"></a>
-
 We think this works, so we put money on it. An AI chatbot runs on a Linux machine and calls a
 model with a real API key through Seal. Take a place in line at
 [seal.zone/challenge](https://seal.zone/challenge) and you get that machine for ten minutes,
