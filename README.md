@@ -123,21 +123,6 @@ cargo add sealzone                   # Rust: use seal::Client
 cargo install sealzone-cli           # the `seal` command on its own
 ```
 
-## Status
-
-The SDKs and the CLI are released. Until 1.0, minor versions may still change interfaces.
-
-| Built | Designed, not built yet |
-| --- | --- |
-| Enclaves on Azure confidential containers (SEV-SNP) and GCP Confidential Space (TDX) | AWS Nitro Enclaves |
-| HTTP header injection, Postgres, Redis | The ClickHouse adapter |
-| The guardian, M-of-N releases, the transparency log, succession | In-enclave integrity detectors (the artifact-hash check is enforced) |
-| Signed tenant state, network rules, telemetry | |
-| The `seal` CLI; Rust, Python, Node/TypeScript and Go SDKs; the local simulator | |
-
-Accepted limits and open items are in
-[CONTRACT.md](docs/CONTRACT.md#known-limits-and-unresolved-items).
-
 ## Run it locally
 
 You need:
@@ -213,6 +198,7 @@ Each build verifies tenants against the release trust compiled in from
 | `crates/sim/` | The simulator and release tooling |
 | `deploy/` | Reproducible image builds and [example release configurations](deploy/example/README.md) |
 | `docs/` | [Architecture](docs/ARCHITECTURE.md), [interface contract](docs/CONTRACT.md), [dependency policy](docs/DEPS.md) |
+| `ROADMAP.md` | [What's shipped, what's next](ROADMAP.md) |
 | `tests/e2e/` | [End-to-end tests](tests/e2e/README.md) on the simulator, through the Python SDK and the CLI |
 | `scripts/` | The demo, test runners, dependency checks, vendoring for image builds |
 
