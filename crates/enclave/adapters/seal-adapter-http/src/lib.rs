@@ -12,7 +12,9 @@
 //!   `method-override`) also take as the method. When the policy restricts methods, a
 //!   `multipart/form-data` body is refused, and an `application/x-www-form-urlencoded` one
 //!   (or a body without a `Content-Type`, which Rack parses as a form) is read whole, up to
-//!   `FORM_MAX_BYTES`, and refused if it has a `_method` field; other bodies stream;
+//!   `FORM_MAX_BYTES`, and refused if it has a `_method` field. So is a body Laravel reads as
+//!   JSON (a `Content-Type` containing `/json` or `+json`), refused if its top-level object has
+//!   a `_method` key or if it does not parse; other bodies stream;
 //! - the upstream request's `Accept-Encoding` is `identity`, whatever the client sent, so
 //!   responses reach the scrubber uncompressed; a response that is encoded anyway is refused;
 //! - `Range` and `If-Range` are dropped, so an echo of the secret comes back whole, never in
@@ -29,7 +31,8 @@
 //!
 //! Responses stream back without buffering (chunked and SSE included): header values,
 //! body and trailers pass through a `Scrubber` whose needles are the secret and the rendered
-//! header value; the upstream's reason phrase is never relayed. Each request ends with one
+//! header value, and a header or trailer whose name carries a needle in any ASCII case (hyper
+//! lowercases names) is dropped; the upstream's reason phrase is never relayed. Each request ends with one
 //! `Session::complete`: its outcome and the request and response body byte counts; a response
 //! cut before its end (the client went away, the session ended) is `Outcome::Aborted`.
 //!
@@ -89,8 +92,8 @@ const ACTION_PATH_MAX: usize = 128;
 /// path (prefix policy) in place of the request line's. A request carrying one is refused.
 const OVERRIDE_HEADERS: [&str; 5] =
     ["x-http-method-override", "x-http-method", "x-method-override", "x-original-url", "x-rewrite-url"];
-/// Under method rules, a form body is read whole up to this size to look for a `_method`
-/// field before it goes upstream; a longer one is refused.
+/// Under method rules, a form or JSON body is read whole up to this size to look for a
+/// `_method` field before it goes upstream; a longer one is refused.
 const FORM_MAX_BYTES: usize = 1 << 20;
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
@@ -358,11 +361,12 @@ impl Conn {
         parts.extensions = Default::default();
         parts.version = Version::HTTP_11;
         strip_hop_by_hop(&mut parts.headers);
-        let mut scrubber = scrubber(&*session);
-        scrub_headers(&mut parts.headers, &mut scrubber);
+        let (mut scrubber, mut names) = scrubbers(&*session);
+        scrub_headers(&mut parts.headers, &mut scrubber, &mut names);
         let body = DownBody {
             inner: body,
             scrubber,
+            names,
             pending: VecDeque::new(),
             inner_done: false,
             pushed: 0,
@@ -533,10 +537,12 @@ fn form_kind(req: &Request<ReqBody>) -> Option<Form> {
     kind
 }
 
-/// Under method rules, reads a URL-encoded body whole and refuses it if it has a `_method`
-/// field; any other request passes through still streaming.
+/// Under method rules, reads a URL-encoded or JSON body whole and refuses it if it has a
+/// `_method` field (`has_method_field`, `json_has_method`); any other request passes through
+/// still streaming.
 async fn read_form(session: &dyn Session, req: Request<ReqBody>) -> Result<Request<ReqBody>, Refusal> {
-    if !methods_restricted(session) || form_kind(&req) != Some(Form::UrlEncoded) || req.body().is_end_stream() {
+    let (form, json) = (form_kind(&req) == Some(Form::UrlEncoded), json_body(&req));
+    if !methods_restricted(session) || !(form || json) || req.body().is_end_stream() {
         return Ok(req);
     }
     let (parts, mut body) = req.into_parts();
@@ -547,15 +553,40 @@ async fn read_form(session: &dyn Session, req: Request<ReqBody>) -> Result<Reque
         };
         if let Some(data) = frame.data_ref() {
             if buf.len() + data.len() > FORM_MAX_BYTES {
-                return Err(Refusal::close(ErrorCode::PolicyDenied, "the form body is too large to check"));
+                return Err(Refusal::close(ErrorCode::PolicyDenied, "the request body is too large to check"));
             }
             buf.extend_from_slice(data);
         }
     }
-    if has_method_field(&buf) {
+    if (form && has_method_field(&buf)) || (json && json_has_method(&buf)) {
         return Err(Refusal::keep(ErrorCode::PolicyDenied, "the request is outside the blob's policy"));
     }
     Ok(Request::from_parts(parts, ReqBody::Buffered(Some(Bytes::from(buf)))))
+}
+
+/// Whether Laravel reads the body as JSON (`Request::isJson`): a `Content-Type` that contains
+/// `/json` or `+json` anywhere, parameters included (in any case here).
+fn json_body(req: &Request<ReqBody>) -> bool {
+    req.headers().get_all(header::CONTENT_TYPE).iter().any(|value| {
+        let text = value.as_bytes().to_ascii_lowercase();
+        text.windows(5).any(|w| w == b"/json" || w == b"+json")
+    })
+}
+
+/// Whether a JSON body has a `_method` key (any ASCII case) at the top level of an object,
+/// the only place Laravel looks. A body serde_json cannot parse counts as having one: PHP's
+/// parser takes some that serde_json refuses (nesting past 128 levels, numbers out of `f64`
+/// range), and such a body is not let past a check that could not read it. A blank body has
+/// none: PHP reads no fields from it.
+fn json_has_method(body: &[u8]) -> bool {
+    if body.iter().all(u8::is_ascii_whitespace) {
+        return false;
+    }
+    match serde_json::from_slice::<serde_json::Value>(body) {
+        Ok(serde_json::Value::Object(fields)) => fields.keys().any(|k| k.eq_ignore_ascii_case("_method")),
+        Ok(_) => false,
+        Err(_) => true,
+    }
 }
 
 /// Whether URL-encoded `fields` (a query string or a form body) name a `_method` field, as
@@ -667,17 +698,38 @@ fn encoded(headers: &HeaderMap) -> bool {
         || header_tokens(headers, &header::TRANSFER_ENCODING).any(|t| !plain(t, true))
 }
 
-fn scrubber(session: &dyn Session) -> Scrubber {
+/// The response's scrubber, whose needles are the secret and the rendered header value, and
+/// the same needles in any ASCII case, for header names.
+fn scrubbers(session: &dyn Session) -> (Scrubber, Scrubber) {
     let secret = session.secret();
     let mut needles = vec![Zeroizing::new(secret.to_vec())];
     if let Some(injection) = session.policy().injection() {
         needles.push(injection.render(secret));
     }
-    Scrubber::new(needles)
+    (Scrubber::new(needles.clone()), Scrubber::ignoring_ascii_case(needles))
 }
 
-/// Masks every header value on its own. `scrubber` must hold nothing back when called.
-fn scrub_headers(headers: &mut HeaderMap, scrubber: &mut Scrubber) {
+/// Drops every header whose name carries a needle in any of its forms (`names`, which ignores
+/// ASCII case: hyper lowercases names, so a name keeps no case to match exactly), then masks
+/// every value on its own. Dropped, not masked: `*` is a valid name character, but masked
+/// names can collide with each other or with a real header, and no client needs a name made
+/// of the secret; refusing instead would not work for trailers, which come after the response
+/// has started. Only a whole occurrence matches, as in values. Both scrubbers must hold
+/// nothing back when called.
+fn scrub_headers(headers: &mut HeaderMap, scrubber: &mut Scrubber, names: &mut Scrubber) {
+    let carrying: Vec<HeaderName> = headers
+        .keys()
+        .filter(|name| {
+            let name = name.as_str().as_bytes();
+            let mut out = names.push(name);
+            out.extend(names.flush());
+            out != name
+        })
+        .cloned()
+        .collect();
+    for name in carrying {
+        headers.remove(name);
+    }
     for value in headers.values_mut() {
         let mut out = scrubber.push(value.as_bytes());
         out.extend(scrubber.flush());
@@ -779,6 +831,8 @@ struct Report {
 struct DownBody {
     inner: Incoming,
     scrubber: Scrubber,
+    /// Header names in any ASCII case, for the trailers (`scrub_headers`).
+    names: Scrubber,
     /// Scrubbed frames not yet returned.
     pending: VecDeque<Frame<Bytes>>,
     inner_done: bool,
@@ -850,7 +904,7 @@ impl Body for DownBody {
                         let tail = this.scrubber.finish();
                         this.queue(tail);
                         if let Ok(mut trailers) = frame.into_trailers() {
-                            scrub_headers(&mut trailers, &mut this.scrubber);
+                            scrub_headers(&mut trailers, &mut this.scrubber, &mut this.names);
                             this.pending.push_back(Frame::trailers(trailers));
                         }
                     }

@@ -182,6 +182,62 @@ async fn tunnel_preamble_and_extend_preamble() {
     assert_eq!(status, 200);
 }
 
+/// A `Challenge` preamble is answered for its nonce and the connection's exporter, and the
+/// `Connect` or `Extend` preamble that follows is served as without one; a second challenge is
+/// refused.
+#[tokio::test]
+async fn a_tunnel_answers_a_challenge_before_its_preamble() {
+    use seal_proto::api::ChallengedAttestation;
+
+    let h = Boot::new().start().await.map_err(|(e, _)| e).unwrap();
+    let session = h.sealed_session().await;
+    let (trust, root_id) = (h.world.trust(), h.world.root_id);
+    let challenged = |nonce: [u8; 32]| {
+        let (h, trust) = (&h, &trust);
+        async move {
+            let (mut tls, served) = h.tls(Some(&TunnelPreamble::Challenge { nonce })).await;
+            let label = seal_proto::api::ATTESTATION_EXPORTER_LABEL;
+            let exporter = tls.get_ref().1.export_keying_material([0u8; 32], label, None).unwrap();
+            let mut len = [0u8; 4];
+            tls.read_exact(&mut len).await.unwrap();
+            let mut body = vec![0u8; u32::from_be_bytes(len) as usize];
+            tls.read_exact(&mut body).await.unwrap();
+            let answer: ChallengedAttestation = seal_proto::codec::from_canonical(&body).unwrap();
+            let verified = seal_verify::attestation::verify_challenged(
+                &answer,
+                &nonce,
+                &exporter,
+                trust,
+                &acme(),
+                Some(&root_id),
+                wall(),
+            );
+            assert!(verified.is_ok(), "{verified:?}");
+            (tls, served)
+        }
+    };
+
+    let (mut tls, served) = challenged([1; 32]).await;
+    tls.write_all(&seal_proto::tunnel::encode(&connect_preamble(&session.token))).await.unwrap();
+    let (sender, connection) = hyper::client::conn::http1::handshake(TokioIo::new(tls)).await.unwrap();
+    tokio::spawn(connection);
+    let mut conn = Conn { sender, served };
+    let (status, body) = get(&mut conn, "/v1/chat", LOCAL_KEY).await;
+    assert_eq!((status, body.as_str()), (200, "ok"));
+
+    let (mut tls, served) = challenged([2; 32]).await;
+    let extend = TunnelPreamble::Extend { token: session.token.duplicate() };
+    tls.write_all(&seal_proto::tunnel::encode(&extend)).await.unwrap();
+    let mut answer = Vec::new();
+    tls.read_to_end(&mut answer).await.unwrap();
+    assert_eq!(answer, [seal_proto::tunnel::EXTEND_OK]);
+    served.await.unwrap().unwrap();
+
+    let (mut tls, served) = challenged([3; 32]).await;
+    tls.write_all(&seal_proto::tunnel::encode(&TunnelPreamble::Challenge { nonce: [4; 32] })).await.unwrap();
+    assert_eq!(served.await.unwrap().unwrap_err().code, ErrorCode::BadRequest);
+}
+
 #[tokio::test]
 async fn refuses_a_local_key_that_is_not_the_tunnels() {
     let h = Boot::new().start().await.map_err(|(e, _)| e).unwrap();
@@ -388,16 +444,16 @@ async fn a_cut_transfer_is_recorded_as_aborted() {
 
 #[tokio::test]
 async fn fails_closed_once_the_state_is_past_fresh_until() {
-    // The freshness statement runs out four seconds after boot.
+    // The freshness statement runs out eight seconds after boot: room for a loaded test run.
     let mut boot = Boot::new();
-    boot.bundle = boot.world.publish_fresh_at(wall() - DAY + 4, |_| {});
+    boot.bundle = boot.world.publish_fresh_at(wall() - DAY + 8, |_| {});
     let h = boot.start().await.map_err(|(e, _)| e).unwrap();
     let session = h.sealed_session().await;
     let session_id = session.info.session_id;
     let mut conn = h.connect(&session.token).await;
     assert_eq!(get(&mut conn, "/v1/chat", LOCAL_KEY).await.0, 200);
 
-    let ended = tokio::time::timeout(Duration::from_secs(10), h.live(&session_id)[0].ended()).await.unwrap();
+    let ended = tokio::time::timeout(Duration::from_secs(14), h.live(&session_id)[0].ended()).await.unwrap();
     assert_eq!(ended, ErrorCode::Unavailable);
     // Live sessions end on the estimate's latest end, up to a second before a clock reading does.
     tokio::time::sleep(Duration::from_millis(2100)).await;

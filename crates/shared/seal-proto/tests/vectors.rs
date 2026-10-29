@@ -627,6 +627,9 @@ fn build() -> Vec<Vector> {
     // The signature envelope.
     v.cbor("signed/envelope", &seal_proto::signed::Signed { body: 1u8, signatures: vec![sig()] });
 
+    // Framing added within v1.
+    v.raw("tunnel/challenge", &seal_proto::tunnel::encode(&TunnelPreamble::Challenge { nonce: [0x55; 32] }));
+
     v.0
 }
 

@@ -1,7 +1,11 @@
 //! Local tunnel: one loopback listener per session, on 127.0.0.1 with a random port.
 //! Each accepted connection → TLS to a replica's port (pinned key, ALPN
-//! `seal_proto::tunnel::ALPN`) → `tunnel::encode(TunnelPreamble::Connect)` → bidirectional
-//! copy. No protocol parsing; the proxy itself runs in the enclave.
+//! `seal_proto::tunnel::ALPN`) → `TunnelPreamble::Challenge`, whose answer must verify
+//! (`verify::check_challenged`) → `tunnel::encode(TunnelPreamble::Connect)` → bidirectional
+//! copy. No protocol parsing; the proxy itself runs in the enclave. The challenge proves the
+//! connection ends in an attested replica, not in a holder of copied service keys, before the
+//! session token goes on it; a replica that cannot answer gets no token, and the connection
+//! is refused.
 //!
 //! Every `SESSION_EXTEND_SECS` it extends the session (`Session::extend`: fresh
 //! identity proof and endpoint report), then sends `TunnelPreamble::Extend` with the new token
@@ -18,9 +22,10 @@
 //! are retried as for any call (`retry`, up to `UNREACHABLE_WAIT_SECS`), until the app closes
 //! it or the tunnel stops.
 //!
-//! Each connection pays TCP and TLS to the replica; the tunnel keeps one spare, opened right
-//! after a connection takes the last one and kept at most `SPARE_SECS`, so connections that
-//! come in bursts (a pool filling up) start without either.
+//! Each connection pays TCP, TLS and the challenge's round trip to the replica; the tunnel keeps
+//! one spare, challenged, opened right after a connection takes the last one and kept at most
+//! `SPARE_SECS`, so connections that come in bursts (a pool filling up) start without any of
+//! them.
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -28,7 +33,8 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use seal_proto::tunnel::{encode, TunnelConnect, TunnelPreamble, EXTEND_OK};
+use seal_proto::api::ChallengedAttestation;
+use seal_proto::tunnel::{encode, TunnelConnect, TunnelPreamble, EXTEND_OK, MAX_ANSWER_LEN};
 use seal_proto::Bearer;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -38,13 +44,14 @@ use tokio_rustls::client::TlsStream;
 
 use crate::retry::{self, Pass};
 use crate::transport::{self, ConnectError};
-use crate::verify::VerifiedEnclave;
+use crate::verify::{self, VerifiedEnclave};
 use crate::{Client, ClientError};
 
 /// The session's current token, shared by the tunnel and the session that extends it.
 pub(crate) type TokenCell = Mutex<Bearer>;
 
-/// How long a spare connection is kept: under the enclave's 30 s wait for a preamble.
+/// How long a spare connection is kept: under the enclave's 30 s wait for a preamble after
+/// the challenge's answer.
 const SPARE_SECS: u64 = 20;
 /// Copy buffer per direction and connection.
 const COPY_BUFFER: usize = 64 << 10;
@@ -65,7 +72,7 @@ impl std::fmt::Debug for Tunnel {
 /// A replica's host and port.
 type Replica = (String, u16);
 
-/// A replica connection, handshaken and waiting for its preamble.
+/// A replica connection, handshaken, challenged and waiting for its preamble.
 struct Spare {
     replica: usize,
     /// The enclave it was opened to: a spare from before a re-verification is not used.
@@ -184,8 +191,7 @@ impl Shared {
         for replica in replicas {
             let (host, port) = &self.replicas[replica];
             let result = async {
-                let mut tls =
-                    transport::tls_connect(enclave.tunnel_config(), host, *port).await.map_err(ClientError::from)?;
+                let mut tls = connect(&self.client, &enclave, host, *port).await.map_err(ClientError::from)?;
                 let preamble = encode(&TunnelPreamble::Extend { token: token.duplicate() });
                 tls.write_all(&preamble).await.map_err(|e| ClientError::Network(e.to_string()))?;
                 tls.flush().await.map_err(|e| ClientError::Network(e.to_string()))?;
@@ -215,27 +221,27 @@ impl Shared {
         usable.then_some((spare.replica, spare.tls))
     }
 
-    /// A connection to the preferred replica; when it does not answer, to whichever other
-    /// answers first, which becomes the preferred one. A replica presenting a key other than
-    /// the attested one ends the search.
+    /// A challenged connection to the preferred replica; when it does not answer, to whichever
+    /// other answers first, which becomes the preferred one. A replica presenting a key other
+    /// than the attested one, or failing its challenge, ends the search.
     async fn open(&self, enclave: &Arc<VerifiedEnclave>) -> Pass<(usize, TlsStream<TcpStream>)> {
         let first = self.preferred.load(Ordering::Relaxed);
         let (host, port) = &self.replicas[first];
-        let mut last = match transport::tls_connect(enclave.tunnel_config(), host, *port).await {
+        let mut last = match connect(&self.client, enclave, host, *port).await {
             Ok(tls) => return Pass::Answered(Ok((first, tls))),
-            Err(e @ ConnectError::Pin) => {
-                tracing::warn!(host, "tunnel: replica presented a key other than the attested one");
-                return Pass::Answered(Err(e.into()));
+            Err(OpenError::Refused(e)) => {
+                tracing::warn!(host, error = %e, "tunnel: replica refused");
+                return Pass::Answered(Err(e));
             }
-            Err(ConnectError::Unreachable(m)) => {
+            Err(OpenError::Unreachable(m)) => {
                 tracing::debug!(error = %m, "tunnel: replica unreachable");
                 m
             }
         };
         let mut racing = tokio::task::JoinSet::new();
         for (i, (host, port)) in self.replicas.iter().enumerate().filter(|(i, _)| *i != first) {
-            let (config, host, port) = (enclave.tunnel_config(), host.clone(), *port);
-            racing.spawn(async move { (i, transport::tls_connect(config, &host, port).await) });
+            let (client, enclave, host, port) = (self.client.clone(), enclave.clone(), host.clone(), *port);
+            racing.spawn(async move { (i, connect(&client, &enclave, &host, port).await) });
         }
         while let Some(done) = racing.join_next().await {
             match done {
@@ -243,14 +249,11 @@ impl Shared {
                     self.preferred.store(i, Ordering::Relaxed);
                     return Pass::Answered(Ok((i, tls)));
                 }
-                Ok((i, Err(e @ ConnectError::Pin))) => {
-                    tracing::warn!(
-                        host = self.replicas[i].0,
-                        "tunnel: replica presented a key other than the attested one"
-                    );
-                    return Pass::Answered(Err(e.into()));
+                Ok((i, Err(OpenError::Refused(e)))) => {
+                    tracing::warn!(host = self.replicas[i].0, error = %e, "tunnel: replica refused");
+                    return Pass::Answered(Err(e));
                 }
-                Ok((_, Err(ConnectError::Unreachable(m)))) => {
+                Ok((_, Err(OpenError::Unreachable(m)))) => {
                     tracing::debug!(error = %m, "tunnel: replica unreachable");
                     last = m;
                 }
@@ -270,7 +273,7 @@ impl Shared {
         tokio::spawn(async move {
             let replica = shared.preferred.load(Ordering::Relaxed);
             let (host, port) = &shared.replicas[replica];
-            let opened = transport::tls_connect(enclave.tunnel_config(), host, *port).await;
+            let opened = connect(&shared.client, &enclave, host, *port).await;
             if let (Ok(tls), false) = (opened, *shared.stop.borrow()) {
                 let mut spare = shared.spare.lock().unwrap_or_else(|e| e.into_inner());
                 if spare.is_none() {
@@ -280,6 +283,65 @@ impl Shared {
             shared.refilling.store(false, Ordering::Release);
         });
     }
+}
+
+/// Why a replica connection was not opened.
+enum OpenError {
+    /// Nothing was sent but the challenge: try another replica.
+    Unreachable(String),
+    /// The replica presented another key than the attested one, or its answer to the
+    /// challenge did not verify (a release older than the challenge included).
+    Refused(ClientError),
+}
+
+impl From<OpenError> for ClientError {
+    fn from(e: OpenError) -> Self {
+        match e {
+            OpenError::Unreachable(m) => ClientError::Network(m),
+            OpenError::Refused(e) => e,
+        }
+    }
+}
+
+/// TLS to a replica, pinned to `enclave`'s key, and the challenge (module docs): a fresh nonce
+/// in a `Challenge` preamble, answered with a `ChallengedAttestation` for it and this
+/// connection's exporter. Only a connection whose answer verifies is returned.
+async fn connect(
+    client: &Client,
+    enclave: &VerifiedEnclave,
+    host: &str,
+    port: u16,
+) -> Result<TlsStream<TcpStream>, OpenError> {
+    let mut tls = transport::tls_connect(enclave.tunnel_config(), host, port).await.map_err(|e| match e {
+        e @ ConnectError::Pin => OpenError::Refused(e.into()),
+        ConnectError::Unreachable(m) => OpenError::Unreachable(m),
+    })?;
+    let exporter = verify::tls_exporter(&tls).map_err(OpenError::Refused)?;
+    let nonce = *seal_crypto::Key32::generate(&mut seal_crypto::UnwrapErr(seal_crypto::SysRng)).expose();
+    let answer = async {
+        let unreachable = |e: std::io::Error| OpenError::Unreachable(format!("tunnel challenge to {host}:{port}: {e}"));
+        let unanswered = || {
+            OpenError::Refused(ClientError::Verification(format!(
+                "{host}:{port} did not answer the tunnel challenge (a release older than this SDK?)"
+            )))
+        };
+        tls.write_all(&encode(&TunnelPreamble::Challenge { nonce })).await.map_err(unreachable)?;
+        tls.flush().await.map_err(unreachable)?;
+        let mut len = [0u8; 4];
+        tls.read_exact(&mut len).await.map_err(|_| unanswered())?;
+        let len = u32::from_be_bytes(len);
+        if len == 0 || len > MAX_ANSWER_LEN {
+            return Err(unanswered());
+        }
+        let mut body = vec![0u8; len as usize];
+        tls.read_exact(&mut body).await.map_err(|_| unanswered())?;
+        seal_proto::codec::from_canonical::<ChallengedAttestation>(&body).map_err(|_| unanswered())
+    };
+    let answer = tokio::time::timeout(transport::EXCHANGE_TIMEOUT, answer)
+        .await
+        .map_err(|_| OpenError::Unreachable(format!("tunnel challenge to {host}:{port}: timed out")))??;
+    client.check_challenged(&answer, &nonce, &exporter, enclave).map_err(OpenError::Refused)?;
+    Ok(tls)
 }
 
 /// Whether a spare has nothing to read: a replica that went away has closed it (EOF, a reset,
@@ -350,7 +412,8 @@ async fn connection(shared: Arc<Shared>, mut inbound: TcpStream) {
     *shared.live.lock().unwrap_or_else(|e| e.into_inner()).entry(replica).or_default() += 1;
     let _live = LiveGuard { shared: shared.clone(), replica };
 
-    // The preamble goes out with the app's first bytes: no round trip of its own.
+    // The preamble goes out with the app's first bytes: no round trip of its own (the
+    // challenge's was made when the connection was opened).
     let token = shared.token.lock().unwrap_or_else(|e| e.into_inner()).duplicate();
     let preamble = encode(&TunnelPreamble::Connect(TunnelConnect { token, local_key_sha256: shared.local_key_sha256 }));
     if let Err(e) = tls.write_all(&preamble).await {

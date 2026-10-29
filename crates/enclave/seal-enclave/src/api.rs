@@ -441,11 +441,7 @@ struct Source(SocketAddr, Option<[u8; 32]>);
 
 impl Connected<IncomingStream<'_, TlsListener>> for Source {
     fn connect_info(stream: IncomingStream<'_, TlsListener>) -> Self {
-        let tls = stream.io().tls.get_ref().1;
-        let exporter = (tls.protocol_version() == Some(rustls::ProtocolVersion::TLSv1_3))
-            .then(|| tls.export_keying_material([0u8; 32], seal_proto::api::ATTESTATION_EXPORTER_LABEL, None).ok())
-            .flatten();
-        Source(*stream.remote_addr(), exporter)
+        Source(*stream.remote_addr(), crate::runtime::conn::tls_exporter(stream.io().tls.get_ref().1))
     }
 }
 
@@ -468,7 +464,8 @@ impl Tunnels for SealService {
         SealService::behind_front_door(self)
     }
     async fn serve(&self, stream: TlsStream<TcpStream>, peer: SocketAddr) {
-        if let Err(e) = self.serve_tunnel(Box::new(stream), Some(peer)).await {
+        let exporter = crate::runtime::conn::tls_exporter(stream.get_ref().1);
+        if let Err(e) = self.serve_tunnel(Box::new(stream), Some(peer), exporter).await {
             tracing::debug!(%peer, error = %e, "tunnel connection ended");
         }
     }

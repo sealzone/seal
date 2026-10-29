@@ -73,6 +73,17 @@ const LONGEST_SPELLING: usize = 6;
 impl Scrubber {
     /// Empty needles are ignored.
     pub fn new(needles: Vec<Zeroizing<Vec<u8>>>) -> Self {
+        Self::build(needles, false)
+    }
+
+    /// `new`, matching every ASCII letter of every form in either case: for text a peer may
+    /// have case-folded, such as HTTP header names, which hyper lowercases. Masks more than
+    /// `new` does, so only for text where that is harmless.
+    pub fn ignoring_ascii_case(needles: Vec<Zeroizing<Vec<u8>>>) -> Self {
+        Self::build(needles, true)
+    }
+
+    fn build(needles: Vec<Zeroizing<Vec<u8>>>, fold_case: bool) -> Self {
         let mut patterns: Vec<Pattern> = Vec::new();
         let needles: Vec<&[u8]> = needles.iter().map(|n| n.as_slice()).filter(|n| !n.is_empty()).collect();
         // A needle that contains another one with base64 forms needs none of its own: the
@@ -82,7 +93,10 @@ impl Scrubber {
         for &needle in &needles {
             let plain = Zeroizing::new(needle.iter().map(|&b| Class::of(b)).collect());
             let encoded = if encodes(needle) && !covered(needle) { base64_patterns(needle) } else { Vec::new() };
-            for p in std::iter::once(plain).chain(encoded) {
+            for mut p in std::iter::once(plain).chain(encoded) {
+                if fold_case {
+                    p.iter_mut().for_each(Class::fold_ascii_case);
+                }
                 if !patterns.contains(&p) {
                     patterns.push(p);
                 }
@@ -218,6 +232,14 @@ impl Class {
     }
     fn add(&mut self, b: u8) {
         self.0[usize::from(b >> 6)] |= 1 << (b & 63);
+    }
+    /// Adds the other case of every ASCII letter it holds.
+    fn fold_ascii_case(&mut self) {
+        for b in (b'A'..=b'Z').chain(b'a'..=b'z') {
+            if self.0[usize::from(b >> 6)] >> (b & 63) & 1 == 1 {
+                self.add(b ^ 0x20);
+            }
+        }
     }
     fn members(&self) -> impl Iterator<Item = u8> + '_ {
         (0..=255u8).filter(|&b| self.0[usize::from(b >> 6)] >> (b & 63) & 1 == 1)
@@ -770,6 +792,23 @@ mod tests {
         out.extend(s.push(b"F4f%2Ba%26b%3Cc%3E%3DZ9q%3F~!"));
         out.extend(s.finish());
         assert_eq!(out, masked("x ", "sk-live%2F4f%2Ba%26b%3Cc%3E%3DZ9q%3F~", "!"), "an escape cut in half");
+    }
+
+    #[test]
+    fn ignoring_ascii_case_masks_lowercased_forms() {
+        let folded = || Scrubber::ignoring_ascii_case(vec![Zeroizing::new(SECRET.to_vec())]);
+        let base64 = String::from_utf8(base64(&[SECRET, b"!"].concat())).unwrap();
+        for form in [
+            "sk-live/4f+a&b<c>=Z9q?~".to_string(),
+            "sk-live%2f4f%2ba%26b%3cc%3e%3dz9q%3f~".to_string(),
+            base64[..31].to_string(),
+        ] {
+            let lower = form.to_ascii_lowercase();
+            let out = run(&mut folded(), &[lower.as_bytes()]);
+            assert!(out.iter().all(|&b| b == MASK), "{lower}: {}", String::from_utf8_lossy(&out));
+            assert_ne!(run(&mut scrubber(&[SECRET]), &[lower.as_bytes()]), vec![MASK; lower.len()], "{lower}");
+        }
+        assert_eq!(run(&mut folded(), &[b"x-sk-live-other"]), b"x-sk-live-other");
     }
 
     #[test]

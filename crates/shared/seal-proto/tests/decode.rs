@@ -208,7 +208,7 @@ fn samples() -> Vec<Vec<u8>> {
     both(&mut out, &certificate);
     both(&mut out, &piece::<GuardianChallenge>(&v, "freshness/guardian-challenge"));
     both(&mut out, &piece::<ProofTicket>(&v, "freshness/proof-ticket"));
-    for name in ["tunnel/connect", "tunnel/extend"] {
+    for name in ["tunnel/connect", "tunnel/extend", "tunnel/challenge"] {
         let framed = &v[name];
         out.push(framed[MAGIC.len() + 4..].to_vec());
         out.push(framed.clone());
@@ -246,6 +246,7 @@ fn decode_everything(bytes: &[u8]) {
         EndRequest,
         SignalRequest,
         TunnelPreamble,
+        ChallengedAttestation,
         SignedTelemetryBatch,
         TelemetryEntries,
         Vec<TelemetryEntry>,

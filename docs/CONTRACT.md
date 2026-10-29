@@ -200,7 +200,8 @@ with seal.session(blob) as s:                          # HttpSession or Database
   `EXPORTER-seal-attestation-challenge-v1`). Only the two ends of a connection know its
   exporter, so a relay holding the keys cannot pass on an honest replica's answer. Anything
   else, an enclave that cannot answer included, is `VerificationFailed`, and the call is not
-  sent. Tunnels carry the session token without a challenge. The browser verifier
+  sent. Tunnel connections are challenged the same way through their preamble (below). The
+  browser verifier
   (`seal-verify-wasm`) seals through a relay, with no connection to the replica to
   challenge, so its seals rest on the ingest key alone: that key is safe until
   `min_service_key_version` passes it.
@@ -352,7 +353,15 @@ elsewhere, and the session token never leaves the SDK.
   A replica has one port, its endpoint's, which carries the API and tunnel connections.
   Tunnel connections offer TLS ALPN `seal_proto::tunnel::ALPN` (`seal-tunnel/1`) instead of
   `http/1.1`. They are pinned to the attested key and start with the tunnel preamble, and
-  the session's blob says which protocol follows. Names play no part, since the certificate
+  the session's blob says which protocol follows. Before its `Connect` or `Extend` preamble,
+  a connection may send one `TunnelPreamble::Challenge { nonce }`. The replica answers with
+  `u32 length || canonical(ChallengedAttestation)` for that nonce and the connection's TLS 1.3
+  exporter, as `GET /v1/attestation?nonce=` does, or closes the connection. The SDK
+  challenges every tunnel connection, and sends the token only after the answer verifies, as
+  for API calls. An enclave that cannot answer gets nothing, so enclaves roll out before
+  SDKs. A connection without a challenge is served as before. The SDK verifies a replica's
+  challenge evidence in full once per attestation period; later answers carrying the same
+  evidence cost a signature check. Names play no part, since the certificate
   carries one fixed name. A replica is reached at whatever address `SEAL_ENDPOINT` lists,
   and the release templates use port 8443. A replica that serves no sessions (draining, or
   not listed in the state in force) drops a tunnel on its ClientHello, before the handshake.
@@ -365,7 +374,9 @@ elsewhere, and the session token never leaves the SDK.
   byte moving either way. The open calls' rate limits use the same sources.
 - **Tunnel connections.** Each goes to the replica that last answered. When that replica
   does not answer, the tunnel tries the others at once and uses the first to answer from
-  then on. The preamble goes out with the app's first bytes.
+  then on. The challenge costs one round trip when a connection opens; the tunnel keeps one
+  spare connection, already challenged, so a connection that takes it pays none. The
+  `Connect` preamble goes out with the app's first bytes.
 - **End** (`POST /v1/sessions/end`, authorized by the token alone, which must not have
   expired: `session_expired` otherwise, so an extended session's older tokens cannot end it
   once past their own expiry). The replica signs a
@@ -599,7 +610,11 @@ rules:
   query parameter, and drops `Range` and `If-Range`, so an echoed secret comes back whole for
   the scrubber. When the policy restricts methods, it refuses `multipart/form-data` bodies,
   and reads a URL-encoded body (or one without a `Content-Type`) whole, up to 1 MiB, refusing
-  it if it is longer or has a `_method` field; other bodies stream. When the policy restricts
+  it if it is longer or has a `_method` field. It reads a body Laravel takes as JSON (a
+  `Content-Type` containing `/json` or `+json`) the same way, refusing it if it is longer,
+  if its top-level object has a `_method` key (any case), or if it does not parse
+  (serde_json is stricter than PHP: deeper than 128 levels, numbers out of range). Other
+  bodies stream. When the policy restricts
   paths, a `;` after the destination prefix is refused, and denied prefixes match ignoring
   ASCII case and also cover a `.` suffix (`/v1/keys` covers `/v1/keys.json`); the
   destination prefix matches exactly.
@@ -952,7 +967,8 @@ Who may read and write a tenant's documents (the crate docs hold the full route 
   every pattern at each byte. That cost grows with the secret's length: about 8 ms per MiB
   of response for a 28-byte HTTP key and 170 ms per MiB for a 1 KiB one, on one core.
   The secret's length is not hidden: masking keeps it, and an upstream's header size limit
-  can reveal the injected header's.
+  can reveal the injected header's. An HTTP response header or trailer whose name carries a
+  needle in any of these forms, in any ASCII case (names arrive lowercased), is dropped.
 - **Postgres cancels** reach only the replica holding the connection. One sent to another
   replica does nothing. A tunnel sends its connections to the replica that last answered, so
   a cancel lands there unless that replica stopped answering in between.

@@ -24,14 +24,22 @@
 //! challenge key signed the nonce and the connection's TLS 1.3 exporter
 //! (`seal_verify::attestation::verify_challenged`), for the keys this client verified. Any
 //! failure, an enclave that cannot answer included, is a `Verification` error before the
-//! request is sent.
+//! request is sent. Tunnel connections are challenged the same way, through their preamble
+//! (`tunnel`). A replica's challenge evidence changes once per attestation period, so each
+//! `VerifiedEnclave` keeps the answers it has verified in full; an answer with the same
+//! evidence, binding, key, release and certificate costs one signature check while its
+//! attestation is within `ATTESTATION_MAX_AGE_SECS`.
 
 use std::sync::{Arc, Mutex};
 
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime as TlsTime};
 use rustls::{CertificateError, DigitallySignedStruct, SignatureScheme};
-use seal_proto::api::{AttestationBinding, AttestationResponse, ChallengedAttestation, ATTESTATION_EXPORTER_LABEL};
+use seal_proto::api::{
+    AttestationBinding, AttestationChallenge, AttestationResponse, ChallengedAttestation, ATTESTATION_CHALLENGE_LABEL,
+    ATTESTATION_EXPORTER_LABEL,
+};
+use seal_proto::freshness::ATTESTATION_MAX_AGE_SECS;
 use seal_proto::release::ServiceKeyCertificate;
 use seal_proto::{Measurement, PlatformId, TenantId, TenantRootId, UnixTime};
 use sha2::{Digest, Sha256};
@@ -48,7 +56,14 @@ pub struct VerifiedEnclave {
     release_version: String,
     config: Arc<rustls::ClientConfig>,
     tunnel_config: Arc<rustls::ClientConfig>,
+    /// Challenged attestations verified in full (`check_challenged`): the digest of everything
+    /// but the signature, and the `attested_at` of its binding.
+    challenged: Mutex<Vec<([u8; 32], UnixTime)>>,
 }
+
+/// Verified challenge evidence kept per enclave: a few replicas, each with its current and
+/// previous attestation.
+const CHALLENGED_KEPT: usize = 16;
 
 impl std::fmt::Debug for VerifiedEnclave {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -147,6 +162,7 @@ pub(crate) fn check(
         release_version: verified.release_version,
         config,
         tunnel_config: Arc::new(tunnel_config),
+        challenged: Mutex::default(),
     })
 }
 
@@ -163,8 +179,10 @@ pub(crate) fn tls_exporter<IO>(stream: &tokio_rustls::client::TlsStream<IO>) -> 
 }
 
 /// Every check on a challenged attestation (module docs), given the nonce sent and the
-/// connection's exporter. Pure. The answer must attest exactly `enclave`'s keys, tenant and
-/// root: the request that follows was prepared for those.
+/// connection's exporter. The answer must attest exactly `enclave`'s keys, tenant and root:
+/// the request that follows was prepared for those. When `enclave` has verified the same
+/// attested parts before and they are still within `ATTESTATION_MAX_AGE_SECS`, only the
+/// signature over this nonce and exporter is checked.
 pub(crate) fn check_challenged(
     response: &ChallengedAttestation,
     nonce: &[u8; 32],
@@ -174,6 +192,25 @@ pub(crate) fn check_challenged(
     expected: &Expected,
     now: UnixTime,
 ) -> Result<(), ClientError> {
+    let attested = seal_proto::codec::digest(&(
+        &response.evidence,
+        &response.binding,
+        &response.challenge_key,
+        &response.release,
+        &response.certificate,
+    ));
+    let lock = || enclave.challenged.lock().unwrap_or_else(|e| e.into_inner());
+    let fresh = response.binding.attested_at.abs_diff(now) <= ATTESTATION_MAX_AGE_SECS;
+    if fresh && lock().iter().any(|(digest, _)| *digest == attested) {
+        let challenge = AttestationChallenge { nonce: *nonce, tls_exporter: *tls_exporter };
+        return seal_crypto::sign::verify(
+            &response.challenge_key,
+            ATTESTATION_CHALLENGE_LABEL,
+            &challenge,
+            &response.signature,
+        )
+        .map_err(|_| fail("challenged attestation: the signature does not verify for this nonce and connection"));
+    }
     let verified = seal_verify::attestation::verify_challenged(
         response,
         nonce,
@@ -192,6 +229,12 @@ pub(crate) fn check_challenged(
     {
         return Err(fail("the challenged attestation is for other keys than the verified enclave's"));
     }
+    let mut known = lock();
+    known.retain(|(_, at)| at.abs_diff(now) <= ATTESTATION_MAX_AGE_SECS);
+    if known.len() >= CHALLENGED_KEPT {
+        known.remove(0);
+    }
+    known.push((attested, theirs.attested_at));
     Ok(())
 }
 

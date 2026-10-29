@@ -292,6 +292,61 @@ async fn challenges_the_connection_before_sending_anything_secret() {
     assert_eq!(f.seen(|s| s.sealed.len()), 2);
 }
 
+/// Every tunnel connection, spares and extensions included, is challenged before its token is
+/// sent; a replica whose answer does not verify, or that cannot answer, gets no token and the
+/// app's connection is closed.
+#[tokio::test]
+async fn tunnels_challenge_each_connection_before_the_token() {
+    let f = Fixture::new().await;
+    let client = f.client().await;
+    let mut s = client.session(&f.blob("https://api.example.com/v1")).http().await.unwrap();
+    let addr = tunnel_addr(s.url());
+    let mut conn = TcpStream::connect(addr).await.unwrap();
+    assert_eq!(http(&mut conn, "/", s.key()).await.0, "HTTP/1.1 200 OK");
+    eventually("a challenged spare", || f.seen(|s| s.tunnel_challenges.len() == 2)).await;
+    s.extend().await.unwrap();
+    assert_eq!(f.seen(|s| s.tunnel_extends.len()), 1);
+    let challenges = f.seen(|s| s.tunnel_challenges.clone());
+    assert_eq!(challenges.len(), 3, "the connection, the spare and the extension");
+    assert_eq!(f.seen(|s| s.tunnel_handshakes), 3);
+    assert!(challenges.iter().all(|e| *e != [0; 32]), "each on a TLS 1.3 connection");
+    assert_eq!(f.seen(|s| s.connects.len()), 1);
+
+    // The spare was verified when it was opened; once it is used, every new connection is
+    // challenged under the new mode.
+    let refused = |mode| {
+        let (f, key) = (&f, s.key().to_string());
+        async move {
+            f.challenge(mode);
+            let mut conn = TcpStream::connect(addr).await.unwrap();
+            let request = format!("GET / HTTP/1.1\r\nhost: app\r\nx-api-key: {key}\r\n\r\n");
+            conn.write_all(request.as_bytes()).await.unwrap();
+            let mut got = [0u8; 64];
+            !matches!(conn.read(&mut got).await, Ok(1..))
+        }
+    };
+    assert!(!refused(Challenge::Unsupported).await, "the spare, challenged before");
+    let connects = f.seen(|s| s.connects.len());
+    for mode in [
+        Challenge::Unsupported,
+        Challenge::Replay,
+        Challenge::WrongNonce,
+        Challenge::WrongExporter,
+        Challenge::WrongSignatureLabel,
+        Challenge::PeriodicEvidence,
+        Challenge::OtherBinding,
+        Challenge::Stale,
+    ] {
+        assert!(refused(mode).await, "{mode:?}: the app's connection was served");
+    }
+    assert_eq!(f.seen(|s| s.connects.len()), connects, "no token was sent");
+
+    f.challenge(Challenge::Honest);
+    let mut conn = TcpStream::connect(addr).await.unwrap();
+    assert_eq!(http(&mut conn, "/", s.key()).await.0, "HTTP/1.1 200 OK");
+    s.close().await.unwrap();
+}
+
 #[tokio::test]
 async fn signals_about_itself() {
     let f = Fixture::new().await;

@@ -322,13 +322,18 @@ impl SealService {
     /// pass that recheck (live, granted, inside the networks) before anything else, and says the
     /// protocol, whose adapter serves the rest. An `Extend` preamble never reaches an
     /// adapter: it moves the expiry of this replica's live connections for the token's session
-    /// (same caller, later expiry), answers `EXTEND_OK` and closes.
+    /// (same caller, later expiry), answers `EXTEND_OK` and closes. Either may follow one
+    /// `Challenge` preamble, answered with a `ChallengedAttestation` for its nonce and
+    /// `tls_exporter`, the connection's TLS 1.3 exporter (label
+    /// `seal_proto::api::ATTESTATION_EXPORTER_LABEL`, no context); without one the challenge is
+    /// refused.
     pub async fn serve_tunnel(
         &self,
         stream: seal_adapter::BoxStream,
         peer: Option<std::net::SocketAddr>,
+        tls_exporter: Option<[u8; 32]>,
     ) -> Result<(), ServiceError> {
-        runtime::conn::serve(&self.runtime, stream, peer).await
+        runtime::conn::serve(&self.runtime, stream, peer, tls_exporter).await
     }
     /// The TLS configuration of the enclave's port (`api::serve`): `[leaf, CA]` with the
     /// derived key, ALPN `http/1.1` (the API) and `seal_proto::tunnel::ALPN` (tunnels).

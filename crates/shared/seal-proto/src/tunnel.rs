@@ -17,15 +17,29 @@
 //! (`find_local_key`) in its protocol's credential slot; the resolver accepts a local key
 //! only if `SHA-256(local key) == local_key_sha256`. The token never leaves the SDK, and
 //! `s.key` is worthless without the tunnel's connection.
+//!
+//! Before either preamble, a connection may carry one `Challenge` preamble: the replica
+//! answers it with
+//!
+//! ```text
+//! u32 big-endian length || canonical(ChallengedAttestation)
+//! ```
+//!
+//! for the nonce and this connection's TLS 1.3 exporter, as `GET /v1/attestation?nonce=`
+//! does, or closes the connection. The SDK sends a token only on a connection whose answer
+//! verified. A connection without a challenge is served as before.
 
 use serde::{Deserialize, Serialize};
 
+use crate::api::ChallengedAttestation;
 use crate::{codec, Bearer};
 
 /// The TLS ALPN protocol of tunnel connections.
 pub const ALPN: &[u8] = b"seal-tunnel/1";
 pub const MAGIC: &[u8; 8] = b"SEALTUN1";
 pub const MAX_PREAMBLE_LEN: u32 = 64 * 1024;
+/// Largest challenge answer: evidence, release and certificate, as an attestation response.
+pub const MAX_ANSWER_LEN: u32 = 4 << 20;
 /// Prefix of local tunnel keys (`s.key`).
 pub const LOCAL_KEY_PREFIX: &str = "seallk_";
 
@@ -37,6 +51,12 @@ pub enum TunnelPreamble {
     /// Apply an extension to this replica's live connections of the token's session;
     /// nothing follows.
     Extend { token: Bearer },
+    /// Prove the connection: answer with a `ChallengedAttestation` for `nonce` and this
+    /// connection's TLS exporter; a `Connect` or `Extend` preamble follows.
+    Challenge {
+        #[serde(with = "codec::array_b64")]
+        nonce: [u8; 32],
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -53,6 +73,15 @@ pub fn encode(p: &TunnelPreamble) -> Vec<u8> {
     let body = codec::canonical(p);
     let mut out = Vec::with_capacity(12 + body.len());
     out.extend_from_slice(MAGIC);
+    out.extend_from_slice(&(body.len() as u32).to_be_bytes());
+    out.extend_from_slice(&body);
+    out
+}
+
+/// The answer to a `Challenge` preamble: its length, then the canonical encoding.
+pub fn encode_answer(answer: &ChallengedAttestation) -> Vec<u8> {
+    let body = codec::canonical(answer);
+    let mut out = Vec::with_capacity(4 + body.len());
     out.extend_from_slice(&(body.len() as u32).to_be_bytes());
     out.extend_from_slice(&body);
     out

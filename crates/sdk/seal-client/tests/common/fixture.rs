@@ -135,6 +135,8 @@ struct Seen {
     connects: Vec<(String, [u8; 32])>,
     /// Attestation challenges, with the exporter of the connection each came on.
     challenges: Vec<[u8; 32]>,
+    /// Tunnel challenges (`TunnelPreamble::Challenge`), with the exporter of each connection.
+    tunnel_challenges: Vec<[u8; 32]>,
     /// Tunnel connections whose TLS handshake completed.
     tunnel_handshakes: usize,
     tunnel_extends: Vec<String>,
@@ -343,8 +345,13 @@ impl Enclave {
     /// `GET /v1/attestation?nonce=` on a connection whose exporter is `exporter`, as
     /// `Challenge` says.
     fn challenged(&self, nonce: [u8; 32], exporter: Option<[u8; 32]>) -> serde_json::Value {
-        let mode = *self.challenge.lock().unwrap();
         self.seen.lock().unwrap().challenges.push(exporter.unwrap_or_default());
+        self.answer(nonce, exporter)
+    }
+
+    /// The answer to a challenge, as `Challenge` says.
+    fn answer(&self, nonce: [u8; 32], exporter: Option<[u8; 32]>) -> serde_json::Value {
+        let mode = *self.challenge.lock().unwrap();
         match mode {
             Challenge::Unsupported => return self.attestation(),
             Challenge::Replay => {
@@ -536,7 +543,7 @@ async fn serve(enclave: Arc<Enclave>, listener: TcpListener, tls: Arc<rustls::Se
                 .then(|| tls.get_ref().1.export_keying_material([0u8; 32], ATTESTATION_EXPORTER_LABEL, None).unwrap());
             if is_tunnel {
                 enclave.seen.lock().unwrap().tunnel_handshakes += 1;
-                return tunnel(enclave, tls).await;
+                return tunnel(enclave, tls, exporter).await;
             }
             let service = hyper::service::service_fn(move |req: Request<Incoming>| {
                 let enclave = enclave.clone();
@@ -570,16 +577,38 @@ async fn serve(enclave: Arc<Enclave>, listener: TcpListener, tls: Arc<rustls::Se
     }
 }
 
-/// A tunnel: the preamble, then an HTTP responder that checks the local key against the
-/// preamble's hash on every request.
-async fn tunnel(enclave: Arc<Enclave>, mut tls: tokio_rustls::server::TlsStream<TcpStream>) {
+/// One framed tunnel preamble; `None` once the connection closes.
+async fn preamble(tls: &mut tokio_rustls::server::TlsStream<TcpStream>) -> Option<TunnelPreamble> {
     let mut head = [0u8; 12];
     if tls.read_exact(&mut head).await.is_err() || &head[..8] != MAGIC {
-        return;
+        return None;
     }
     let mut body = vec![0u8; u32::from_be_bytes(head[8..].try_into().unwrap()) as usize];
-    tls.read_exact(&mut body).await.unwrap();
-    let (token, local_key_sha256) = match seal_proto::codec::from_canonical(&body).unwrap() {
+    tls.read_exact(&mut body).await.ok()?;
+    Some(seal_proto::codec::from_canonical(&body).unwrap())
+}
+
+/// A tunnel: a challenge, answered as `Challenge` says (closed unanswered as an older release
+/// would, for `Unsupported`), the preamble, then an HTTP responder that checks the local key
+/// against the preamble's hash on every request.
+async fn tunnel(
+    enclave: Arc<Enclave>,
+    mut tls: tokio_rustls::server::TlsStream<TcpStream>,
+    exporter: Option<[u8; 32]>,
+) {
+    let Some(mut first) = preamble(&mut tls).await else { return };
+    if let TunnelPreamble::Challenge { nonce } = first {
+        enclave.seen.lock().unwrap().tunnel_challenges.push(exporter.unwrap_or_default());
+        let Ok(answer) = serde_json::from_value::<ChallengedAttestation>(enclave.answer(nonce, exporter)) else {
+            return;
+        };
+        if tls.write_all(&seal_proto::tunnel::encode_answer(&answer)).await.is_err() {
+            return;
+        }
+        let Some(next) = preamble(&mut tls).await else { return };
+        first = next;
+    }
+    let (token, local_key_sha256) = match first {
         TunnelPreamble::Extend { token } => {
             enclave.seen.lock().unwrap().tunnel_extends.push(token.expose().to_string());
             let _ = tls.write_all(&[EXTEND_OK]).await;
@@ -587,6 +616,7 @@ async fn tunnel(enclave: Arc<Enclave>, mut tls: tokio_rustls::server::TlsStream<
             return;
         }
         TunnelPreamble::Connect(c) => (c.token.expose().to_string(), c.local_key_sha256),
+        TunnelPreamble::Challenge { .. } => return,
     };
     enclave.seen.lock().unwrap().connects.push((token.clone(), local_key_sha256));
     let mut buf = Vec::new();

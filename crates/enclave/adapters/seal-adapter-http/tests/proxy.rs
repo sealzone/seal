@@ -96,6 +96,16 @@ async fn route(req: Request<Incoming>, seen: Arc<Mutex<Vec<Seen>>>, gate: Arc<No
             .header("x-debug", format!("key={SECRET}"))
             .body(full(format!("{{\"error\":\"invalid key {SECRET}\",\"auth\":\"Bearer {SECRET}\"}}")))
             .unwrap(),
+        "/v1/leak-name" => Response::builder()
+            .header(format!("x-{SECRET}"), "1")
+            // base64 of the injected `Bearer {SECRET}`, which hyper sends lowercased, and
+            // SECRET percent-encoded.
+            .header("QmVhcmVyIHNrLXRlc3QtMTIz", "1")
+            .header("x-sk%2Dtest-123", "1")
+            .header("x-sk-test-12", "kept")
+            .header("x-other", SECRET)
+            .body(full("ok"))
+            .unwrap(),
         "/v1/leak-split" => Response::new(chunked(vec!["error: key sk-te", "st-1", "23 is invalid"], None)),
         "/v1/sse" => Response::builder()
             .header("content-type", "text/event-stream")
@@ -508,14 +518,14 @@ async fn method_override_parameters_are_refused() {
     }
     let reply = c.request(form("amount=1&payment_method=pm_1&method_x=1", urlencoded)).await;
     assert_eq!(reply.status, StatusCode::OK, "the connection survives, other fields pass");
-    let reply = c.request(form("{\"_method\":\"x\"}", Some("application/json"))).await;
-    assert_eq!(reply.status, StatusCode::OK, "only form bodies are read");
+    let reply = c.request(form("{\"a\":{\"_method\":\"x\"}}", Some("application/json"))).await;
+    assert_eq!(reply.status, StatusCode::OK, "only top-level JSON keys are read");
     let seen = h.seen();
     assert_eq!(seen.len(), 2);
     assert_eq!(seen[0].body, b"amount=1&payment_method=pm_1&method_x=1");
     let allowed: Vec<u64> =
         h.resolver.take_completions().iter().filter(|c| c.outcome == Outcome::Allowed).map(|c| c.bytes_up).collect();
-    assert_eq!(allowed, [39, 15], "a read form body is counted as sent");
+    assert_eq!(allowed, [39, 21], "a read form body is counted as sent");
 
     let reply = c.request(form("_method=DELETE&", urlencoded)).await;
     assert_eq!(reply.seal_error(), "policy_denied");
@@ -533,6 +543,53 @@ async fn method_override_parameters_are_refused() {
     c.closed().await.unwrap();
 }
 
+/// Laravel takes a top-level `_method` key of a JSON body (by `Content-Type`, as it decides)
+/// as the method too; a body that cannot be checked is refused under method rules.
+#[tokio::test]
+async fn json_method_override_is_refused() {
+    let rules = HttpRules { methods: ["GET".to_string(), "POST".to_string()].into(), deny_path_prefixes: [].into() };
+    let h = Harness::new(claims_with(Injection::default(), rules)).await;
+    let mut c = h.connect().await;
+    let post = |body: String, content_type: &str| {
+        get("/v1/models")
+            .method("POST")
+            .header("content-type", content_type)
+            .body(Full::new(Bytes::from(body)))
+            .unwrap()
+    };
+    let json = "application/json";
+    let deep = format!("{}{}", "[".repeat(200), "]".repeat(200));
+    for (body, content_type) in [
+        (r#"{"_method":"DELETE"}"#.to_string(), json),
+        (r#"{"a":1,"_METHOD":"PUT"}"#.to_string(), "Application/JSON; charset=utf-8"),
+        (r#"{"\u005fmethod":"PUT"}"#.to_string(), "application/vnd.api+json"),
+        (r#"{"_method":"PUT","_method":"GET"}"#.to_string(), json),
+        (r#"{"_method":"PUT"}"#.to_string(), "text/plain; x=/json"),
+        // Bodies serde_json cannot read are refused, since PHP may read them.
+        (r#"{"a":1"#.to_string(), json),
+        (r#"{"a":1e400,"_method":"PUT"}"#.to_string(), json),
+        (format!(r#"{{"_method":"PUT","a":{deep}}}"#), json),
+        (deep.clone(), json),
+    ] {
+        let reply = c.request(post(body.clone(), content_type)).await;
+        assert_eq!(reply.seal_error(), "policy_denied", "{body} as {content_type}");
+    }
+    for (body, content_type) in [
+        (r#"{"a":{"_method":"x"},"b":["_method"],"method":"PUT"}"#, json),
+        (r#"[{"_method":"x"}]"#, json),
+        (r#""_method""#, json),
+        ("  ", json),
+        (r#"{"_method":"x"}"#, "application/octet-stream"),
+    ] {
+        let reply = c.request(post(body.to_string(), content_type)).await;
+        assert_eq!(reply.status, StatusCode::OK, "{body} as {content_type}");
+    }
+    assert_eq!(h.seen().len(), 5);
+    let big = format!(r#"{{"a":"{}"}}"#, "x".repeat(1 << 20));
+    assert_eq!(c.request(post(big, json)).await.seal_error(), "policy_denied", "too large to check");
+    c.closed().await.unwrap();
+}
+
 #[tokio::test]
 async fn form_bodies_stream_without_method_rules() {
     let h = Harness::default().await;
@@ -542,6 +599,9 @@ async fn form_bodies_stream_without_method_rules() {
     assert_eq!(reply.status, StatusCode::OK);
     let req = get("/v1/upload").method("POST").header("content-type", "application/x-www-form-urlencoded");
     assert_eq!(c.request(req.body(Full::new(Bytes::from("_method=PUT"))).unwrap()).await.status, StatusCode::OK);
+    let req = get("/v1/upload").method("POST").header("content-type", "application/json");
+    let body = Full::new(Bytes::from(r#"{"_method":"PUT"}"#));
+    assert_eq!(c.request(req.body(body).unwrap()).await.status, StatusCode::OK);
     let reply = c.get("/v1/models?_method=DELETE").await;
     assert_eq!(reply.seal_error(), "policy_denied", "the query parameter is refused under any policy");
 }
@@ -645,6 +705,24 @@ async fn echoed_secret_is_masked_in_body_and_headers() {
     assert!(!body.contains(SECRET), "{body}");
     assert_eq!(body, "{\"error\":\"invalid key ***********\",\"auth\":\"******************\"}");
     assert_eq!(header(&reply.headers, "x-debug"), Some("key=***********"));
+}
+
+/// hyper lowercases header names, so a name made of the secret, in any of the scrubber's
+/// forms, is matched in any case; such a header is dropped, a partial one kept.
+#[tokio::test]
+async fn header_names_carrying_the_secret_are_dropped() {
+    let h = Harness::default().await;
+    let mut c = h.connect().await;
+    let reply = c.get("/v1/leak-name").await;
+    assert_eq!(reply.status, StatusCode::OK);
+    assert_eq!(reply.body, b"ok");
+    let names: BTreeSet<&str> = reply.headers.keys().map(|n| n.as_str()).collect();
+    for dropped in [format!("x-{SECRET}").as_str(), "qmvhcmvyihnrlxrlc3qtmtiz", "x-sk%2dtest-123"] {
+        assert!(!names.contains(dropped), "{dropped}: {names:?}");
+    }
+    assert_eq!(header(&reply.headers, "x-sk-test-12"), Some("kept"));
+    assert_eq!(header(&reply.headers, "x-other"), Some("***********"));
+    assert_eq!(header(&reply.headers, "x-upstream"), Some("1"));
 }
 
 #[tokio::test]

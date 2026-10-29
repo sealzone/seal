@@ -1,6 +1,7 @@
 //! The data plane's front: tunnel connections on the enclave's one port (TLS ALPN
 //! `seal_proto::tunnel::ALPN`, next to the API's `http/1.1`), their preamble, then the
-//! adapter of the session's protocol.
+//! adapter of the session's protocol. A connection may first carry one `Challenge` preamble,
+//! answered as `GET /v1/attestation?nonce=` is, for this connection's TLS 1.3 exporter.
 
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -10,7 +11,7 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use seal_adapter::{AdapterCtx, BoxStream, ConnMeta};
 use seal_authz::TenantAuthorizer;
 use seal_crypto::TlsKey;
-use seal_proto::tunnel::{TunnelPreamble, ALPN, EXTEND_OK, MAGIC, MAX_PREAMBLE_LEN};
+use seal_proto::tunnel::{encode_answer, TunnelPreamble, ALPN, EXTEND_OK, MAGIC, MAX_PREAMBLE_LEN};
 use seal_proto::{codec, Bearer, ErrorCode};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -18,7 +19,7 @@ use super::live::Resolver;
 use super::{fail, Runtime};
 use crate::ServiceError;
 
-/// Time a tunnel has, after the handshake, to send its whole preamble.
+/// Time a tunnel has, after the handshake or a challenge's answer, to send its whole preamble.
 pub(crate) const PREAMBLE_TIMEOUT: Duration = Duration::from_secs(30);
 /// The one name the certificates carry. Clients pin the attested key, never a name.
 const CERT_NAME: &str = "enclave.seal.invalid";
@@ -55,21 +56,35 @@ pub(crate) fn admit(runtime: &Runtime) -> Result<(), ServiceError> {
     runtime.activity.check()
 }
 
-/// `SealService::serve_tunnel`: a tunnel connection after its TLS handshake. A `Connect`
-/// preamble's token says the session, and its blob the protocol whose adapter serves the
-/// bytes that follow, once the session passes `TenantAuthorizer::recheck` from `peer` (live,
-/// granted, inside the app's networks); an `Extend` preamble never reaches an adapter.
+/// The TLS 1.3 exporter tunnel challenges and API challenges bind
+/// (`seal_proto::api::ATTESTATION_EXPORTER_LABEL`, no context); none for TLS 1.2.
+pub(crate) fn tls_exporter(tls: &rustls::ServerConnection) -> Option<[u8; 32]> {
+    if tls.protocol_version() != Some(rustls::ProtocolVersion::TLSv1_3) {
+        return None;
+    }
+    tls.export_keying_material([0u8; 32], seal_proto::api::ATTESTATION_EXPORTER_LABEL, None).ok()
+}
+
+/// `SealService::serve_tunnel`: a tunnel connection after its TLS handshake. A `Challenge`
+/// preamble is answered (`challenge`) and the next preamble read. A `Connect` preamble's token
+/// says the session, and its blob the protocol whose adapter serves the bytes that follow,
+/// once the session passes `TenantAuthorizer::recheck` from `peer` (live, granted, inside the
+/// app's networks); an `Extend` preamble never reaches an adapter.
 pub(crate) async fn serve(
     runtime: &Arc<Runtime>,
     stream: BoxStream,
     peer: Option<std::net::SocketAddr>,
+    tls_exporter: Option<[u8; 32]>,
 ) -> Result<(), ServiceError> {
-    let (stream, preamble) = tokio::time::timeout(PREAMBLE_TIMEOUT, read_preamble(stream))
-        .await
-        .map_err(|_| fail(ErrorCode::BadRequest, "no tunnel preamble in time"))??;
+    let (mut stream, mut preamble) = next_preamble(stream).await?;
+    if let TunnelPreamble::Challenge { nonce } = preamble {
+        stream = challenge(runtime, stream, nonce, tls_exporter).await?;
+        (stream, preamble) = next_preamble(stream).await?;
+    }
     let connect = match preamble {
         TunnelPreamble::Extend { token } => return extend(runtime, stream, &token, peer).await,
         TunnelPreamble::Connect(connect) => connect,
+        TunnelPreamble::Challenge { .. } => return Err(fail(ErrorCode::BadRequest, "a second tunnel challenge")),
     };
     // Before any adapter runs, for whatever the connection carries (a Postgres cancel too);
     // the resolver checks again, with the local key, when the adapter presents it.
@@ -91,6 +106,31 @@ pub(crate) async fn serve(
     let ctx =
         AdapterCtx { resolver: Arc::new(Resolver { runtime: runtime.clone() }), upstream: runtime.upstream.clone() };
     adapter.serve(stream, meta, ctx).await.map_err(|e| fail(e.code(), e.to_string()))
+}
+
+/// `read_preamble` within `PREAMBLE_TIMEOUT`.
+async fn next_preamble(stream: BoxStream) -> Result<(BoxStream, TunnelPreamble), ServiceError> {
+    tokio::time::timeout(PREAMBLE_TIMEOUT, read_preamble(stream))
+        .await
+        .map_err(|_| fail(ErrorCode::BadRequest, "no tunnel preamble in time"))?
+}
+
+/// Answers a `Challenge` preamble: the challenged attestation for `nonce` and the connection's
+/// exporter (`Runtime::challenged_attestation`), framed by `encode_answer`. Without an exporter
+/// (TLS 1.2) or an attestation the connection closes unanswered, and the SDK sends nothing on it.
+async fn challenge(
+    runtime: &Runtime,
+    mut stream: BoxStream,
+    nonce: [u8; 32],
+    tls_exporter: Option<[u8; 32]>,
+) -> Result<BoxStream, ServiceError> {
+    let tls_exporter =
+        tls_exporter.ok_or_else(|| fail(ErrorCode::BadRequest, "a tunnel challenge needs a TLS 1.3 connection"))?;
+    let answer = encode_answer(&runtime.challenged_attestation(nonce, tls_exporter)?);
+    let io = |e: std::io::Error| fail(ErrorCode::BadRequest, format!("tunnel challenge: {e}"));
+    stream.write_all(&answer).await.map_err(io)?;
+    stream.flush().await.map_err(io)?;
+    Ok(stream)
 }
 
 /// `MAGIC`, the length and the preamble, read whole.

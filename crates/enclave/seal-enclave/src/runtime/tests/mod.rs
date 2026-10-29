@@ -681,7 +681,8 @@ impl Harness {
                 .accept(server)
                 .await
                 .map_err(|e| crate::fail(ErrorCode::BadRequest, e.to_string()))?;
-            service.serve_tunnel(Box::new(tls), peer).await
+            let exporter = crate::runtime::conn::tls_exporter(tls.get_ref().1);
+            service.serve_tunnel(Box::new(tls), peer, exporter).await
         });
         let mut roots = rustls::RootCertStore::empty();
         let ca = service_keys(&self.world.root_id).tls.ca_certificate_der(&[TLS_NAME.to_string()]).unwrap();

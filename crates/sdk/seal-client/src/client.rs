@@ -253,6 +253,18 @@ impl Client {
         Ok(ticket)
     }
 
+    /// `verify::check_challenged` under this client's trust and expectations, now.
+    pub(crate) fn check_challenged(
+        &self,
+        response: &seal_proto::api::ChallengedAttestation,
+        nonce: &[u8; 32],
+        tls_exporter: &[u8; 32],
+        enclave: &VerifiedEnclave,
+    ) -> Result<(), ClientError> {
+        let (trust, expected) = (&self.inner.trust, &self.inner.expected);
+        verify::check_challenged(response, nonce, tls_exporter, enclave, trust, expected, now())
+    }
+
     /// `POST path` with a JSON body, JSON response, on a connection that answered an attestation
     /// challenge (`verify::challenge`) first.
     pub(crate) async fn call<B: Serialize, R: DeserializeOwned>(
