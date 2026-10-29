@@ -3275,6 +3275,7 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
+ "proptest",
  "rustls",
  "seal-adapter",
  "seal-adapter-http",

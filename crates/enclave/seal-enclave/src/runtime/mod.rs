@@ -325,6 +325,11 @@ impl Runtime {
         Ok((time, tenant))
     }
 
+    /// Whether the newest verified state lists this replica as Seal's hosted one.
+    pub(crate) fn hosted_now(&self) -> bool {
+        self.state.get().and_then(|tenant| self.serving(&tenant).ok()).is_some_and(|s| s.hosted)
+    }
+
     /// What this replica serves under `tenant`: `NotAllowed` once the tenant no longer lists
     /// its deployment identity.
     pub(crate) fn serving(&self, tenant: &VerifiedTenant) -> Result<hosted::Serving, ServiceError> {

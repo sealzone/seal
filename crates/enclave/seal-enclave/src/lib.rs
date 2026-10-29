@@ -6,6 +6,7 @@
 
 pub mod api;
 pub mod ports;
+mod proxy;
 
 use async_trait::async_trait;
 use seal_crypto::{ServiceKeyScope, ServiceKeys, TenantWrappingKey, TenantWrappingKeyScope};
@@ -308,6 +309,11 @@ impl SealService {
     /// tunnel tries the next replica.
     pub fn admits_tunnel(&self) -> Result<(), ServiceError> {
         runtime::conn::admit(&self.runtime)
+    }
+    /// Whether this replica serves its tenant as Seal's hosted replica, which only Seal's front
+    /// door can reach: then the client address in the front's PROXY header is trusted (`proxy`).
+    pub fn behind_front_door(&self) -> bool {
+        self.runtime.hosted_now()
     }
     /// A tunnel connection after its TLS handshake (ALPN `seal_proto::tunnel::ALPN`) from
     /// `peer`, which the apps' network rules (`TenantState::app_networks`) are checked against;

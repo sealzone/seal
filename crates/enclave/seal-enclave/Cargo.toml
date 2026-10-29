@@ -55,3 +55,4 @@ bytes.workspace = true
 seal-net = { workspace = true, features = ["sim"] }
 tokio = { workspace = true, features = ["test-util"] }
 base64.workspace = true
+proptest.workspace = true

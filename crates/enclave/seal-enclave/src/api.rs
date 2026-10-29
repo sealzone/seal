@@ -370,6 +370,8 @@ impl Connected<IncomingStream<'_, TlsListener>> for Source {
 trait Tunnels: Send + Sync + 'static {
     /// Whether a tunnel may connect: asked before its TLS handshake.
     fn admit(&self) -> bool;
+    /// Whether a PROXY header's client address is trusted (`SealService::behind_front_door`).
+    fn behind_front_door(&self) -> bool;
     async fn serve(&self, stream: TlsStream<TcpStream>, peer: SocketAddr);
 }
 
@@ -377,6 +379,9 @@ trait Tunnels: Send + Sync + 'static {
 impl Tunnels for SealService {
     fn admit(&self) -> bool {
         self.admits_tunnel().map_err(|e| tracing::debug!(error = %e, "tunnel refused before its handshake")).is_ok()
+    }
+    fn behind_front_door(&self) -> bool {
+        SealService::behind_front_door(self)
     }
     async fn serve(&self, stream: TlsStream<TcpStream>, peer: SocketAddr) {
         if let Err(e) = self.serve_tunnel(Box::new(stream), Some(peer)).await {
@@ -407,7 +412,7 @@ impl TlsListener {
                     _ = tx.closed() => return,
                     accepted = listener.accept() => accepted,
                 };
-                let (tcp, peer) = match accepted {
+                let (mut tcp, socket_peer) = match accepted {
                     Ok(conn) => conn,
                     Err(e) => {
                         tracing::warn!(error = %e, "API accept failed");
@@ -419,13 +424,20 @@ impl TlsListener {
                 let _ = tcp.set_nodelay(true);
                 let (config, tunnels, tx) = (config.clone(), tunnels.clone(), tx.clone());
                 tokio::spawn(async move {
-                    let (tls, tunnel) =
-                        match tokio::time::timeout(HANDSHAKE_TIMEOUT, handshake(tcp, config, &*tunnels)).await {
-                            Ok(Ok(Some(accepted))) => accepted,
-                            Ok(Ok(None)) => return,
-                            Ok(Err(e)) => return tracing::debug!(%peer, error = %e, "TLS handshake failed"),
-                            Err(_) => return tracing::debug!(%peer, "TLS handshake timed out"),
-                        };
+                    // A PROXY header first, if the connection starts with one: its client
+                    // address stands for the socket's only on a replica behind the front door.
+                    let accepting = async {
+                        let named = crate::proxy::read(&mut tcp).await?;
+                        let peer = named.filter(|_| tunnels.behind_front_door()).unwrap_or(socket_peer);
+                        Ok::<_, std::io::Error>((handshake(tcp, config, &*tunnels).await?, peer))
+                    };
+                    let peer = socket_peer;
+                    let ((tls, tunnel), peer) = match tokio::time::timeout(HANDSHAKE_TIMEOUT, accepting).await {
+                        Ok(Ok((Some(accepted), peer))) => (accepted, peer),
+                        Ok(Ok((None, _))) => return,
+                        Ok(Err(e)) => return tracing::debug!(%peer, error = %e, "TLS handshake failed"),
+                        Err(_) => return tracing::debug!(%peer, "TLS handshake timed out"),
+                    };
                     if tunnel {
                         tunnels.serve(tls, peer).await;
                     } else {
@@ -613,6 +625,9 @@ pub(crate) mod tests {
     impl Tunnels for FakeTunnels {
         fn admit(&self) -> bool {
             self.admit.load(std::sync::atomic::Ordering::Relaxed)
+        }
+        fn behind_front_door(&self) -> bool {
+            false
         }
         async fn serve(&self, mut stream: TlsStream<TcpStream>, _: SocketAddr) {
             use tokio::io::AsyncWriteExt;
