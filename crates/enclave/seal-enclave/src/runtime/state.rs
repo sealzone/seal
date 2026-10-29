@@ -71,8 +71,12 @@ pub(crate) enum Local {
 }
 
 impl Runtime {
+    /// The telemetry keys of this replica's certificate that the release policy has not
+    /// retired: signals and session ends signed by an older version's key below the platform's
+    /// `min_service_key_version` count for nothing.
     fn telemetry_keys(&self) -> Vec<PublicKey> {
-        self.service.telemetry_public_keys.iter().map(|(_, k)| *k).collect()
+        let policy = lock(&self.release).fresh.checkpoint.policy.clone();
+        seal_verify::telemetry_keys_in_force(&self.service.certificate.body, Some(&policy))
     }
 
     /// Loads, verifies and caches the tenant's newest bundle. A change wakes the live-session

@@ -38,6 +38,39 @@ pub enum WorkloadIdentity {
     ConfidentialSpace { project_number: u64, service_account: String },
 }
 
+impl WorkloadIdentity {
+    /// Whether `self` and `other` are one workload by the immutable ids grants match on
+    /// (`IdentityMatcher::matches`), ignoring display names. A GitHub identity is its
+    /// repository (`repository_id`, `repository_owner_id`): a workflow picks its own
+    /// environment and ref, so these never tell two workloads apart. Suspensions and
+    /// clearances compare identities this way, so an identity cannot leave either by changing
+    /// what its grant does not pin.
+    pub fn same_subject(&self, other: &WorkloadIdentity) -> bool {
+        use WorkloadIdentity as W;
+        match (self, other) {
+            (W::Azure { entra_tenant: t, object_id: o }, W::Azure { entra_tenant, object_id }) => {
+                t == entra_tenant && o == object_id
+            }
+            (W::AwsRole { role_id: r, .. }, W::AwsRole { role_id, .. }) => r == role_id,
+            (
+                W::Kubernetes { issuer: i, service_account_uid: u, .. },
+                W::Kubernetes { issuer, service_account_uid, .. },
+            ) => i == issuer && u == service_account_uid,
+            (W::Gcp { unique_id: u, .. }, W::Gcp { unique_id, .. }) => u == unique_id,
+            (
+                W::GitHub { repository_id: r, repository_owner_id: o, .. },
+                W::GitHub { repository_id, repository_owner_id, .. },
+            ) => r == repository_id && o == repository_owner_id,
+            (W::AppKey { key_id: k }, W::AppKey { key_id }) => k == key_id,
+            (
+                W::ConfidentialSpace { project_number: p, service_account: s },
+                W::ConfidentialSpace { project_number, service_account },
+            ) => p == project_number && s == service_account,
+            _ => false,
+        }
+    }
+}
+
 /// A rule in a tenant's signed state that a `WorkloadIdentity` either matches
 /// or not. Exact matches only: no wildcards, so a grant never widens by accident. Matching
 /// uses the immutable ids; names are what the CLI resolved them from and shows admins.
@@ -232,4 +265,124 @@ pub struct AuthenticationScope {
 pub enum ProofAssurance {
     RequestBound,
     BearerOverAttestedChannel,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// For every kind: each identity a matcher admits is the same subject as every other it
+    /// admits, and changing an immutable id makes another subject.
+    #[test]
+    fn same_subject_covers_whatever_one_grant_admits() {
+        use IdentityMatcher as M;
+        use WorkloadIdentity as W;
+        let s = |v: &str| v.to_string();
+        let key = PublicKey([3; 32]);
+        let cases: Vec<(M, W, W, W)> = vec![
+            (
+                M::Azure { entra_tenant: s("t"), object_id: s("o"), audience: s("a"), hosted: None },
+                W::Azure { entra_tenant: s("t"), object_id: s("o") },
+                W::Azure { entra_tenant: s("t"), object_id: s("o") },
+                W::Azure { entra_tenant: s("t"), object_id: s("p") },
+            ),
+            (
+                M::AwsRole { role_arn: s("arn:aws:iam::1:role/r"), role_id: s("AROA1") },
+                W::AwsRole { account: s("1"), role_arn: s("arn:aws:iam::1:role/r"), role_id: s("AROA1") },
+                W::AwsRole { account: s("1"), role_arn: s("arn:aws:iam::1:role/renamed"), role_id: s("AROA1") },
+                W::AwsRole { account: s("1"), role_arn: s("arn:aws:iam::1:role/r"), role_id: s("AROA2") },
+            ),
+            (
+                M::Kubernetes {
+                    issuer: s("i"),
+                    namespace: s("n"),
+                    service_account: s("sa"),
+                    service_account_uid: s("u"),
+                },
+                W::Kubernetes {
+                    issuer: s("i"),
+                    namespace: s("n"),
+                    service_account: s("sa"),
+                    service_account_uid: s("u"),
+                },
+                W::Kubernetes {
+                    issuer: s("i"),
+                    namespace: s("m"),
+                    service_account: s("sb"),
+                    service_account_uid: s("u"),
+                },
+                W::Kubernetes {
+                    issuer: s("i"),
+                    namespace: s("n"),
+                    service_account: s("sa"),
+                    service_account_uid: s("v"),
+                },
+            ),
+            (
+                M::Gcp { email: s("a@p"), unique_id: s("1") },
+                W::Gcp { email: s("a@p"), unique_id: s("1") },
+                W::Gcp { email: s("b@p"), unique_id: s("1") },
+                W::Gcp { email: s("a@p"), unique_id: s("2") },
+            ),
+            (
+                M::GitHub {
+                    repository: s("o/r"),
+                    repository_id: 1,
+                    repository_owner_id: 2,
+                    scope: GitHubScope::Environment(s("prod")),
+                },
+                W::GitHub {
+                    repository: s("o/r"),
+                    repository_id: 1,
+                    repository_owner_id: 2,
+                    environment: Some(s("prod")),
+                    git_ref: s("refs/heads/main"),
+                },
+                W::GitHub {
+                    repository: s("o/renamed"),
+                    repository_id: 1,
+                    repository_owner_id: 2,
+                    environment: Some(s("prod")),
+                    git_ref: s("refs/heads/other"),
+                },
+                W::GitHub {
+                    repository: s("o/r"),
+                    repository_id: 3,
+                    repository_owner_id: 2,
+                    environment: Some(s("prod")),
+                    git_ref: s("refs/heads/main"),
+                },
+            ),
+            (
+                M::AppKey { key_id: KeyId([1; 32]), public_key: key },
+                W::AppKey { key_id: KeyId([1; 32]) },
+                W::AppKey { key_id: KeyId([1; 32]) },
+                W::AppKey { key_id: KeyId([2; 32]) },
+            ),
+            (
+                M::ConfidentialSpace { project_number: 5, service_account: s("sa@p"), hosted: None },
+                W::ConfidentialSpace { project_number: 5, service_account: s("sa@p") },
+                W::ConfidentialSpace { project_number: 5, service_account: s("sa@p") },
+                W::ConfidentialSpace { project_number: 6, service_account: s("sa@p") },
+            ),
+        ];
+        for (matcher, id, varied, other) in &cases {
+            assert!(matcher.matches(id) && matcher.matches(varied), "{matcher:?}");
+            assert!(id.same_subject(varied) && varied.same_subject(id), "{id:?}");
+            assert!(!matcher.matches(other) && !id.same_subject(other), "{other:?}");
+        }
+        // A GitHub workflow in another environment or on another ref, which another grant may
+        // admit, is still its repository.
+        let (_, gh, _, _) = &cases[4];
+        let elsewhere = W::GitHub {
+            repository: s("o/r"),
+            repository_id: 1,
+            repository_owner_id: 2,
+            environment: None,
+            git_ref: s("refs/tags/v2"),
+        };
+        assert!(gh.same_subject(&elsewhere));
+        // Kinds never mix.
+        assert!(!cases[0].1.same_subject(&cases[5].1));
+    }
 }

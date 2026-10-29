@@ -683,6 +683,48 @@ fn service_key_certificates_need_their_platforms_guardian() {
     assert!(is_cert_error(verify_service_certificate(&guardians, &tampered)));
 }
 
+/// Versions below the platform's `min_service_key_version` sign nothing that counts, for
+/// readers too: their keys drop out, and a certificate of a retired version is a finding.
+#[test]
+fn telemetry_keys_of_retired_service_key_versions_count_for_nothing() {
+    use seal_proto::release::ReleaseConstraints;
+    use seal_verify::telemetry::{certified_keys, Finding};
+    use seal_verify::{telemetry_floor, telemetry_keys_in_force};
+    let guardian = key(60);
+    let guardians: BTreeMap<PlatformId, PublicKey> = [(PlatformId::Sim, guardian.public_key())].into();
+    let cert = |v: u32| ServiceKeyCertificate {
+        platform: PlatformId::Sim,
+        tenant: acme(),
+        root_id: seal_proto::TenantRootId([1; 32]),
+        service_key_version: ServiceKeyVersion(v),
+        tls_spki_sha256: [2; 32],
+        ingest_public_key: PublicKey([3; 32]),
+        telemetry_public_keys: (1..=v).map(|i| (ServiceKeyVersion(i), PublicKey([i as u8; 32]))).collect(),
+    };
+    let floor = |min: u32| ReleaseConstraints {
+        min_service_key_version: [(PlatformId::Sim, ServiceKeyVersion(min))].into(),
+        ..Default::default()
+    };
+    let v3 = cert(3);
+    assert_eq!(telemetry_keys_in_force(&v3, Some(&ReleaseConstraints::default())).len(), 3);
+    assert_eq!(telemetry_keys_in_force(&v3, Some(&floor(2))), [PublicKey([2; 32]), PublicKey([3; 32])]);
+    // Another platform's floor retires nothing here.
+    let mut aws = floor(3);
+    aws.min_service_key_version = [(PlatformId::AwsNitro, ServiceKeyVersion(3))].into();
+    assert_eq!(telemetry_floor(&v3, Some(&aws)), ServiceKeyVersion(0));
+    // With no policy known, only the certificate's own version.
+    assert_eq!(telemetry_keys_in_force(&v3, None), [PublicKey([3; 32])]);
+
+    let signed = |c: ServiceKeyCertificate| guardian.sign_into(SERVICE_KEY_CERTIFICATE_LABEL, c);
+    let root_id = seal_proto::TenantRootId([1; 32]);
+    let certificates = [signed(cert(1)), signed(cert(3))];
+    let (keys, findings) = certified_keys(&guardians, &acme(), &root_id, &certificates, Some(&floor(2)));
+    assert_eq!(keys, [PublicKey([2; 32]), PublicKey([3; 32])]);
+    assert!(matches!(&findings[..], [Finding::CertificateIgnored { index: 0, reason }] if reason.contains("retired")));
+    let (keys, findings) = certified_keys(&guardians, &acme(), &root_id, &certificates, None);
+    assert_eq!((keys, findings), (vec![PublicKey([1; 32]), PublicKey([3; 32])], vec![]));
+}
+
 /// A passkey's WebAuthn assertion over `labeled_digest(label, body)`, origin `https://seal.zone`.
 fn passkey_sign<T: serde::Serialize>(n: u8, label: &str, body: &T) -> (AdminKey, seal_proto::signed::Signature) {
     use p256::ecdsa::signature::Signer as _;

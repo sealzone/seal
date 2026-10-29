@@ -287,7 +287,7 @@ pub struct ServiceConfig {
 /// entry with a `HostedMode` marks Seal's hosted replica, which exits when idle.
 pub struct SealService {
     runtime: Arc<runtime::Runtime>,
-    _tasks: runtime::Tasks,
+    tasks: tokio::sync::Mutex<runtime::Tasks>,
 }
 
 impl SealService {
@@ -302,7 +302,7 @@ impl SealService {
     /// `Unavailable` until a fresh bundle loads: the enclave fails closed.
     pub async fn boot(config: ServiceConfig, components: Components) -> Result<Self, ServiceError> {
         let (runtime, tasks) = runtime::Runtime::boot(config, components).await?;
-        Ok(Self { runtime, _tasks: tasks })
+        Ok(Self { runtime, tasks: tokio::sync::Mutex::new(tasks) })
     }
     /// Whether a tunnel may connect, checked on its TLS ClientHello: a replica that serves no
     /// sessions (draining, or no longer listed) refuses before the handshake, so the
@@ -402,5 +402,12 @@ impl SealService {
     /// serving, ships the final telemetry batch and exits. Never resolves on any other replica.
     pub async fn idle_exit(&self, idle: std::time::Duration) {
         self.runtime.idle_exit(idle).await
+    }
+
+    /// Resolves when one of the background tasks ends (it panicked: they run for the
+    /// service's lifetime), naming it. The replica then no longer attests, reloads its state
+    /// or rechecks sessions, so the caller should exit and be restarted.
+    pub async fn background_ended(&self) -> String {
+        self.tasks.lock().await.ended().await
     }
 }

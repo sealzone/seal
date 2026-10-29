@@ -10,8 +10,8 @@ use bytes::BytesMut;
 use postgres_protocol::message::frontend;
 
 use common::{
-    connect, connect_to, contains, error_field, extended_msgs, message, query_msg, startup_packet, FakeAuth,
-    FakeUpstream,
+    connect, connect_through, connect_to, contains, error_field, extended_msgs, message, query_msg, startup_packet,
+    FakeAuth, FakeUpstream,
 };
 use seal_adapter::testing::{claims, FixedResolver, TestUpstream};
 use seal_adapter::{AdapterError, Outcome, UpstreamErrorKind, Verdict};
@@ -176,6 +176,13 @@ async fn cancel_requests_reach_only_their_own_connection() {
         assert!(c.drain().await.is_empty());
         assert!(matches!(task.await.unwrap(), Err(AdapterError::Denied(ErrorCode::NotAllowed))), "{key:?}");
     }
+    assert_eq!(s.fake.log.lock().unwrap().cancels.len(), 1);
+
+    // Through a tunnel of another session, A's key cancels nothing.
+    let (mut c, task) = connect_through(adapter.clone(), s.resolver.clone(), s.upstream.clone(), "sealtok_other");
+    c.send(&cancel_packet(key_a)).await;
+    assert!(c.drain().await.is_empty());
+    assert!(matches!(task.await.unwrap(), Err(AdapterError::Denied(ErrorCode::NotAllowed))));
     assert_eq!(s.fake.log.lock().unwrap().cancels.len(), 1);
 
     // Another adapter (another replica) does not know A's key either.

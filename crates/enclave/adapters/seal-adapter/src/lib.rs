@@ -56,6 +56,10 @@ pub trait Session: Send + Sync {
     fn expires_at(&self) -> UnixTime;
     /// Only for upstream authentication and response scrubbing.
     fn secret(&self) -> &[u8];
+    /// Whether `tunnel`'s token is one of this session's (any of its tokens, extended or not).
+    /// A request that carries no credential of its own, a Postgres cancel, acts on a session
+    /// only through a tunnel of that session.
+    fn same_session(&self, tunnel: &TunnelConnect) -> bool;
     /// One request, before it is forwarded, for the integrity detectors. The adapter must obey the verdict.
     /// The runtime attributes the observation to this session's identity.
     fn observe(&self, observation: &seal_integrity::Observation<'_>) -> seal_integrity::Verdict;

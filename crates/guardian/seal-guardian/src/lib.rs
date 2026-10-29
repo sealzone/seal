@@ -34,8 +34,8 @@ use std::time::Instant;
 
 use seal_crypto::hpke::KEY_RELEASE_INFO;
 use seal_crypto::sign::SigningKey;
-use seal_crypto::{ChallengeKey, Key32, PlatformMasterKey, SecretBytes, SysRng, UnwrapErr};
-use seal_proto::codec::{canonical, labeled_digest};
+use seal_crypto::{ChallengeKey, Key32, PlatformMasterKey, SysRng, UnwrapErr};
+use seal_proto::codec::{canonical, canonical_secret, labeled_digest};
 use seal_proto::release::{
     KeyPurpose, KeyRequest, KeyResponse, ReleasedKeys, GUARDIAN_IDENTITY_LABEL, KEY_REQUEST_BINDING_LABEL,
     KEY_RESPONSE_LABEL,
@@ -229,13 +229,13 @@ impl Guardian {
                 ReleasedKeys::Root { platform: self.config.platform, root: SecretVec::new(self.root.expose().to_vec()) }
             }
         };
-        let plaintext = SecretBytes::new(canonical(&keys));
+        let plaintext = canonical_secret(&keys);
         let binding = &req.binding;
         let (hpke_enc, ciphertext) = seal_crypto::hpke::seal(
             &binding.ephemeral_public_key,
             KEY_RELEASE_INFO,
             &canonical(binding),
-            plaintext.expose(),
+            &plaintext,
             &mut UnwrapErr(SysRng),
         )
         // A low-order ephemeral key: the binding names no key anything can be sealed to.

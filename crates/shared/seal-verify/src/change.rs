@@ -17,7 +17,7 @@
 //! | `integrity.sources` | | adding, removing or rekeying a source (removing one lifts its suspensions) |
 //! | `integrity.actions` | a harder action for some severity | a softer one |
 //! | `integrity.cleared` | removing a clearance | adding a clearance (it lifts suspensions) |
-//! | `freshness_keys` | adding one | removing one |
+//! | `freshness_keys` (any one listed signer's statement suffices) | adding the first; removing one while others remain | adding another; removing the last |
 //! | `telemetry_readers` | removing one while others remain | adding one; removing the last |
 //! | `pending_window_secs` | lengthening | shortening |
 //! | `freshness_secs` | shortening (setting it shortens) | lengthening (clearing it lengthens) |
@@ -230,20 +230,19 @@ impl Diff {
     fn when(&mut self, widening: bool, item: Item) {
         self.push(if widening { Change::Widening } else { Change::Narrowing }, item);
     }
-    /// Added members widen, removed ones narrow (or the reverse with `added_narrows`).
+    /// Added members widen, removed ones narrow.
     fn sets<T: Ord + Clone>(
         &mut self,
         old: &BTreeSet<T>,
         new: &BTreeSet<T>,
-        added_narrows: bool,
         added: impl Fn(T) -> Item,
         removed: impl Fn(T) -> Item,
     ) {
         for x in new.difference(old) {
-            self.when(!added_narrows, added(x.clone()));
+            self.push(Change::Widening, added(x.clone()));
         }
         for x in old.difference(new) {
-            self.when(added_narrows, removed(x.clone()));
+            self.push(Change::Narrowing, removed(x.clone()));
         }
     }
 }
@@ -279,7 +278,6 @@ pub fn diff_states(old: &TenantState, new: &TenantState) -> Vec<Difference> {
     d.sets(
         &old.platforms,
         &new.platforms,
-        false,
         |platform| Item::PlatformAdded { platform },
         |platform| Item::PlatformRemoved { platform },
     );
@@ -344,17 +342,18 @@ pub fn diff_states(old: &TenantState, new: &TenantState) -> Vec<Difference> {
     d.sets(
         &oi.cleared,
         &ni.cleared,
-        false,
         |clearance| Item::ClearanceAdded { clearance },
         |clearance| Item::ClearanceRemoved { clearance },
     );
-    d.sets(
-        &old.freshness_keys,
-        &new.freshness_keys,
-        true,
-        |key| Item::FreshnessKeyAdded { key },
-        |key| Item::FreshnessKeyRemoved { key },
-    );
+    // Freshness signers, like networks: any one listed signer's statement keeps the state
+    // usable, so a first signer narrows (a statement is needed at all) and a further one
+    // widens (another key can vouch); removing one narrows unless it was the last.
+    for key in new.freshness_keys.difference(&old.freshness_keys) {
+        d.when(!old.freshness_keys.is_empty(), Item::FreshnessKeyAdded { key: *key });
+    }
+    for key in old.freshness_keys.difference(&new.freshness_keys) {
+        d.when(new.freshness_keys.is_empty(), Item::FreshnessKeyRemoved { key: *key });
+    }
 
     for key in new.telemetry_readers.difference(&old.telemetry_readers) {
         d.push(Change::Widening, Item::TelemetryReaderAdded { key: *key });
@@ -782,11 +781,35 @@ mod tests {
 
     #[test]
     fn freshness_keys() {
-        let item = narrows(|s| {
+        // Another signer can vouch alone: widening.
+        let item = widens(|s| {
             s.freshness_keys.insert(PublicKey([11; 32]));
         });
         assert_eq!(item, Item::FreshnessKeyAdded { key: PublicKey([11; 32]) });
         assert_eq!(widens(|s| s.freshness_keys.clear()), Item::FreshnessKeyRemoved { key: PublicKey([7; 32]) });
+        // The first signer: a statement is needed at all.
+        let mut none = base();
+        none.freshness_keys.clear();
+        let first = base();
+        let d = diff_states(&none, &first);
+        assert_eq!(d.len(), 1);
+        assert_eq!(
+            (d[0].change, &d[0].item),
+            (Change::Narrowing, &Item::FreshnessKeyAdded { key: PublicKey([7; 32]) })
+        );
+        // Removing one of two leaves fewer keys that can vouch.
+        let mut two = base();
+        two.freshness_keys.insert(PublicKey([11; 32]));
+        let d = diff_states(&two, &first);
+        assert_eq!(d.len(), 1);
+        assert_eq!(
+            (d[0].change, &d[0].item),
+            (Change::Narrowing, &Item::FreshnessKeyRemoved { key: PublicKey([11; 32]) })
+        );
+        // Replacing the one signer widens: the new key alone could vouch.
+        let mut replaced = base();
+        replaced.freshness_keys = [PublicKey([11; 32])].into();
+        assert_eq!(classify_state(&first, &replaced), Change::Widening);
     }
 
     #[test]

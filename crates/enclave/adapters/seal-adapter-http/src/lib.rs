@@ -8,6 +8,11 @@
 //!   carry the injected header to another origin;
 //! - `Upgrade` (WebSocket, h2c) is refused, and so is a header that some servers read as the
 //!   real method or path (`OVERRIDE_HEADERS`), since the policy checks the request line;
+//! - so is a `_method` query parameter, which frameworks (Laravel, Symfony, Rails, Express's
+//!   `method-override`) also take as the method. When the policy restricts methods, a
+//!   `multipart/form-data` body is refused, and an `application/x-www-form-urlencoded` one
+//!   (or a body without a `Content-Type`, which Rack parses as a form) is read whole, up to
+//!   `FORM_MAX_BYTES`, and refused if it has a `_method` field; other bodies stream;
 //! - the upstream request's `Accept-Encoding` is `identity`, whatever the client sent, so
 //!   responses reach the scrubber uncompressed; a response that is encoded anyway is refused;
 //! - `Range` and `If-Range` are dropped, so an echo of the secret comes back whole, never in
@@ -79,6 +84,9 @@ const ACTION_PATH_MAX: usize = 128;
 /// path (prefix policy) in place of the request line's. A request carrying one is refused.
 const OVERRIDE_HEADERS: [&str; 5] =
     ["x-http-method-override", "x-http-method", "x-method-override", "x-original-url", "x-rewrite-url"];
+/// Under method rules, a form body is read whole up to this size to look for a `_method`
+/// field before it goes upstream; a longer one is refused.
+const FORM_MAX_BYTES: usize = 1 << 20;
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 type RespBody = BoxBody<Bytes, BoxError>;
@@ -205,7 +213,7 @@ impl Refusal {
     }
     /// The response after reading what is left of the request body, so the connection can
     /// serve the next request; closes it instead when the rest is too long or too slow.
-    async fn after(mut self, body: Incoming) -> Response<RespBody> {
+    async fn after(mut self, body: ReqBody) -> Response<RespBody> {
         if !self.close && !body.is_end_stream() {
             self.close = !drain(body).await;
         }
@@ -238,6 +246,7 @@ impl Conn {
     }
 
     async fn handle(self: Arc<Self>, req: Request<Incoming>) -> Response<RespBody> {
+        let req = req.map(ReqBody::Stream);
         let action = action(req.method(), req.uri());
         if let Some(code) = *self.ended.lock().unwrap_or_else(|e| e.into_inner()) {
             return Refusal::close(code, "the session has ended").response();
@@ -262,6 +271,13 @@ impl Conn {
             complete(&*session, &action, Outcome::Denied(code), 0, 0);
             return Refusal::keep(code, "the request is outside the blob's policy").after(req.into_body()).await;
         }
+        let req = match read_form(&*session, req).await {
+            Ok(req) => req,
+            Err(refusal) => {
+                complete(&*session, &action, Outcome::Denied(refusal.code), 0, 0);
+                return refusal.response();
+            }
+        };
 
         let target = req.uri().path_and_query().map_or("/", |pq| pq.as_str()).to_string();
         let content = format!("{} {target}", req.method());
@@ -414,7 +430,7 @@ impl Conn {
 }
 
 /// Reads and discards a refused request's body: true if it ended within the limits.
-async fn drain(mut body: Incoming) -> bool {
+async fn drain(mut body: ReqBody) -> bool {
     let read = async {
         let mut left = DRAIN_MAX_BYTES;
         while let Some(frame) = body.frame().await {
@@ -458,8 +474,9 @@ fn request_credential(headers: &HeaderMap) -> Result<Option<(HeaderName, Zeroizi
     Ok(found)
 }
 
-/// Request form, `Upgrade`, override headers, path syntax and the blob's HTTP policy.
-fn check_request(session: &dyn Session, req: &Request<Incoming>) -> Result<(), ErrorCode> {
+/// Request form, `Upgrade`, override headers and parameters, path syntax and the blob's HTTP
+/// policy. A multipart body under method rules is refused here; `read_form` checks the others.
+fn check_request(session: &dyn Session, req: &Request<ReqBody>) -> Result<(), ErrorCode> {
     let uri = req.uri();
     if req.method() == Method::CONNECT || uri.scheme().is_some() || uri.authority().is_some() {
         return Err(ErrorCode::PolicyDenied);
@@ -469,14 +486,112 @@ fn check_request(session: &dyn Session, req: &Request<Incoming>) -> Result<(), E
     if upgrade || OVERRIDE_HEADERS.iter().any(|h| req.headers().contains_key(*h)) {
         return Err(ErrorCode::PolicyDenied);
     }
+    if uri.query().is_some_and(|q| has_method_field(q.as_bytes())) {
+        return Err(ErrorCode::PolicyDenied);
+    }
+    if methods_restricted(session) && form_kind(req) == Some(Form::Multipart) {
+        return Err(ErrorCode::PolicyDenied);
+    }
     let path = HttpPath::parse(uri.path()).map_err(|_| ErrorCode::PolicyDenied)?;
     HttpPolicy::check(session.policy(), req.method().as_str(), &path)
+}
+
+fn methods_restricted(session: &dyn Session) -> bool {
+    session.policy().http().is_some_and(|r| !r.methods.is_empty())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum Form {
+    UrlEncoded,
+    Multipart,
+}
+
+/// How a server may parse the body as form fields: by its `Content-Type`, or as URL-encoded
+/// when a body comes without one (Rack does that for `POST`). `None` for other bodies.
+fn form_kind(req: &Request<ReqBody>) -> Option<Form> {
+    let mut types = req.headers().get_all(header::CONTENT_TYPE).iter().peekable();
+    if types.peek().is_none() {
+        return (!req.body().is_end_stream()).then_some(Form::UrlEncoded);
+    }
+    let mut kind = None;
+    for value in types {
+        let Ok(text) = value.to_str() else { return Some(Form::UrlEncoded) };
+        let media = text.split(';').next().unwrap_or("").trim();
+        if media.eq_ignore_ascii_case("multipart/form-data") {
+            return Some(Form::Multipart);
+        }
+        if media.eq_ignore_ascii_case("application/x-www-form-urlencoded") {
+            kind = Some(Form::UrlEncoded);
+        }
+    }
+    kind
+}
+
+/// Under method rules, reads a URL-encoded body whole and refuses it if it has a `_method`
+/// field; any other request passes through still streaming.
+async fn read_form(session: &dyn Session, req: Request<ReqBody>) -> Result<Request<ReqBody>, Refusal> {
+    if !methods_restricted(session) || form_kind(&req) != Some(Form::UrlEncoded) || req.body().is_end_stream() {
+        return Ok(req);
+    }
+    let (parts, mut body) = req.into_parts();
+    let mut buf = Vec::new();
+    while let Some(frame) = body.frame().await {
+        let Ok(frame) = frame else {
+            return Err(Refusal::close(ErrorCode::BadRequest, "the request body could not be read"));
+        };
+        if let Some(data) = frame.data_ref() {
+            if buf.len() + data.len() > FORM_MAX_BYTES {
+                return Err(Refusal::close(ErrorCode::PolicyDenied, "the form body is too large to check"));
+            }
+            buf.extend_from_slice(data);
+        }
+    }
+    if has_method_field(&buf) {
+        return Err(Refusal::keep(ErrorCode::PolicyDenied, "the request is outside the blob's policy"));
+    }
+    Ok(Request::from_parts(parts, ReqBody::Buffered(Some(Bytes::from(buf)))))
+}
+
+/// Whether URL-encoded `fields` (a query string or a form body) name a `_method` field, as
+/// any common parser would read the name: `+` and `%XX` decoded, ASCII case ignored, PHP's
+/// rewriting of leading spaces, ` ` and `.` (to `_`) and `[...]` suffixes applied. `&` and
+/// `;` both separate fields.
+fn has_method_field(fields: &[u8]) -> bool {
+    fields.split(|&b| b == b'&' || b == b';').any(|field| {
+        let raw = field.split(|&b| b == b'=').next().unwrap_or_default();
+        let mut name = percent_decode(raw);
+        name.make_ascii_lowercase();
+        let start = name.iter().position(|&b| b != b' ').unwrap_or(name.len());
+        let name = &name[start..];
+        let name = &name[..name.iter().position(|&b| b == b'[').unwrap_or(name.len())];
+        name.len() == 7 && name.iter().zip(b"_method").all(|(&a, &b)| a == b || (b == b'_' && (a == b' ' || a == b'.')))
+    })
+}
+
+/// `+` as a space and `%XX` as its byte; a `%` without two hex digits stays as it is.
+fn percent_decode(raw: &[u8]) -> Vec<u8> {
+    let hex = |b: u8| (b as char).to_digit(16).map(|d| d as u8);
+    let mut out = Vec::with_capacity(raw.len());
+    let mut i = 0;
+    while i < raw.len() {
+        let decoded = match (raw[i], raw.get(i + 1).copied().and_then(hex), raw.get(i + 2).copied().and_then(hex)) {
+            (b'%', Some(hi), Some(lo)) => {
+                i += 2;
+                hi << 4 | lo
+            }
+            (b'+', ..) => b' ',
+            (b, ..) => b,
+        };
+        out.push(decoded);
+        i += 1;
+    }
+    out
 }
 
 /// The request as the destination receives it.
 fn upstream_request(
     session: &dyn Session,
-    req: Request<Incoming>,
+    req: Request<ReqBody>,
     credential_header: HeaderName,
     target: &str,
     bytes_up: Arc<AtomicU64>,
@@ -587,9 +702,39 @@ fn complete(session: &dyn Session, action: &str, outcome: Outcome, bytes_up: u64
     });
 }
 
+/// A client's request body: streaming, or already read whole (`read_form`).
+enum ReqBody {
+    Stream(Incoming),
+    Buffered(Option<Bytes>),
+}
+
+impl Body for ReqBody {
+    type Data = Bytes;
+    type Error = hyper::Error;
+
+    fn poll_frame(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Result<Frame<Bytes>, hyper::Error>>> {
+        match self.get_mut() {
+            ReqBody::Stream(inner) => Pin::new(inner).poll_frame(cx),
+            ReqBody::Buffered(data) => Poll::Ready(data.take().map(|d| Ok(Frame::data(d)))),
+        }
+    }
+    fn is_end_stream(&self) -> bool {
+        match self {
+            ReqBody::Stream(inner) => inner.is_end_stream(),
+            ReqBody::Buffered(data) => data.is_none(),
+        }
+    }
+    fn size_hint(&self) -> SizeHint {
+        match self {
+            ReqBody::Stream(inner) => inner.size_hint(),
+            ReqBody::Buffered(data) => SizeHint::with_exact(data.as_ref().map_or(0, |d| d.len() as u64)),
+        }
+    }
+}
+
 /// The client's request body on its way upstream, counted.
 struct UpBody {
-    inner: Incoming,
+    inner: ReqBody,
     count: Arc<AtomicU64>,
 }
 

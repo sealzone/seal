@@ -10,7 +10,7 @@ use seal_crypto::sign::{key_id, verify};
 use seal_crypto::telemetry::{open_entries, TelemetryReaderKey};
 use seal_proto::api::TelemetryReceipt;
 use seal_proto::codec;
-use seal_proto::release::SignedServiceKeyCertificate;
+use seal_proto::release::{ReleaseConstraints, SignedServiceKeyCertificate};
 use seal_proto::telemetry::{
     SignedTelemetryBatch, TelemetryBatch, TelemetryEntries, TelemetryEntry, TELEMETRY_BATCH_LABEL,
 };
@@ -104,22 +104,35 @@ pub struct Analysis {
     pub findings: Vec<Finding>,
 }
 
-/// The telemetry public keys of every certificate that verifies under `guardians`
-/// (`verify_service_certificate`) and is for `tenant` and `root_id`; the others are findings.
+/// The telemetry public keys still in force (`telemetry_keys_in_force` under `policy`, the
+/// release constraints of a checkpoint the caller verified) of every certificate that verifies
+/// under `guardians` (`verify_service_certificate`) and is for `tenant` and `root_id`; the
+/// others, and certificates of a retired service key version, are findings. Batches signed by
+/// a retired version's key are then refused whenever they are dated: nothing records when the
+/// version was retired, and a batch's dates are its signer's own. Without a policy, each
+/// certificate counts only its own version's key.
 pub fn certified_keys(
     guardians: &BTreeMap<PlatformId, PublicKey>,
     tenant: &TenantId,
     root_id: &TenantRootId,
     certificates: &[SignedServiceKeyCertificate],
+    policy: Option<&ReleaseConstraints>,
 ) -> (Vec<PublicKey>, Vec<Finding>) {
     let mut keys = Vec::new();
     let mut findings = Vec::new();
     for (index, cert) in certificates.iter().enumerate() {
         match crate::verify_service_certificate(guardians, cert) {
             Ok(body) if &body.tenant == tenant && &body.root_id == root_id => {
-                for (_, key) in &body.telemetry_public_keys {
-                    if !keys.contains(key) {
-                        keys.push(*key);
+                let floor = crate::telemetry_floor(body, policy);
+                if body.service_key_version < floor {
+                    let reason =
+                        format!("service key version {} is retired (below {})", body.service_key_version.0, floor.0);
+                    findings.push(Finding::CertificateIgnored { index, reason });
+                    continue;
+                }
+                for key in crate::telemetry_keys_in_force(body, policy) {
+                    if !keys.contains(&key) {
+                        keys.push(key);
                     }
                 }
             }

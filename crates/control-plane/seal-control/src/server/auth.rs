@@ -6,8 +6,8 @@
 //! - `Bearer <write token>`: the deployment's operator;
 //! - `SealSigned <base64url(JSON SignedControlRequest)>`: signed by an admin key of the latest
 //!   root (admin tools), by a telemetry key of a guardian-certified `ServiceKeyCertificate`
-//!   posted for the chain (the tenant's enclaves), or by one of the latest state's
-//!   `freshness_keys` (a tenant-run freshness signer, which reads the state it signs for);
+//!   posted for the chain (the tenant's enclaves), or by a freshness signer (`Chain::
+//!   freshness_signers`: a tenant-run signer, which reads the state it signs for);
 //! - `SealAttested <base64url(JSON AttestedControlRequest)>`: an enclave at boot, before the
 //!   guardian released its keys. Its evidence must verify (`seal_attest::verify`), commit to the
 //!   request, and come from a release stored here that passes `ReleaseVerifier` under the
@@ -113,17 +113,31 @@ impl<S: Send + Sync> FromRequestParts<S> for Asked {
     }
 }
 
-/// The tenant a credential must be for: its chain's root id and the root whose admin keys
-/// count (the latest; root version 1 itself while it is being stored).
+/// The tenant a credential must be for: its chain's root id, the root whose admin keys
+/// count (the latest; root version 1 itself while it is being stored), and the freshness
+/// signers (the latest state's `freshness_keys`, and for the bundle those of the earlier states
+/// it can carry, whose signers vouch for the latest until it is in force).
 pub struct Chain<'a> {
     pub tenant: &'a TenantId,
     pub root_id: Option<TenantRootId>,
     pub admins: Option<&'a TenantRoot>,
+    pub freshness_signers: Vec<seal_proto::PublicKey>,
 }
 
 impl<'a> Chain<'a> {
     pub fn of(tenant: &'a TenantId, docs: &'a TenantDocs) -> Self {
-        Self { tenant, root_id: super::chain_root_id(docs), admins: docs.roots.last().map(|link| &link.root.body) }
+        Self {
+            tenant,
+            root_id: super::chain_root_id(docs),
+            admins: docs.roots.last().map(|link| &link.root.body),
+            freshness_signers: docs.state.iter().flat_map(|s| s.body.freshness_keys.iter().copied()).collect(),
+        }
+    }
+
+    /// Also admits `signers` as freshness signers.
+    pub fn with_freshness_signers(mut self, signers: impl IntoIterator<Item = seal_proto::PublicKey>) -> Self {
+        self.freshness_signers.extend(signers);
+        self
     }
 }
 
@@ -195,11 +209,10 @@ impl App {
                         })
                     })
                 };
-                let freshness: Vec<_> = docs.state.iter().flat_map(|s| s.body.freshness_keys.iter().copied()).collect();
                 let caller = match admin {
                     Some(sig) => Caller::Admin(sig.signer),
-                    None if signed_by(&telemetry_keys(docs)) => Caller::Enclave,
-                    None if signed_by(&freshness) => Caller::FreshnessSigner,
+                    None if signed_by(&telemetry_keys(docs, self.release_policy().await.as_ref())) => Caller::Enclave,
+                    None if signed_by(&chain.freshness_signers) => Caller::FreshnessSigner,
                     None => {
                         return Err(ApiError::unauthenticated(
                             "not signed by an admin, certified telemetry or freshness key of this tenant",

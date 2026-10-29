@@ -23,7 +23,7 @@ use seal_proto::state::{
     LoggedRoot, LoggedState, SignedStateFreshness, SignedTenantAnchor, TenantAnchor, TenantBundle, TenantRoot,
     TenantState, STATE_FRESHNESS_LABEL, TENANT_ANCHOR_LABEL, TENANT_ROOT_LABEL, TENANT_STATE_LABEL,
 };
-use seal_proto::{PlatformId, PublicKey, TenantId, TenantRootId, TrustedTime, UnixTime};
+use seal_proto::{PlatformId, PublicKey, ServiceKeyVersion, TenantId, TenantRootId, TrustedTime, UnixTime};
 use seal_tlog::{policy_not_loosened, LogVerifier, TlogError};
 
 pub use change::Change;
@@ -444,10 +444,11 @@ impl VerifiedTenant {
 /// Root chain from version 1 (registrar-signed) with every link logged and signed by
 /// `threshold` keys of the previous link; latest state for `tenant`, signed by the latest root,
 /// `state.root_version == latest.version`; freshness: a `StateFreshness` for exactly the latest
-/// state (version and digest) signed by the log key, and, when `state.freshness_keys` is
-/// non-empty, one signed by one of them, each with `signed_at <= time.latest() < signed_at +
-/// window`, the window being the shorter `TenantState::freshness_window` of the latest state
-/// and the state in force (`StateNotFresh` otherwise, which also stops a truncated root chain,
+/// state (version and digest) signed by the log key, and, for each of the latest state and the
+/// state in force whose `freshness_keys` is non-empty, one signed by one of its keys (so a
+/// change of signers waits, like any widening, until the state making it is in force), each
+/// with `signed_at <= time.latest() < signed_at + window`, the window being the shorter
+/// `TenantState::freshness_window` of the latest state and the state in force (`StateNotFresh` otherwise, which also stops a truncated root chain,
 /// since the latest state names the latest root); the bundle's `states`: consecutive versions
 /// ending with the latest, each for `tenant`, signed by the root it names (no older than the
 /// previous state's), logged in version order under this chain's root id; then the state in
@@ -459,7 +460,8 @@ impl VerifiedTenant {
 /// (sources `Enclave` and `Sdk`) or by the in-force state's `integrity.sources[source]`
 /// (source `External`); session ends for `tenant` signed by one of `telemetry_keys` under
 /// `SESSION_END_LABEL`. Invalid signals and session ends are dropped, not fatal, so junk
-/// cannot suspend anyone or end a session.
+/// cannot suspend anyone or end a session. Callers pass only the telemetry keys still in force
+/// (`telemetry_keys_in_force`), so a retired service key version's key signs neither.
 ///
 /// Signals are deduplicated by content, session ends by `session_id` (the first valid one
 /// counts); both keep bundle order. For each required freshness signer the latest valid
@@ -502,7 +504,9 @@ impl TenantVerifier {
         time: &TrustedTime,
     ) -> Result<TenantAnchor, VerifyError> {
         let state = &bundle.state.body;
-        let complete = fresh_since(&self.trust.tlog.log_key, state, &bundle.freshness, state.freshness_window(), time)?;
+        let signers = [&state.freshness_keys];
+        let complete =
+            fresh_since(&self.trust.tlog.log_key, state, &signers, &bundle.freshness, state.freshness_window(), time)?;
         let v = self.verify_until(tenant, bundle, time, complete)?;
         Ok(TenantAnchor {
             platform,
@@ -541,9 +545,9 @@ impl TenantVerifier {
             )));
         }
         Self::verify_admin_signed(latest_root, TENANT_STATE_LABEL, signed_state)?;
-        // The latest state's own window first; the state in force may shorten it below.
-        let fresh_since =
-            fresh_since(&self.trust.tlog.log_key, state, &bundle.freshness, state.freshness_window(), time)?;
+        // The latest state's own signers and window first; the state in force adds its own below.
+        let log_key = &self.trust.tlog.log_key;
+        fresh_since(log_key, state, &[&state.freshness_keys], &bundle.freshness, state.freshness_window(), time)?;
 
         let states = match bundle.states.last() {
             // Without log proofs only a first state, which applies at once, can be in force.
@@ -574,9 +578,13 @@ impl TenantVerifier {
                 )
             })?;
         let (in_force, in_force_since) = window::advance(&roots, &states, anchor, since, checked_at);
-        // A longer window widens access, so it waits like any widening change: until the state
-        // that sets it is in force, the shorter window of the one in force applies.
-        let window = state.freshness_window().min(states[in_force].body().freshness_window());
+        // A longer window or another signer widens access, so it waits like any widening
+        // change: until the state that makes it is in force, the shorter window and the
+        // signers of the one in force apply too.
+        let current = states[in_force].body();
+        let window = state.freshness_window().min(current.freshness_window());
+        let signers = [&state.freshness_keys, &current.freshness_keys];
+        let fresh_since = fresh_since(log_key, state, &signers, &bundle.freshness, window, time)?;
         let fresh_until = fresh_since.saturating_add(window);
         if time.latest() >= fresh_until {
             return Err(VerifyError::StateNotFresh);
@@ -861,13 +869,14 @@ fn signed_by_any<T: serde::Serialize>(keys: &[PublicKey], label: &str, signed: &
     })
 }
 
-/// When the required statements for `state` last vouched for it, the earlier of: the log's
-/// latest, and a tenant-run signer's latest when the state names `freshness_keys`. Each must
-/// be younger than `window` (`StateNotFresh` otherwise); the state is fresh until this plus
+/// When the required statements for `state` last vouched for it, the earliest of: the log's
+/// latest, and for each non-empty set of `signers`, the latest by one of its keys. Each must be
+/// younger than `window` (`StateNotFresh` otherwise); the state is fresh until this plus
 /// `window`.
 fn fresh_since(
     log_key: &PublicKey,
     state: &TenantState,
+    signers: &[&BTreeSet<PublicKey>],
     statements: &[SignedStateFreshness],
     window: u64,
     time: &TrustedTime,
@@ -885,13 +894,42 @@ fn fresh_since(
             .filter(|&at| time.latest() < at.saturating_add(window))
             .max()
     };
-    let log = latest(std::slice::from_ref(log_key)).ok_or(VerifyError::StateNotFresh)?;
-    if state.freshness_keys.is_empty() {
-        return Ok(log);
+    let mut since = latest(std::slice::from_ref(log_key)).ok_or(VerifyError::StateNotFresh)?;
+    for keys in signers.iter().filter(|keys| !keys.is_empty()) {
+        let keys: Vec<PublicKey> = keys.iter().copied().collect();
+        since = since.min(latest(&keys).ok_or(VerifyError::StateNotFresh)?);
     }
-    let tenant_keys: Vec<PublicKey> = state.freshness_keys.iter().copied().collect();
-    let tenant = latest(&tenant_keys).ok_or(VerifyError::StateNotFresh)?;
-    Ok(log.min(tenant))
+    Ok(since)
+}
+
+/// The release constraints of `checkpoint`, once it verifies under `tlog` (the log's signature
+/// and a witness quorum). They only tighten, so any verified checkpoint's are a lower bound on
+/// the current ones.
+pub fn checkpoint_policy(
+    tlog: &seal_tlog::TlogTrust,
+    checkpoint: &SignedCheckpoint,
+) -> Result<ReleaseConstraints, VerifyError> {
+    Ok(LogVerifier::new(tlog.clone()).checkpoint(checkpoint)?.checkpoint().policy.clone())
+}
+
+/// The lowest service key version of `cert`'s platform whose telemetry key still counts: its
+/// `min_service_key_version` in `policy`, the release constraints of the newest checkpoint the
+/// caller verified (none set: every version). With no policy known, the certificate's own
+/// version, which its guardian certified current.
+pub fn telemetry_floor(cert: &ServiceKeyCertificate, policy: Option<&ReleaseConstraints>) -> ServiceKeyVersion {
+    match policy {
+        Some(policy) => policy.min_service_key_version.get(&cert.platform).copied().unwrap_or(ServiceKeyVersion(0)),
+        None => cert.service_key_version,
+    }
+}
+
+/// The telemetry public keys of `cert` at or above `telemetry_floor`. A retired version's key
+/// signs no signal, session end or telemetry batch that counts. The log does not record when
+/// a version was retired, and a batch's dates are its signer's own, so what such a key signed
+/// is refused whenever it was signed.
+pub fn telemetry_keys_in_force(cert: &ServiceKeyCertificate, policy: Option<&ReleaseConstraints>) -> Vec<PublicKey> {
+    let floor = telemetry_floor(cert, policy);
+    cert.telemetry_public_keys.iter().filter(|(v, _)| *v >= floor).map(|(_, k)| *k).collect()
 }
 
 /// Signed by `guardians[cert.platform]` under `SERVICE_KEY_CERTIFICATE_LABEL`. Callers then

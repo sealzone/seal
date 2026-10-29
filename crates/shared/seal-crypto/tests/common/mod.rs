@@ -107,5 +107,6 @@ pub fn claims(blob: seal_proto::blob::Blob, service_key_version: ServiceKeyVersi
         platform: PlatformId::Sim,
         issued_at: 1_900_000_000,
         expires_at: 1_900_000_600,
+        min_tier: None,
     }
 }

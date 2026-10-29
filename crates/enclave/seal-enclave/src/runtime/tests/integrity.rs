@@ -329,6 +329,38 @@ async fn a_hardened_blob_stops_at_extend_when_the_agent_goes_silent() {
     h.extend(CONSUMER, &session.token, Some(report)).await.unwrap();
 }
 
+/// A `min_tier` the caller asked for at start holds at every extend, as the blob's own does.
+#[tokio::test]
+async fn a_requested_min_tier_holds_at_every_extend() {
+    let mut boot = Boot::with_state(|s| {
+        s.integrity.sources.insert("host-agent".into(), PublicKey([7; 32]));
+    });
+    boot.evidence_checks = vec![Arc::new(ChallengeCheck)];
+    let h = boot.start().await.map_err(|(e, _)| e).unwrap();
+    let blob = h.seal().await.unwrap().blob;
+    let mut request = SessionRequest {
+        blob,
+        context: h.context(ProofPurpose::Session { request_digest: [0; 32] }).await,
+        proof: IdentityProof::AppKey { key_id: key(CONSUMER).key_id(), signature: vec![] },
+        min_tier: Some(ConsumerTier::Hardened),
+        endpoint: None,
+    };
+    request.endpoint = Some(evidence_report(request.evidence_challenge().to_vec()));
+    request.context.purpose = request.expected_purpose();
+    request.proof = proof(CONSUMER, &request.context);
+    let session = h.service.session(request, None).await.unwrap();
+    assert_eq!(session.info.tier, ConsumerTier::Hardened);
+
+    // Without evidence the extend would be Base: refused.
+    let err = h.extend(CONSUMER, &session.token, None).await.unwrap_err();
+    assert_eq!(err.code, ErrorCode::TierTooLow);
+    let report = evidence_report(extend_challenge(&session.token).to_vec());
+    let extended = h.extend(CONSUMER, &session.token, Some(report)).await.unwrap();
+    // The extended token carries the floor on.
+    let err = h.extend(CONSUMER, &extended.token, None).await.unwrap_err();
+    assert_eq!(err.code, ErrorCode::TierTooLow);
+}
+
 #[tokio::test]
 async fn images_that_cannot_verify_never_attest() {
     // No compiled-in checks: Hardened is unreachable, so a hardened blob fails closed

@@ -131,7 +131,8 @@ pub struct IntegrityPolicy {
     /// Response from each severity upward; the highest entry at or below a signal's
     /// severity applies. Empty = log only.
     pub actions: BTreeMap<Severity, IntegrityAction>,
-    /// Admin clearances: signals for the identity observed at or before `before` are ignored.
+    /// Admin clearances: signals for the identity (`WorkloadIdentity::same_subject`) observed at
+    /// or before `before` are ignored.
     pub cleared: BTreeSet<Clearance>,
 }
 
@@ -171,9 +172,10 @@ impl IntegrityPolicy {
         }
     }
 
-    /// Whether an admin cleared `signal` (its identity, observed at or before a clearance).
+    /// Whether an admin cleared `signal` (its identity by `WorkloadIdentity::same_subject`,
+    /// observed at or before a clearance).
     fn is_cleared(&self, signal: &IntegritySignal) -> bool {
-        self.cleared.iter().any(|c| c.identity == signal.identity && signal.observed_at <= c.before)
+        self.cleared.iter().any(|c| c.identity.same_subject(&signal.identity) && signal.observed_at <= c.before)
     }
 }
 

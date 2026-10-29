@@ -1,11 +1,13 @@
 //! Cancel requests. A relayed connection's client gets a `BackendKeyData` of the adapter's own:
 //! a random process ID and secret key (63 random bits together), never the upstream's. A
 //! `CancelRequest` naming that pair, on a new tunnel connection to the same replica while the
-//! relayed connection lives (the core admits the tunnel only for a live session), is passed to the session's `observe` (action `CANCEL`) and then sent as a
-//! `CancelRequest` with the upstream's own key, over a new verified TLS connection to the
-//! session's destination. Any other pair is closed without a reply, as Postgres does. So a
-//! client cancels only queries of a connection whose key it was given, and the upstream's key
-//! never leaves the enclave.
+//! relayed connection lives, through a tunnel of the same session (`Session::same_session`:
+//! the core admits a tunnel only for a live session, and the cancel acts on no other), is
+//! passed to the session's `observe` (action `CANCEL`) and then sent as a `CancelRequest` with
+//! the upstream's own key, over a new verified TLS connection to the session's destination.
+//! Any other pair, or a tunnel of another session, is closed without a reply, as Postgres does.
+//! So a client cancels only queries of its own session's connections whose key it was given,
+//! and the upstream's key never leaves the enclave.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -17,6 +19,7 @@ use seal_adapter::{
     AdapterError, Completion, Observation, Outcome, Session, UpstreamConnector, UpstreamErrorKind, Verdict,
 };
 use seal_proto::policy::Protocol;
+use seal_proto::tunnel::TunnelConnect;
 use seal_proto::ErrorCode;
 use tokio::io::AsyncWriteExt;
 
@@ -77,10 +80,21 @@ impl Cancels {
         }
     }
 
-    /// Serves a `CancelRequest` for the client key (`pid`, `key`): refused (`NotAllowed`) when
-    /// no live connection has it, otherwise sent upstream with that connection's key.
-    pub async fn cancel(&self, pid: i32, key: i32, upstream: &dyn UpstreamConnector) -> Result<(), AdapterError> {
-        let found = self.targets().get(&(pid, key)).map(|t| (t.session.clone(), t.pid, t.key));
+    /// Serves a `CancelRequest` for the client key (`pid`, `key`) arriving through `tunnel`:
+    /// refused (`NotAllowed`) when no live connection of the tunnel's session has it,
+    /// otherwise sent upstream with that connection's key.
+    pub async fn cancel(
+        &self,
+        pid: i32,
+        key: i32,
+        tunnel: &TunnelConnect,
+        upstream: &dyn UpstreamConnector,
+    ) -> Result<(), AdapterError> {
+        let found = self
+            .targets()
+            .get(&(pid, key))
+            .filter(|t| t.session.same_session(tunnel))
+            .map(|t| (t.session.clone(), t.pid, t.key));
         let Some((session, upstream_pid, upstream_key)) = found else {
             return Err(AdapterError::Denied(ErrorCode::NotAllowed));
         };

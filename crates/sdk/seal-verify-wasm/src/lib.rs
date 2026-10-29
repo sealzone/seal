@@ -98,8 +98,9 @@ mod js {
         tenant: &str,
         root_id: &str,
         certificates: &str,
+        checkpoint: &str,
     ) -> Result<String, JsError> {
-        js(api::certified_telemetry_keys(trust, tenant, root_id, certificates))
+        js(api::certified_telemetry_keys(trust, tenant, root_id, certificates, checkpoint))
     }
 
     #[wasm_bindgen(js_name = analyzeTelemetry)]

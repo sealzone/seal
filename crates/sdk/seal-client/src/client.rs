@@ -81,7 +81,7 @@ const TICKET_MARGIN_SECS: u64 = 20;
 
 impl Client {
     /// Everything from the environment: `SEAL_ENDPOINT` (the tenant's enclave replicas,
-    /// comma-separated), `SEAL_TENANT` (`<tenant>` or `<tenant>@<root id>`) and, for sessions
+    /// comma-separated), `SEAL_TENANT` (`<tenant>@<root id>`; `<tenant>` alone cannot seal) and, for sessions
     /// and signals, the first workload identity `detect_identity` finds. Verifies the enclave
     /// before returning.
     pub async fn from_env() -> Result<Self, ClientError> {
@@ -95,7 +95,9 @@ impl Client {
 
     /// Seal `secret` so only the named `apps` can use it, and only with `to`. Returns the
     /// portable blob text (`seal1.…`), safe to store anywhere. Anyone may seal: it needs no
-    /// identity and no grant.
+    /// identity and no grant. It needs the tenant's root id (`SEAL_TENANT=<tenant>@<root id>`
+    /// or `ClientBuilder::root_id`), so the secret goes only to enclaves of that root chain;
+    /// without one it fails with `Invalid` before anything is sent.
     ///
     /// `to` is the destination URL (`https://`, `postgres://`, `clickhouse://`, `rediss://`).
     /// Options chain before `.await`: `header`, `format`, `pin`, `expires`, `methods`,
@@ -398,7 +400,8 @@ impl ClientBuilder {
         self
     }
     /// The tenant's root chain. Enclaves serving another chain for the same tenant name are
-    /// refused, so this client cannot be steered to seal under a competing root.
+    /// refused, so this client cannot be steered to seal under a competing root. Sealing
+    /// needs it; sessions are bound to the root their blob names.
     pub fn root_id(mut self, root_id: TenantRootId) -> Self {
         self.root_id = Some(root_id);
         self
@@ -651,9 +654,16 @@ impl SealBuilder<'_> {
     /// `ingest_info(tenant)`, AAD `canonical(IngestContext)`. The returned blob must name the
     /// client's tenant and root and carry exactly the policy sent.
     async fn send(self) -> Result<SealResponse, ClientError> {
+        let client = self.client;
+        if client.inner.expected.root_id.is_none() {
+            return Err(ClientError::Invalid(format!(
+                "sealing needs the tenant's root id: set SEAL_TENANT={0}@<root id> (or ClientBuilder::root_id); \
+                 the console's Connect page and `seal status` show it",
+                client.tenant()
+            )));
+        }
         let policy = self.policy()?;
         policy.validate_secret(self.secret)?;
-        let client = self.client;
         let enclave = client.enclave().await?;
         let binding = enclave.binding();
         let tenant = client.tenant();
@@ -662,10 +672,10 @@ impl SealBuilder<'_> {
             service_key_version: binding.service_key_version,
             tls_spki_sha256: binding.tls_spki_sha256,
         };
-        let payload = zeroize::Zeroizing::new(seal_proto::codec::canonical(&SealPayload {
+        let payload = seal_proto::codec::canonical_secret(&SealPayload {
             secret: SecretVec::new(self.secret.to_vec()),
             policy: policy.clone(),
-        }));
+        });
         let (hpke_enc, sealed_payload) = seal_crypto::hpke::seal(
             &binding.ingest_public_key,
             &seal_crypto::hpke::ingest_info(tenant),

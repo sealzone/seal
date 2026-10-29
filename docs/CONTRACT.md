@@ -140,9 +140,9 @@ with seal.session(blob) as s:                          # HttpSession or Database
   Options chain before `.await` in Rust and are keywords in Python. Both languages use the
   same names. Bad arguments surface as `ClientError::Invalid` (`BadRequest`).
 - **`Client::from_env`** reads `SEAL_ENDPOINT` (the tenant's enclave replicas,
-  comma-separated) and `SEAL_TENANT` (`<tenant>` or `<tenant>@<root id>`). It uses the first
-  identity `detect_identity` finds. Sealing needs no identity; without one, sessions and
-  signals fail with `NoIdentity`. `Client::builder()` sets any of these explicitly. The
+  comma-separated) and `SEAL_TENANT` (`<tenant>@<root id>`, or `<tenant>` for a client that
+  never seals). It uses the first identity `detect_identity` finds. Sealing needs no
+  identity; without one, sessions and signals fail with `NoIdentity`. `Client::builder()` sets any of these explicitly. The
   identity hints are `SEAL_APP_KEY`, `SEAL_AZURE_AUDIENCE` (Azure managed identity, with
   `AZURE_CLIENT_ID`), GitHub's `ACTIONS_ID_TOKEN_REQUEST_*`, `SEAL_KUBERNETES_TOKEN_FILE`
   (default `/var/run/secrets/seal.zone/token`), the GCP metadata server and the AWS
@@ -187,6 +187,10 @@ with seal.session(blob) as s:                          # HttpSession or Database
   also makes the client refuse enclaves serving another chain for the tenant's name.
 - **`seal(secret, to, apps)`** builds the `SecretPolicy`, so every policy check applies. It
   HPKE-seals the secret and policy to the attested ingest key and returns the `seal1.…` text.
+  It needs a root id: a client without one fails with `Invalid` (`BadRequest`) before
+  anything is sent, so a competing root registered for the tenant's name never receives a
+  secret. The console's Connect page and `seal status` show the pin. Sessions need none,
+  since the blob names its root and the enclave must serve it.
 - **`session(blob)`** ends with one of three calls. `.http()` returns an `HttpSession`
   (`url()`, `key()`). `.database()` returns a `DatabaseSession` (`dsn()`, `protocol()`, one
   of Postgres, Redis or ClickHouse). `.await` returns `Session::{Http, Database}` for code
@@ -304,7 +308,9 @@ elsewhere, and the session token never leaves the SDK.
 - **Extend** (`POST /v1/sessions/extend`). The SDK re-proves its identity every
   `SESSION_EXTEND_SECS` (5 min). The enclave requires the same caller and rechecks grants,
   suspension, expiry and the endpoint report. It recomputes the granted tier from the fresh
-  endpoint report, so a hardened floor holds for the session's whole life. It then issues a
+  endpoint report and holds it to the blob's `min_tier` and to the `min_tier` the session
+  started with (carried in the token), so a hardened floor holds for the session's whole
+  life. It then issues a
   new token for the same `session_id`. Identity is therefore re-verified at least every 5
   minutes. A workload disabled at its identity provider loses access within one extend for
   app keys, SigV4 (replayed to STS each time), GitHub and Kubernetes. For GitHub and
@@ -341,7 +347,9 @@ elsewhere, and the session token never leaves the SDK.
 - **Tunnel connections.** Each goes to the replica that last answered. When that replica
   does not answer, the tunnel tries the others at once and uses the first to answer from
   then on. The preamble goes out with the app's first bytes.
-- **End** (`POST /v1/sessions/end`, authorized by the token alone). The replica signs a
+- **End** (`POST /v1/sessions/end`, authorized by the token alone, which must not have
+  expired: `session_expired` otherwise, so an extended session's older tokens cannot end it
+  once past their own expiry). The replica signs a
   `SessionEnd`, closes its connections of the session at once and publishes the
   `SessionEnd`. The other replicas refuse the session's tokens and close its connections
   within `STATE_RELOAD_SECS`. The SDK ends a session in `close(&self)`. The first call stops
@@ -354,7 +362,8 @@ elsewhere, and the session token never leaves the SDK.
 - **Every connection and request** is checked against the session (expiry, grants,
   suspension) and passes `Session::observe`. A tunnel's session is checked on its `Connect`
   preamble, against the connection's address too, before any adapter runs. Live connections
-  are rechecked on every tenant state change.
+  are rechecked on every tenant state change, each against its tunnel's address, so a
+  network rule added or narrowed later also ends tunnels already open from outside it.
 
 ### How access ends
 
@@ -469,6 +478,13 @@ telemetry.
   Readers verify batches with the telemetry public keys an enclave attests to
   (`AttestationBinding::telemetry_public_keys`, certified by the guardian;
   `seal_verify::telemetry::certified_keys`). They decrypt sealed batches with a reader key.
+  A key of a service key version below its platform's `min_service_key_version` in a
+  verified checkpoint (`seal_verify::telemetry_keys_in_force`) signs nothing that counts:
+  readers drop its batches whatever their dates (the log does not record when a version was
+  retired, and a batch's dates are its signer's own), enclaves its signals and session ends,
+  and the control plane refuses all three and its credential. Without a verified checkpoint
+  each certificate counts only its own version's key. `seal telemetry` fetches
+  `GET /v1/checkpoint`; the browser passes it to `certifiedTelemetryKeys`.
   They report sequence gaps, streams without a `last` batch and receipts with no entry
   (`seal_verify::telemetry::analyze`, shared by the CLI and the browser).
 
@@ -524,6 +540,10 @@ The payload's shape picks the verifier.
 - **Suspension** stops the identity's session starts, extends and seals, and ends its live
   sessions (`ErrorCode::IntegrityFailed`). Blobs it sealed keep working for other
   identities. A suspension lifts when its duration ends or an admin clears the identity.
+  Suspensions and clearances name a workload by the immutable ids grants match on
+  (`WorkloadIdentity::same_subject`), never its names: a GitHub identity is its repository
+  (`repository_id`, `repository_owner_id`) whatever environment or ref a run names, so a
+  suspended workflow cannot step out by switching branch, environment or repository name.
 - **The artifact check is enforced.** An app listed in `artifacts` starts and extends
   sessions only with a matching `EndpointReport`. The report is self-asserted, so it catches
   drift and tampering, not an attacker who controls the endpoint. No detectors ship in this
@@ -556,16 +576,22 @@ destination's user and database, replacing what the client sent. Each adapter ad
 rules:
 
 - **HTTP** refuses method and URL override headers (`X-HTTP-Method-Override`,
-  `X-HTTP-Method`, `X-Method-Override`, `X-Original-URL`, `X-Rewrite-URL`) and drops `Range`
-  and `If-Range`, so an echoed secret comes back whole for the scrubber. When the policy
-  restricts paths, a `;` after the destination prefix is refused, and denied prefixes match
-  ignoring ASCII case; the destination prefix matches exactly.
+  `X-HTTP-Method`, `X-Method-Override`, `X-Original-URL`, `X-Rewrite-URL`) and a `_method`
+  query parameter, and drops `Range` and `If-Range`, so an echoed secret comes back whole for
+  the scrubber. When the policy restricts methods, it refuses `multipart/form-data` bodies,
+  and reads a URL-encoded body (or one without a `Content-Type`) whole, up to 1 MiB, refusing
+  it if it is longer or has a `_method` field; other bodies stream. When the policy restricts
+  paths, a `;` after the destination prefix is refused, and denied prefixes match ignoring
+  ASCII case and also cover a `.` suffix (`/v1/keys` covers `/v1/keys.json`); the
+  destination prefix matches exactly.
 - **Postgres** drops startup `options` and refuses replication and `FunctionCall`. It gives
   the client a `BackendKeyData` of its own, random per connection and never the upstream's.
   A `CancelRequest` naming that key, on a new tunnel connection to the same replica while the
   connection lives, passes `Session::observe` (action `CANCEL`). That tunnel's own session
-  must be live, as for any tunnel. The cancel then goes upstream with the upstream's key over
-  a new verified TLS connection. Any other pair is closed without a reply. Postgres
+  must be live, as for any tunnel, and must be the connection's session
+  (`Session::same_session`). The cancel then goes upstream with the upstream's key over
+  a new verified TLS connection. Any other pair, or a tunnel of another session, is closed
+  without a reply. Postgres
   authenticates upstream with SCRAM-SHA-256 only (SCRAM-SHA-256-PLUS bound to the TLS
   connection when offered) and never sends the secret any other way.
 - **Redis** refuses re-`AUTH` and `HELLO … AUTH`. It also refuses commands outside the
@@ -695,8 +721,10 @@ Who may read and write a tenant's documents (the crate docs hold the full route 
 - **Credentials** (`Authorization`) take one of four forms:
   - `Bearer sealct_…`, a console control token, served only for its tenant and root chain.
   - `SealSigned <base64url(JSON Signed<ControlRequest>)>`, signed by an admin key of the
-    latest root, else by a telemetry key of a certified `ServiceKeyCertificate` posted for
-    the chain, else by a freshness key of the latest state.
+    latest root, else by a telemetry key still in force of a certified
+    `ServiceKeyCertificate` posted for the chain, else by a freshness key of the latest state (or, for the bundle and posting
+    statements, of an earlier state stored since the guardians' oldest anchor, so the state
+    in force's signers keep vouching while a change of signers is pending).
   - `SealAttested <base64url(JSON AttestedControlRequest)>`, for the bundle only. Its
     evidence must verify and commit to the request as report data. It must come from an
     enclave release stored on the control plane that passes `ReleaseVerifier` under the
@@ -771,7 +799,10 @@ Who may read and write a tenant's documents (the crate docs hold the full route 
   exactly that state, younger than its freshness window: the shorter `freshness_secs` of
   the latest state and the state in force, `STATE_FRESHNESS_SECS` (24 h) when neither sets
   one. When the state names `freshness_keys`, they also need one from a tenant-run signer,
-  within the same window. So replaying an older state, or a truncated root chain, works for
+  within the same window, and likewise one from a signer of the state in force when that
+  names any. Any one listed signer suffices, so adding a signer to a non-empty set widens and
+  removing the last widens (both wait the pending window, during which the signers in force
+  still vouch); the first signer, or removing one while others remain, narrows. So replaying an older state, or a truncated root chain, works for
   at most that window. Withholding a newer state makes the tenant unavailable after it
   instead of quietly stale. A log statement for an older
   version than one the log already logged is a signed, provable lie (`seal status --log`

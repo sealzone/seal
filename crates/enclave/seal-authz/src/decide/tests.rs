@@ -3,7 +3,7 @@ use crate::testing::*;
 use crate::AuthenticatedCaller;
 use seal_proto::api::{ExtendRequest, SessionRequest, SignalRequest};
 use seal_proto::freshness::ProofTicket;
-use seal_proto::identity::{IdentityProof, ProofContext, ProofPurpose};
+use seal_proto::identity::{GitHubScope, IdentityProof, ProofContext, ProofPurpose};
 use seal_proto::integrity::{ArtifactHash, Clearance, IntegrityAction, IntegritySignal, Severity, SignalSource};
 use seal_proto::session::SessionEnd;
 use seal_proto::state::{TenantKeyVersions, TenantState, STATE_FRESHNESS_SECS};
@@ -78,6 +78,7 @@ fn claims(blob: Blob, caller: &AuthenticatedCaller, app_name: &str) -> SessionCl
         platform: PlatformId::Sim,
         issued_at: T,
         expires_at: T + 600,
+        min_tier: None,
     }
 }
 
@@ -450,6 +451,26 @@ fn extend_rechecks_blob_suspension_and_endpoint() {
 }
 
 #[test]
+fn extend_holds_the_session_to_its_min_tier() {
+    let t = tenant(|_| {});
+    let auth = TenantAuthorizer::new(&t);
+    let r = extend_request(who(CONSUMER), None);
+    let mut current = claims(blob(t.root_id(), 1, &["checkout"], None), &who(CONSUMER), "checkout");
+    current.tier = ConsumerTier::Hardened;
+    current.min_tier = Some(ConsumerTier::Hardened);
+    let err = auth.extend(&r, &current, ConsumerTier::Base, &at(T + 1)).err().unwrap();
+    assert_eq!(err.code(), ErrorCode::TierTooLow);
+    assert_eq!(
+        err.context(),
+        Some(RefusalContext::TierTooLow { required: ConsumerTier::Hardened, offered: ConsumerTier::Base })
+    );
+    assert!(auth.extend(&r, &current, ConsumerTier::Hardened, &at(T + 1)).is_ok());
+    // Without one, an extend may drop to what the endpoint offers now.
+    current.min_tier = None;
+    assert!(auth.extend(&r, &current, ConsumerTier::Base, &at(T + 1)).is_ok());
+}
+
+#[test]
 fn recheck_uses_the_persisted_scope() {
     let t = tenant(|s| {
         s.apps.insert(app("checkout"), [azure("api://a")].into());
@@ -552,6 +573,56 @@ fn suspension_needs_a_suspend_action_and_no_clearance() {
     let later = [signal_of(id.clone(), Severity::Critical, T + 2)];
     let t = Fixture::new(31).verified(state(cleared), &later, &[]);
     assert!(TenantAuthorizer::new(&t).suspension(&id, &at(T + 10)).is_some());
+}
+
+#[test]
+fn suspension_and_clearance_follow_the_workload_not_its_names() {
+    let github = |repository: &str, environment: Option<&str>, git_ref: &str| WorkloadIdentity::GitHub {
+        repository: repository.into(),
+        repository_id: 7,
+        repository_owner_id: 9,
+        environment: environment.map(Into::into),
+        git_ref: git_ref.into(),
+    };
+    let grant = IdentityMatcher::GitHub {
+        repository: "acme/app".into(),
+        repository_id: 7,
+        repository_owner_id: 9,
+        scope: GitHubScope::Ref("refs/heads/main".into()),
+    };
+    let flagged = github("acme/app", Some("staging"), "refs/heads/main");
+    // Renamed, and in another environment: the grant still admits it.
+    let renamed = github("acme/renamed", None, "refs/heads/main");
+    assert!(grant.matches(&renamed));
+    let granted = |s: &mut TenantState| {
+        with_actions(s);
+        s.apps.insert(app("checkout"), [grant.clone()].into());
+    };
+    let signals = [signal_of(flagged.clone(), Severity::Critical, T)];
+    let t = Fixture::new(31).verified(state(granted), &signals, &[]);
+    let auth = TenantAuthorizer::new(&t);
+    assert!(auth.suspension(&renamed, &at(T + 1)).is_some());
+    let b = blob(t.root_id(), 1, &["checkout"], None);
+    let r = session_request(&b, caller(renamed.clone(), std::slice::from_ref(&grant), None));
+    assert_eq!(code(auth.session(&r, &open(&b), ConsumerTier::Base, &at(T + 1))), ErrorCode::IntegrityFailed);
+    // Another repository is another workload.
+    let other = WorkloadIdentity::GitHub {
+        repository: "acme/app".into(),
+        repository_id: 8,
+        repository_owner_id: 9,
+        environment: Some("staging".into()),
+        git_ref: "refs/heads/main".into(),
+    };
+    assert_eq!(auth.suspension(&other, &at(T + 1)), None);
+    // A clearance naming the workload under any of its names lifts the suspension.
+    let cleared = |s: &mut TenantState| {
+        granted(s);
+        s.integrity
+            .cleared
+            .insert(Clearance { identity: github("acme/renamed", Some("prod"), "refs/tags/v1"), before: T });
+    };
+    let t = Fixture::new(31).verified(state(cleared), &signals, &[]);
+    assert_eq!(TenantAuthorizer::new(&t).suspension(&flagged, &at(T + 1)), None);
 }
 
 // ---- signal ----

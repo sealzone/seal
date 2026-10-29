@@ -29,6 +29,7 @@ type Options struct {
 	// Tenant is "<tenant>" or "<tenant>@<root id>". Default: SEAL_TENANT.
 	Tenant string
 	// RootID is the tenant's root chain; enclaves serving another root are refused.
+	// Sealing needs it, here or in Tenant.
 	RootID string
 	// Identity is what the client proves itself as. Default: the first workload identity the
 	// environment provides.

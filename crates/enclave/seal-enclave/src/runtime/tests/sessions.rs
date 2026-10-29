@@ -226,6 +226,51 @@ async fn a_tunnel_needs_a_live_session_before_any_adapter_runs() {
     assert!(h.seen.lock().unwrap().is_empty());
 }
 
+/// A network rule added after a tunnel opened ends the tunnels open from outside it at the
+/// next recheck, not only new ones.
+#[tokio::test]
+async fn a_network_rule_ends_open_tunnels_from_outside_it() {
+    let mut h = Boot::new().start().await.map_err(|(e, _)| e).unwrap();
+    let session = h.sealed_session().await;
+    let session_id = session.info.session_id;
+    let preamble = connect_preamble(&session.token);
+    let mut inside = h.connect_from(&preamble, Some("203.0.113.7:5000".parse().unwrap())).await;
+    let mut outside = h.connect_from(&preamble, Some("198.51.100.7:5000".parse().unwrap())).await;
+    assert_eq!(get(&mut inside, "/v1/chat", LOCAL_KEY).await.0, 200);
+    assert_eq!(get(&mut outside, "/v1/chat", LOCAL_KEY).await.0, 200);
+    assert_eq!(h.live(&session_id).len(), 2);
+
+    let bundle = h.world.publish(|s| {
+        s.app_networks.insert(checkout(), ["203.0.113.0/24".parse().unwrap()].into());
+    });
+    h.reload(bundle).await;
+    let served = tokio::time::timeout(Duration::from_secs(5), outside.served).await.unwrap().unwrap();
+    assert_eq!(served.unwrap_err().code, ErrorCode::NotAllowed);
+    assert_eq!(get(&mut inside, "/v1/models", LOCAL_KEY).await.0, 200);
+    assert!(h.still_live(&session_id).await);
+}
+
+/// Ending takes a token that has not expired: an old token of an extended session, past its
+/// own expiry, cannot end the session.
+#[tokio::test]
+async fn an_expired_token_ends_nothing() {
+    let h = Boot::new().start().await.map_err(|(e, _)| e).unwrap();
+    let session = h.sealed_session().await;
+    let runtime = &h.service.runtime;
+    let mut claims = runtime.redeem(session.token.expose()).unwrap();
+    claims.expires_at = wall() - 5;
+    let expired = runtime.service.token.issue(&claims, &mut crate::runtime::rng());
+    let refused = h.end(&expired).await.unwrap_err();
+    assert_eq!(refused.code, ErrorCode::SessionExpired);
+    assert!(h.stores.ends.lock().unwrap().is_empty());
+    assert!(matches!(
+        h.events().last().unwrap(),
+        TelemetryEvent::Refused { operation: Operation::End, code: ErrorCode::SessionExpired, .. }
+    ));
+    h.end(&session.token).await.unwrap();
+    assert_eq!(h.stores.ends.lock().unwrap().len(), 1);
+}
+
 #[tokio::test]
 async fn a_grant_removal_ends_live_sessions() {
     let mut h = Boot::new().start().await.map_err(|(e, _)| e).unwrap();

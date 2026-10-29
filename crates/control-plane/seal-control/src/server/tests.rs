@@ -774,6 +774,52 @@ async fn tenant_freshness_statements_need_a_freshness_key_and_the_latest_state()
     env.verifier().verify(&acme(), &bundle, &TrustedTime::exact(env.now())).unwrap();
 }
 
+/// While a change of signers is pending, the signers of the state in force still read the
+/// bundle and vouch for the latest state, and the bundle carries a statement of each.
+#[tokio::test]
+async fn the_signers_in_force_keep_vouching_while_a_change_of_signers_is_pending() {
+    const NEXT: u8 = 22;
+    let env = Env::new().await;
+    env.ready().await;
+    let statement = |body: &TenantState, signed_at: UnixTime, signer: u8| -> SignedStateFreshness {
+        let s = StateFreshness {
+            tenant: body.tenant.clone(),
+            version: body.version,
+            digest: codec::labeled_digest(TENANT_STATE_LABEL, body),
+            signed_at,
+        };
+        key(signer).sign_into(STATE_FRESHNESS_LABEL, s)
+    };
+    let mut body = state(2, 1);
+    body.pending_window_secs = 3_600;
+    body.freshness_keys.insert(key(TENANT_FRESHNESS).public_key());
+    let s2 = env.log_state(body.clone());
+    assert_eq!(env.put("/v1/tenants/acme/state", &s2).await, 204);
+    body.version = 3;
+    body.freshness_keys = [key(NEXT).public_key()].into();
+    let s3 = env.log_state(body);
+    assert_eq!(env.put("/v1/tenants/acme/state", &s3).await, 204);
+
+    let now = env.now();
+    assert_eq!(env.get_as("/v1/tenants/acme/bundle", Auth::Key(TENANT_FRESHNESS)).await.0, 200);
+    let in_force = statement(&s3.body, now, TENANT_FRESHNESS);
+    let next = statement(&s3.body, now, NEXT);
+    assert_eq!(env.post("/v1/tenants/acme/freshness", &in_force).await, 204);
+    assert_eq!(env.post("/v1/tenants/acme/freshness", &next).await, 204);
+    assert_eq!(env.post("/v1/tenants/acme/freshness", &statement(&s3.body, now, STRANGER)).await, 403);
+    let bundle = env.bundle().await;
+    assert_eq!(&bundle.freshness[1..], [in_force.clone(), next], "one per set of signers");
+    let v = env.verifier().verify(&acme(), &bundle, &TrustedTime::exact(env.now())).unwrap();
+    assert_eq!((v.state().version, v.latest_state().version), (2, 3));
+    // The new signer alone does not keep the latest state usable before it is in force.
+    let mut without = bundle.clone();
+    without.freshness.retain(|s| s != &in_force);
+    assert_eq!(
+        env.verifier().verify(&acme(), &without, &TrustedTime::exact(env.now())).unwrap_err(),
+        seal_verify::VerifyError::StateNotFresh
+    );
+}
+
 #[tokio::test]
 async fn service_key_certificates_need_the_platforms_guardian() {
     let env = Env::new().await;
@@ -804,6 +850,35 @@ async fn service_key_certificates_need_the_platforms_guardian() {
     assert_eq!(all, vec![cert, v2]);
     let none: Vec<SignedServiceKeyCertificate> = env.get_json("/v1/tenants/other/service-key-certificates").await;
     assert!(none.is_empty());
+}
+
+/// A service key version below the log's `min_service_key_version` for its platform signs no
+/// signal, session end or telemetry batch the control plane takes, though newer certificates
+/// still list its key.
+#[tokio::test]
+async fn retired_service_key_versions_sign_nothing() {
+    let env = Env::new().await;
+    env.ready().await;
+    let v2 = pmk().release_service(&acme(), &env.root_id(), ServiceKeyVersion(2));
+    let v2 = ServiceKeys::from_released(PlatformId::Sim, &v2).unwrap();
+    assert_eq!(env.post("/v1/tenants/acme/service-key-certificates", &v2.certificate).await, 204);
+    let policy = ReleaseConstraints {
+        min_service_key_version: [(PlatformId::Sim, ServiceKeyVersion(2))].into(),
+        ..Default::default()
+    };
+    env.up.log().set_policy(policy).unwrap();
+    let now = env.now();
+    let old =
+        env.telemetry_signer().sign_into(SIGNAL_LABEL, signal_body(acme(), enclave_source(), Severity::High, now, 1));
+    assert_eq!(env.post("/v1/tenants/acme/signals", &old).await, 403);
+    let end = SessionEnd { tenant: acme(), session_id: [1; 16], reason: ErrorCode::SessionEnded, ended_at: now };
+    let old_end: SignedSessionEnd = env.telemetry_signer().sign_into(SESSION_END_LABEL, end.clone());
+    assert_eq!(env.post("/v1/tenants/acme/session-ends", &old_end).await, 403);
+    let current =
+        v2.telemetry.signer().sign_into(SIGNAL_LABEL, signal_body(acme(), enclave_source(), Severity::High, now, 2));
+    assert_eq!(env.post("/v1/tenants/acme/signals", &current).await, 204);
+    let current_end: SignedSessionEnd = v2.telemetry.signer().sign_into(SESSION_END_LABEL, end);
+    assert_eq!(env.post("/v1/tenants/acme/session-ends", &current_end).await, 204);
 }
 
 #[tokio::test]

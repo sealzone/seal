@@ -17,7 +17,9 @@ impl HttpPolicy {
     ///
     /// "Inside a prefix" compares the bytes on a segment boundary: `/v1` covers `/v1`
     /// and `/v1/chat`, not `/v10`; a destination prefix `/v1/` covers `/v1/chat`, not `/v1`,
-    /// while a denied prefix `/v1/keys/` covers `/v1/keys` too. The destination prefix matches
+    /// while a denied prefix `/v1/keys/` covers `/v1/keys` too. A denied prefix also covers
+    /// the path followed by a `.` (`/v1/keys` covers `/v1/keys.json`), since servers with
+    /// format suffixes route those to the same handler. The destination prefix matches
     /// exactly; denied prefixes ignore ASCII case, since many servers do. Servers that strip
     /// `;params` from segments (`/v1/keys;x`, `/v1/x/..;/keys`) are why `;` is refused.
     pub fn check(policy: &SecretPolicy, method: &str, path: &HttpPath) -> Result<(), ErrorCode> {
@@ -46,19 +48,22 @@ impl HttpPolicy {
 
 pub struct HttpPolicy;
 
-/// Denied prefixes err on the side of denying: `/v1/keys/` also covers `/v1/keys`.
+/// Denied prefixes err on the side of denying: `/v1/keys/` also covers `/v1/keys`, and
+/// `/v1/keys` covers `/v1/keys.json`, which servers with format suffixes (Rails `(.:format)`,
+/// Spring's suffix match) route to `/v1/keys`.
 fn denied(path: &str, deny: &str) -> bool {
     let trimmed = deny.trim_end_matches('/');
     within(path, deny, true) || (!trimmed.is_empty() && within(path, trimmed, true))
 }
 
-/// `path` equals `prefix` or continues it after a `/`; `fold_case` ignores ASCII case.
+/// `path` equals `prefix` or continues it after a `/`; with `fold_case` (denied prefixes),
+/// ASCII case is ignored and a `.` after the prefix is a boundary too.
 fn within(path: &str, prefix: &str, fold_case: bool) -> bool {
     let rest = match path.get(..prefix.len()) {
         Some(head) if head == prefix || (fold_case && head.eq_ignore_ascii_case(prefix)) => &path[prefix.len()..],
         _ => return false,
     };
-    rest.is_empty() || prefix.ends_with('/') || rest.starts_with('/')
+    rest.is_empty() || prefix.ends_with('/') || rest.starts_with('/') || (fold_case && rest.starts_with('.'))
 }
 
 #[cfg(test)]
@@ -146,6 +151,24 @@ mod tests {
         assert_eq!(check(&p, "GET", "/v1/Keys/1"), Err(ErrorCode::PolicyDenied));
         assert_eq!(check(&p, "GET", "/v1/KEYSTORE"), Ok(()), "segment boundary");
         assert_eq!(check(&p, "GET", "/V1/keys"), Err(ErrorCode::PolicyDenied), "the destination prefix stays exact");
+    }
+
+    #[test]
+    fn denied_prefixes_cover_format_suffixes() {
+        let p = policy("https://api.example.com/v1", &[], &["/v1/keys", "/v1/admin/"]);
+        for path in ["/v1/keys.json", "/v1/KEYS.xml", "/v1/keys.", "/v1/keys.json/x", "/v1/admin.json"] {
+            assert_eq!(check(&p, "GET", path), Err(ErrorCode::PolicyDenied), "{path}");
+        }
+        assert_eq!(check(&p, "GET", "/v1/keystore.json"), Ok(()), "still a segment boundary");
+        assert_eq!(check(&p, "GET", "/v1/models.json"), Ok(()));
+        let dotted = policy("https://api.example.com/v1.0", &[], &[]);
+        assert_eq!(check(&dotted, "GET", "/v1.0/models"), Ok(()));
+        let exact = policy("https://api.example.com/v1", &[], &[]);
+        assert_eq!(
+            check(&exact, "GET", "/v1.json"),
+            Err(ErrorCode::PolicyDenied),
+            "the destination prefix stays exact"
+        );
     }
 
     #[test]

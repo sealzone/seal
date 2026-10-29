@@ -148,11 +148,14 @@ export interface Analysis {
   sealed: { stream: string; sequence: number; count: number }[]
   findings: Finding[]
 }
+/** `checkpoint` (`GET /v1/checkpoint`) says which service key versions are retired; without
+ * it each certificate counts only its own version's telemetry key. */
 export function certifiedTelemetryKeys(
   trust: Trust,
   tenant: string,
   rootId: string,
   certificates: Json[],
+  checkpoint?: Json,
 ): { keys: string[]; findings: Finding[] }
 export function analyzeTelemetry(
   tenant: string,

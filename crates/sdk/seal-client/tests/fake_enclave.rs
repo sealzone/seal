@@ -214,6 +214,20 @@ async fn seals_to_the_attested_ingest_key() {
     assert!(matches!(err, ClientError::Invalid(_)), "{err}");
     let err = client.seal(b"x", "https://api.example.com", ["Not An App"]).await.unwrap_err();
     assert!(matches!(err, ClientError::Invalid(_)), "{err}");
+
+    // Without a root id the client connects, but never seals: a competing root chain for
+    // the tenant's name would be accepted.
+    let unpinned = Client::builder()
+        .endpoints([f.endpoint()])
+        .tenant(acme())
+        .trust(f.trust.clone())
+        .identity(Arc::new(AppKeyIdentity::from_seed(&APP_KEY_SEED)))
+        .connect()
+        .await
+        .unwrap();
+    let err = unpinned.seal(b"x", "https://api.example.com/v1", ["checkout"]).await.unwrap_err();
+    assert!(matches!(&err, ClientError::Invalid(m) if m.contains("SEAL_TENANT=acme@<root id>")), "{err}");
+    assert_eq!(err.code(), ErrorCode::BadRequest);
     assert_eq!(f.seen(|s| s.sealed.len()), 1);
 }
 

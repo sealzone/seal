@@ -663,6 +663,16 @@ impl Harness {
         preamble: Option<&TunnelPreamble>,
     ) -> (tokio_rustls::client::TlsStream<tokio::io::DuplexStream>, tokio::task::JoinHandle<Result<(), ServiceError>>)
     {
+        self.tls_from(preamble, None).await
+    }
+
+    /// `tls`, the replica seeing the connection come from `peer`.
+    pub async fn tls_from(
+        &self,
+        preamble: Option<&TunnelPreamble>,
+        peer: Option<std::net::SocketAddr>,
+    ) -> (tokio_rustls::client::TlsStream<tokio::io::DuplexStream>, tokio::task::JoinHandle<Result<(), ServiceError>>)
+    {
         let (client, server) = tokio::io::duplex(1 << 16);
         let service = self.service.clone();
         let served = tokio::spawn(async move {
@@ -671,7 +681,7 @@ impl Harness {
                 .accept(server)
                 .await
                 .map_err(|e| crate::fail(ErrorCode::BadRequest, e.to_string()))?;
-            service.serve_tunnel(Box::new(tls), None).await
+            service.serve_tunnel(Box::new(tls), peer).await
         });
         let mut roots = rustls::RootCertStore::empty();
         let ca = service_keys(&self.world.root_id).tls.ca_certificate_der(&[TLS_NAME.to_string()]).unwrap();
@@ -700,7 +710,12 @@ impl Harness {
 
     /// An HTTP/1.1 connection through a tunnel opened with `preamble`.
     pub async fn connect_with(&self, preamble: &TunnelPreamble) -> Conn {
-        let (tls, served) = self.tls(Some(preamble)).await;
+        self.connect_from(preamble, None).await
+    }
+
+    /// `connect_with`, from `peer`.
+    pub async fn connect_from(&self, preamble: &TunnelPreamble, peer: Option<std::net::SocketAddr>) -> Conn {
+        let (tls, served) = self.tls_from(Some(preamble), peer).await;
         let (sender, connection) = hyper::client::conn::http1::handshake(TokioIo::new(tls)).await.unwrap();
         tokio::spawn(connection);
         Conn { sender, served }

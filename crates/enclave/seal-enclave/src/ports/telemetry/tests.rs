@@ -421,6 +421,28 @@ async fn the_flusher_ships_every_interval_and_early_when_a_batch_is_full() {
     assert_eq!(sink.posted().len(), 3);
 }
 
+/// Panics on every post.
+struct PanickingSink;
+
+#[async_trait]
+impl BatchSink for PanickingSink {
+    async fn post(&self, _: &SignedTelemetryBatch) -> Result<(), String> {
+        panic!("a bug in the sink")
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_flusher_that_dies_is_reported() {
+    let t = ControlTelemetry::with_sink(tenant(), Arc::new(PanickingSink), limits(100, 1));
+    let ended = t.flusher_ended();
+    tokio::pin!(ended);
+    assert!(tokio::time::timeout(Duration::from_secs(60), &mut ended).await.is_err(), "not before start");
+    t.begin(signer([]));
+    assert!(tokio::time::timeout(Duration::from_secs(1), &mut ended).await.is_err(), "running");
+    t.append(seal_entry(1));
+    tokio::time::timeout(Duration::from_secs(1), ended).await.expect("the flusher panicked");
+}
+
 /// Records the bodies posted to `/v1/tenants/acme/telemetry` and answers `status`.
 #[derive(Default)]
 struct FakeControl {

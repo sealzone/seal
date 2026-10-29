@@ -39,6 +39,16 @@ pub fn connect_to(
     resolver: Arc<dyn SessionResolver>,
     upstream: Arc<dyn UpstreamConnector>,
 ) -> (PgClient, JoinHandle<Result<(), AdapterError>>) {
+    connect_through(adapter, resolver, upstream, seal_adapter::testing::TUNNEL_TOKEN)
+}
+
+/// As `connect_to`, through a tunnel whose preamble carries `token`.
+pub fn connect_through(
+    adapter: Arc<PostgresAdapter>,
+    resolver: Arc<dyn SessionResolver>,
+    upstream: Arc<dyn UpstreamConnector>,
+    token: &str,
+) -> (PgClient, JoinHandle<Result<(), AdapterError>>) {
     let (client, server) = tokio::io::duplex(1 << 20);
     let ctx = AdapterCtx { resolver, upstream };
     let meta = ConnMeta {
@@ -46,7 +56,7 @@ pub fn connect_to(
         protocol: Protocol::Postgres,
         peer: None,
         tunnel: seal_proto::tunnel::TunnelConnect {
-            token: seal_proto::Bearer::new("sealtok_preamble".into()),
+            token: seal_proto::Bearer::new(token.into()),
             local_key_sha256: [0; 32],
         },
     };

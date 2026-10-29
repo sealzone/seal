@@ -30,7 +30,12 @@ pub struct TestClaims {
     pub policy: SecretPolicy,
     pub secret: SecretVec,
     pub expires_at: UnixTime,
+    /// The preamble token of the session's tunnels (`Session::same_session`).
+    pub tunnel_token: String,
 }
+
+/// The preamble token `claims` gives a session's tunnels.
+pub const TUNNEL_TOKEN: &str = "sealtok_preamble";
 
 /// Claims for tests: tenant `acme`, app `checkout`, the given destination and secret.
 pub fn claims(destination: Destination, secret: &[u8]) -> TestClaims {
@@ -42,6 +47,7 @@ pub fn claims(destination: Destination, secret: &[u8]) -> TestClaims {
         policy: SecretPolicy::new(&destination.to_string(), [app]).unwrap(),
         secret: SecretVec::new(secret.to_vec()),
         expires_at: u64::MAX,
+        tunnel_token: TUNNEL_TOKEN.into(),
     }
 }
 
@@ -173,6 +179,9 @@ impl Session for TestSession {
     }
     fn secret(&self) -> &[u8] {
         self.claims.secret.expose()
+    }
+    fn same_session(&self, tunnel: &seal_proto::tunnel::TunnelConnect) -> bool {
+        tunnel.token.expose() == self.claims.tunnel_token
     }
     /// Records the observation and returns the resolver's verdict (`Forward` by default).
     fn observe(&self, observation: &Observation<'_>) -> Verdict {

@@ -24,9 +24,10 @@
 //! | Post signals, session ends, telemetry, certificates, freshness statements (verified by their own signatures) | ✓ | | | | | | | |
 //! | Put releases and their templates      |   |   |   |   |   |   |   | ✓ |
 //!
-//! A freshness signer is a key the latest state names in `freshness_keys`; it reads the
-//! state it signs for. Public is what sealing and booting need and an attacker learns nothing
-//! secret from:
+//! A freshness signer is a key the latest state names in `freshness_keys`, or an earlier state
+//! stored since the guardians' oldest anchor (the state in force is among them, and its signers
+//! vouch for the latest until it applies); it reads the state it signs for. Public is what
+//! sealing and booting need and an attacker learns nothing secret from:
 //! public keys under guardian certificates, releases, co-signatures of public releases, the
 //! log's checkpoint. Sealing reads nothing here (it goes through an enclave, whose bundle
 //! holds the wrap keys). An enclave reads its bundle at boot, before the guardian released the
@@ -42,7 +43,7 @@
 //! | PUT    | /v1/tenants/{tenant}/proposals/{id}                | `Signed<TenantState>` or `Signed<TenantRoot>` whose digest is `id`, with any signatures → `Proposal`; signatures from repeated PUTs are merged |
 //! | DELETE | /v1/tenants/{tenant}/proposals/{id}                | → 204                               |
 //! | POST   | /v1/tenants/{tenant}/proposals/{id}/submit         | → `Submitted`: the document logged and stored as the next root or state, once it has the latest root's threshold of signatures |
-//! | POST   | /v1/tenants/{tenant}/freshness                     | `SignedStateFreshness` from a tenant-run signer (one of the latest state's `freshness_keys`) |
+//! | POST   | /v1/tenants/{tenant}/freshness                     | `SignedStateFreshness` for the latest state from a tenant-run freshness signer |
 //! | POST   | /v1/tenants/{tenant}/signals                       | `SignedSignal` (append, dedup; telemetry key or source key) |
 //! | POST   | /v1/tenants/{tenant}/session-ends                  | `SignedSessionEnd` (append, dedup; telemetry key) |
 //! | GET    | /v1/tenants/{tenant}/service-key-certificates      | → `[SignedServiceKeyCertificate]`, every one posted |

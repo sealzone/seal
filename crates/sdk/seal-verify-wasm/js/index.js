@@ -102,8 +102,9 @@ export function rootId(rootV1) {
   return wasmRootId(json(rootV1))
 }
 
-export function certifiedTelemetryKeys(trust, tenant, rootId, certificates) {
-  return parse(wasmCertifiedTelemetryKeys(json(trust), tenant, rootId, json(certificates)))
+export function certifiedTelemetryKeys(trust, tenant, rootId, certificates, checkpoint) {
+  const cp = checkpoint === undefined ? "" : json(checkpoint)
+  return parse(wasmCertifiedTelemetryKeys(json(trust), tenant, rootId, json(certificates), cp))
 }
 
 export function analyzeTelemetry(tenant, keys, batches, { since = 0, receipts = [], readerSeed } = {}) {

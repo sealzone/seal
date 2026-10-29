@@ -129,6 +129,9 @@ proptest = "1"
 [profile.release]
 lto = true
 codegen-units = 1
+# An arithmetic overflow panics instead of wrapping. Each connection runs in its own task,
+# so it ends that task, not the process.
+overflow-checks = true
 
 # Sim attestors measure their own binary (SHA-384 of the file, ~150 MB in a dev build); an
 # unoptimized sha2 takes seconds per boot for that.

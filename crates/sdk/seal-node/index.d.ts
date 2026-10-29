@@ -14,7 +14,7 @@ export interface ConnectOptions {
   endpoints?: Strings;
   /** `<tenant>` or `<tenant>@<root id>`. Default: `SEAL_TENANT`. */
   tenant?: string;
-  /** The tenant's root chain; enclaves serving another root are refused. */
+  /** The tenant's root chain; enclaves serving another root are refused. Sealing needs it, here or in `tenant`. */
   rootId?: string;
   /** Default: the first workload identity the environment provides. */
   identity?: IdentityProvider;

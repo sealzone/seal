@@ -323,14 +323,35 @@ struct CertifiedJson {
     findings: Vec<seal_verify::telemetry::Finding>,
 }
 
-/// The telemetry keys (hex) of the certificates (`SignedServiceKeyCertificate`s) the trust's
-/// guardians signed for `tenant` and `root_id` (hex), and findings for the others.
-pub fn certified_telemetry_keys(trust: &str, tenant: &str, root_id: &str, certificates: &str) -> Result<String> {
+/// The telemetry keys (hex) still in force of the certificates (`SignedServiceKeyCertificate`s)
+/// the trust's guardians signed for `tenant` and `root_id` (hex), and findings for the others.
+/// `checkpoint` (a `SignedCheckpoint`, `GET /v1/checkpoint`, verified against the trust's log)
+/// says which service key versions are retired; empty, each certificate counts only its own
+/// version's key.
+pub fn certified_telemetry_keys(
+    trust: &str,
+    tenant: &str,
+    root_id: &str,
+    certificates: &str,
+    checkpoint: &str,
+) -> Result<String> {
     let trust: TrustJson = parse("trust", trust)?;
     let root_id: TenantRootId = root_id.parse().map_err(|e| format!("root id: {e}"))?;
     let certificates: Vec<SignedServiceKeyCertificate> = parse("certificates", certificates)?;
-    let (keys, findings) =
-        seal_verify::telemetry::certified_keys(&trust.guardians, &tenant_id(tenant)?, &root_id, &certificates);
+    let policy = match checkpoint {
+        "" => None,
+        checkpoint => {
+            let checkpoint: SignedCheckpoint = parse("checkpoint", checkpoint)?;
+            Some(seal_verify::checkpoint_policy(&trust.tenants().tlog, &checkpoint).map_err(|e| e.to_string())?)
+        }
+    };
+    let (keys, findings) = seal_verify::telemetry::certified_keys(
+        &trust.guardians,
+        &tenant_id(tenant)?,
+        &root_id,
+        &certificates,
+        policy.as_ref(),
+    );
     json(&CertifiedJson { keys, findings })
 }
 
@@ -654,10 +675,10 @@ pub fn seal_request(
         service_key_version: binding.service_key_version,
         tls_spki_sha256: binding.tls_spki_sha256,
     };
-    let payload = zeroize::Zeroizing::new(codec::canonical(&SealPayload {
+    let payload = codec::canonical_secret(&SealPayload {
         secret: seal_proto::SecretVec::new(secret.to_vec()),
         policy: policy.clone(),
-    }));
+    });
     let (hpke_enc, sealed_payload) = seal_crypto::hpke::seal(
         &binding.ingest_public_key,
         &seal_crypto::hpke::ingest_info(&tenant),

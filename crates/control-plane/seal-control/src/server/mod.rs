@@ -22,8 +22,8 @@ use seal_crypto::sign::{admin_key_id, key_id, verify, verify_admin, verify_thres
 use seal_proto::codec::labeled_digest;
 use seal_proto::integrity::{validate_code, SignalSource, SignedSignal, SIGNAL_LABEL};
 use seal_proto::release::{
-    LogEntry, ReleaseCosign, ReleaseEvidence, SignedCheckpoint, SignedServiceKeyCertificate, SignedTenantWrapKey,
-    TenantStateLeaf, TlogProof, RELEASE_COSIGN_LABEL, TENANT_WRAP_KEY_LABEL,
+    LogEntry, ReleaseConstraints, ReleaseCosign, ReleaseEvidence, SignedCheckpoint, SignedServiceKeyCertificate,
+    SignedTenantWrapKey, TenantStateLeaf, TlogProof, RELEASE_COSIGN_LABEL, TENANT_WRAP_KEY_LABEL,
 };
 use seal_proto::session::{SignedSessionEnd, SESSION_END_LABEL};
 use seal_proto::signed::Signed;
@@ -287,6 +287,19 @@ impl App {
         changed
     }
 
+    /// The release constraints of the log's latest checkpoint, else of the last one fetched
+    /// (they only tighten, so an older one still retires what it names); `None` when there is
+    /// none, and then only each certificate's own telemetry key counts.
+    async fn release_policy(&self) -> Option<ReleaseConstraints> {
+        match self.latest_checkpoint().await {
+            Ok(cp) => Some(cp.checkpoint.policy),
+            Err(_) => {
+                let cached = self.checkpoint.lock().unwrap_or_else(|p| p.into_inner());
+                cached.as_ref().map(|(_, cp)| cp.checkpoint.policy.clone())
+            }
+        }
+    }
+
     /// The log's latest checkpoint, verified; fetched at most every `checkpoint_cache_secs`.
     async fn latest_checkpoint(&self) -> ApiResult<SignedCheckpoint> {
         let now = self.now();
@@ -424,12 +437,19 @@ fn for_state(statement: &SignedStateFreshness, state: &TenantState) -> bool {
     s.tenant == state.tenant && s.version == state.version && s.digest == labeled_digest(TENANT_STATE_LABEL, state)
 }
 
+/// The `freshness_keys` of `stored` states.
+fn stored_signers(stored: &[LoggedState]) -> impl Iterator<Item = PublicKey> + '_ {
+    stored.iter().flat_map(|s| s.state.body.freshness_keys.iter().copied())
+}
+
 fn chain_root_id(docs: &TenantDocs) -> Option<TenantRootId> {
     docs.roots.first().map(|link| root_id(&link.root.body))
 }
 
-/// The telemetry public keys of the certificates posted for the tenant's root chain.
-fn telemetry_keys(docs: &TenantDocs) -> Vec<PublicKey> {
+/// The telemetry public keys still in force (`seal_verify::telemetry_keys_in_force` under
+/// `policy`, the latest checkpoint's release constraints when the log answered) of the
+/// certificates posted for the tenant's root chain.
+fn telemetry_keys(docs: &TenantDocs, policy: Option<&ReleaseConstraints>) -> Vec<PublicKey> {
     let Some(root_id) = chain_root_id(docs) else {
         return Vec::new();
     };
@@ -437,7 +457,7 @@ fn telemetry_keys(docs: &TenantDocs) -> Vec<PublicKey> {
         .certificates
         .iter()
         .filter(|c| c.body.root_id == root_id)
-        .flat_map(|c| c.body.telemetry_public_keys.iter().map(|(_, k)| *k))
+        .flat_map(|c| seal_verify::telemetry_keys_in_force(&c.body, policy))
         .collect();
     keys.sort_unstable();
     keys.dedup();
@@ -459,13 +479,15 @@ async fn get_bundle(
 ) -> ApiResult<Json<TenantBundle>> {
     let entry = app.store.tenant(&tenant)?;
     let docs = entry.lock().await.docs.clone();
-    app.authorize(&Chain::of(&tenant, &docs), &docs, &asked, &[], Rule::Bundle).await?;
+    // The states the bundle can carry: their freshness signers read it too.
+    let keys = docs.state.as_ref().map(|s| app.anchor_keys(&s.body.platforms)).unwrap_or_default();
+    let stored = entry.lock().await.logged_states(oldest_anchored(&keys, &docs.anchors))?;
+    let chain = Chain::of(&tenant, &docs).with_freshness_signers(stored_signers(&stored));
+    app.authorize(&chain, &docs, &asked, &[], Rule::Bundle).await?;
     let (Some(state), Some(root_id)) = (docs.state.clone(), chain_root_id(&docs)) else {
         return Err(ApiError::not_found("no root chain and state for this tenant"));
     };
     let now = app.now();
-    let keys = app.anchor_keys(&state.body.platforms);
-    let stored = entry.lock().await.logged_states(oldest_anchored(&keys, &docs.anchors))?;
 
     // The log's statement: refetched when missing or due by the shortest freshness window of
     // the states the bundle can carry (the one in force is among them); the cached one stays
@@ -526,14 +548,23 @@ async fn get_bundle(
 
     let time = TrustedTime::exact(now);
     let mut freshness: Vec<SignedStateFreshness> = log_statement.into_iter().collect();
-    // The newest tenant-run statement already in force (one dated ahead never counts).
-    let tenant_statement = docs
-        .freshness
-        .tenant
-        .iter()
-        .filter(|s| for_state(s, &state.body) && s.body.signed_at <= now)
-        .max_by_key(|s| s.body.signed_at);
-    freshness.extend(tenant_statement.cloned());
+    // For each set of signers a verifier may require (the latest state's, and the one in
+    // force's, which is among the stored states), the newest tenant-run statement already in
+    // force (one dated ahead never counts).
+    let signer_sets = stored.iter().map(|s| &s.state.body.freshness_keys).chain([&state.body.freshness_keys]);
+    for signers in signer_sets.filter(|keys| !keys.is_empty()) {
+        let signers: Vec<PublicKey> = signers.iter().copied().collect();
+        let newest = docs
+            .freshness
+            .tenant
+            .iter()
+            .filter(|s| for_state(s, &state.body) && s.body.signed_at <= now)
+            .filter(|s| signed_by_any(&signers, STATE_FRESHNESS_LABEL, s))
+            .max_by_key(|s| s.body.signed_at);
+        if let Some(statement) = newest.filter(|s| !freshness.contains(s)) {
+            freshness.push(statement.clone());
+        }
+    }
     let checkpoint = match app.latest_checkpoint().await {
         Ok(checkpoint) => Some(checkpoint),
         Err(e) => {
@@ -744,7 +775,12 @@ async fn put_root(
     let docs = e.docs.clone();
     // Root version 1 names its own chain and first admins.
     let chain = if docs.roots.is_empty() && link.root.body.version == 1 {
-        Chain { tenant: &tenant, root_id: Some(root_id(&link.root.body)), admins: Some(&link.root.body) }
+        Chain {
+            tenant: &tenant,
+            root_id: Some(root_id(&link.root.body)),
+            admins: Some(&link.root.body),
+            freshness_signers: Vec::new(),
+        }
     } else {
         Chain::of(&tenant, &docs)
     };
@@ -792,9 +828,12 @@ async fn post_freshness(
     let entry = app.store.tenant(&tenant)?;
     let mut e = entry.lock().await;
     let state = &e.docs.state.as_ref().ok_or_else(|| ApiError::conflict("the tenant has no state"))?.body;
-    let keys: Vec<PublicKey> = state.freshness_keys.iter().copied().collect();
+    // A signer of the latest state, or of an earlier one a bundle can carry: the state in force
+    // is among them, and its signers vouch for the latest until it applies.
+    let stored = e.logged_states(oldest_anchored(&app.anchor_keys(&state.platforms), &e.docs.anchors))?;
+    let keys: Vec<PublicKey> = state.freshness_keys.iter().copied().chain(stored_signers(&stored)).collect();
     if !signed_by_any(&keys, STATE_FRESHNESS_LABEL, &statement) {
-        return Err(ApiError::forbidden("not signed by a freshness key of the latest state"));
+        return Err(ApiError::forbidden("not signed by a freshness key of the latest state or one a bundle carries"));
     }
     if !for_state(&statement, state) {
         return Err(ApiError::conflict("not a statement for the latest state"));
@@ -818,11 +857,12 @@ async fn post_signal(State(app): State<Arc<App>>, Path(tenant): Path<TenantId>, 
     let signal: SignedSignal = parse(&body)?;
     same_tenant(&tenant, &signal.body.tenant)?;
     validate_code(&signal.body.code).map_err(|e| ApiError::bad(e.to_string()))?;
+    let policy = app.release_policy().await;
     let entry = app.store.tenant(&tenant)?;
     let mut e = entry.lock().await;
     match &signal.body.source {
         SignalSource::Enclave { .. } | SignalSource::Sdk => {
-            if !signed_by_any(&telemetry_keys(&e.docs), SIGNAL_LABEL, &signal) {
+            if !signed_by_any(&telemetry_keys(&e.docs, policy.as_ref()), SIGNAL_LABEL, &signal) {
                 return Err(ApiError::forbidden("not signed by a certified telemetry key of this tenant"));
             }
         }
@@ -857,9 +897,10 @@ async fn post_session_end(
     if !matches!(end.body.reason, ErrorCode::SessionEnded | ErrorCode::IntegrityFailed) {
         return Err(ApiError::bad("a session ends with session_ended or integrity_failed"));
     }
+    let policy = app.release_policy().await;
     let entry = app.store.tenant(&tenant)?;
     let mut e = entry.lock().await;
-    if !signed_by_any(&telemetry_keys(&e.docs), SESSION_END_LABEL, &end) {
+    if !signed_by_any(&telemetry_keys(&e.docs, policy.as_ref()), SESSION_END_LABEL, &end) {
         return Err(ApiError::forbidden("not signed by a certified telemetry key of this tenant"));
     }
     let time = TrustedTime::exact(app.now());
@@ -943,9 +984,10 @@ async fn post_telemetry(
 ) -> ApiResult<StatusCode> {
     let batch: SignedTelemetryBatch = parse(&body)?;
     check_batch(&tenant, &batch)?;
+    let policy = app.release_policy().await;
     let entry = app.store.tenant(&tenant)?;
     let e = entry.lock().await;
-    if !signed_by_any(&telemetry_keys(&e.docs), TELEMETRY_BATCH_LABEL, &batch) {
+    if !signed_by_any(&telemetry_keys(&e.docs, policy.as_ref()), TELEMETRY_BATCH_LABEL, &batch) {
         return Err(ApiError::forbidden("not signed by a certified telemetry key of this tenant"));
     }
     match e.telemetry_batch(&batch.body.stream, batch.body.sequence)? {

@@ -166,25 +166,45 @@ async fn run() -> Result<(), String> {
     let tls = service.tls_config();
     let listener = bind(config.listen).await?;
     let (stop, stopping) = watch::channel(false);
-    let api_task = tokio::spawn(api::serve(service.clone(), listener, tls, stopped(stopping)));
+    let mut api_task = tokio::spawn(api::serve(service.clone(), listener, tls, stopped(stopping)));
     tracing::info!(listen = %config.listen, "serving the API and tunnels");
 
-    tokio::select! {
-        _ = shutdown_signal() => tracing::info!("shutting down"),
-        _ = service.idle_exit(config.hosted_idle) => {
-            tracing::info!(secs = config.hosted_idle.as_secs(), "hosted replica idle: shutting down")
+    // A task that should run until shutdown and ended is a failure: the process exits with an
+    // error, after the final telemetry, so the container's restart policy brings it back.
+    let mut api_done = false;
+    let failure = tokio::select! {
+        _ = shutdown_signal() => {
+            tracing::info!("shutting down");
+            None
         }
-    }
+        _ = service.idle_exit(config.hosted_idle) => {
+            tracing::info!(secs = config.hosted_idle.as_secs(), "hosted replica idle: shutting down");
+            None
+        }
+        ended = &mut api_task => {
+            api_done = true;
+            Some(match ended {
+                Ok(Ok(())) => "the API server stopped".to_string(),
+                Ok(Err(e)) => format!("the API server failed: {e}"),
+                Err(e) if e.is_panic() => "the API server panicked".to_string(),
+                Err(_) => "the API server was cancelled".to_string(),
+            })
+        }
+        ended = service.background_ended() => Some(ended),
+        _ = telemetry.flusher_ended() => Some("the telemetry flusher stopped".to_string()),
+    };
     let _ = stop.send(true);
-    match tokio::time::timeout(API_DRAIN, api_task).await {
-        Ok(Ok(Err(e))) => tracing::warn!(error = %e, "API server"),
-        Err(_) => tracing::warn!("API requests still open after the drain period"),
-        _ => {}
+    if !api_done {
+        match tokio::time::timeout(API_DRAIN, api_task).await {
+            Ok(Ok(Err(e))) => tracing::warn!(error = %e, "API server"),
+            Err(_) => tracing::warn!("API requests still open after the drain period"),
+            _ => {}
+        }
     }
     if let Err(e) = telemetry.shutdown().await {
         tracing::error!(error = %e, "telemetry");
     }
-    Ok(())
+    failure.map_or(Ok(()), Err)
 }
 
 /// Outbound TLS for the guardian, the control plane and upstreams, through the cloud's dialer, with

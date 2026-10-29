@@ -235,8 +235,8 @@ struct SecretArgs {
     /// Append the seal's telemetry receipt to this file (JSON lines, read by `seal telemetry --receipts`)
     #[arg(long, value_name = "FILE")]
     receipt_file: Option<PathBuf>,
-    /// `<tenant>@<root id>` as `seal status` prints it, or `<tenant>` for any root chain of
-    /// that name (default: the `seal use` tenant)
+    /// `<tenant>@<root id>` as `seal status` prints it, or `<tenant>` for the root chain
+    /// `seal use` saved for it (default: the `seal use` tenant)
     #[arg(long, value_name = "TENANT[@ROOT]", env = "SEAL_TENANT", value_parser = parse_tenant_pin, help_heading = "Enclave")]
     tenant: Option<(TenantId, Option<TenantRootId>)>,
     /// An enclave replica of the tenant, as `seal deploy` prints it; repeat, or separate with
@@ -582,6 +582,12 @@ async fn seal_secret(env: &Env, args: SecretArgs) -> anyhow::Result<()> {
             None => bail!("name the tenant: --tenant <tenant>@<root id> (its admins' `seal status` prints it), or `seal use <tenant>`"),
         },
     };
+    // Sealing goes only to enclaves of a known root chain.
+    let Some(root_id) = root_id else {
+        bail!(
+            "name the tenant's root chain: --tenant {tenant}@<root id> (the console's Connect page and its admins' `seal status` show it), or `seal use {tenant}`"
+        );
+    };
     // No endpoint named: the replicas Seal runs for the tenant, as the console lists them.
     let endpoints = if args.endpoints.is_empty() {
         let console = env.console().await?;
@@ -600,10 +606,7 @@ async fn seal_secret(env: &Env, args: SecretArgs) -> anyhow::Result<()> {
     } else {
         args.endpoints
     };
-    let mut builder = seal::Client::builder().endpoints(endpoints).tenant(tenant.clone());
-    if let Some(root_id) = root_id {
-        builder = builder.root_id(root_id);
-    }
+    let mut builder = seal::Client::builder().endpoints(endpoints).tenant(tenant.clone()).root_id(root_id);
     if env.global.trust.is_some() {
         if let Some(trust) = env.trust()?.full {
             builder = builder.trust(trust);
@@ -712,7 +715,17 @@ async fn show_telemetry(env: &Env, args: TelemetryArgs) -> anyhow::Result<()> {
             admin.control().get_service_key_certificates(&tenant).await.map_err(|e| anyhow!("control plane: {e}"))?
         }
     };
-    let (keys, mut findings) = telemetry::certified_keys(&env.trust()?.guardians, &tenant, &root_id, &certificates);
+    // Keys of service key versions the log's latest checkpoint retired count for nothing.
+    let trust = env.trust()?;
+    let policy = match admin.control().get_checkpoint().await {
+        Ok(checkpoint) => seal_verify::checkpoint_policy(&trust.tenants.tlog, &checkpoint).ok(),
+        Err(_) => None,
+    };
+    let (keys, mut findings) =
+        telemetry::certified_keys(&trust.guardians, &tenant, &root_id, &certificates, policy.as_ref());
+    if policy.is_none() {
+        findings.push("no verified checkpoint: each certificate counts only its own version's telemetry key".into());
+    }
     if keys.is_empty() {
         bail!("no certificate verified under the trust's guardian keys");
     }

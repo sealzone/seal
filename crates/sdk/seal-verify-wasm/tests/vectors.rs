@@ -530,7 +530,8 @@ fn the_api_meets_its_vectors() {
 
     let t = &v["telemetry"];
     let certified: Value = serde_json::from_str(
-        &api::certified_telemetry_keys(&trust, tenant, t["root_id"].as_str().unwrap(), &s(&t["certificates"])).unwrap(),
+        &api::certified_telemetry_keys(&trust, tenant, t["root_id"].as_str().unwrap(), &s(&t["certificates"]), "")
+            .unwrap(),
     )
     .unwrap();
     assert_eq!(certified["keys"], t["keys"]);

@@ -470,6 +470,83 @@ async fn method_and_url_override_headers_are_refused() {
 }
 
 #[tokio::test]
+async fn method_override_parameters_are_refused() {
+    let rules = HttpRules { methods: ["GET".to_string(), "POST".to_string()].into(), deny_path_prefixes: [].into() };
+    let h = Harness::new(claims_with(Injection::default(), rules)).await;
+    let mut c = h.connect().await;
+    for target in [
+        "/v1/models?_method=DELETE",
+        "/v1/models?a=1&_METHOD=DELETE",
+        "/v1/models?%5Fmethod=DELETE",
+        "/v1/models?x;.method=PUT",
+    ] {
+        let reply = c.request(get(target).method("POST").body(Full::default()).unwrap()).await;
+        assert_eq!(reply.seal_error(), "policy_denied", "{target}");
+    }
+    let form = |body: &'static str, content_type: Option<&str>| {
+        let mut req = get("/v1/models").method("POST");
+        if let Some(t) = content_type {
+            req = req.header("content-type", t);
+        }
+        req.body(Full::new(Bytes::from(body))).unwrap()
+    };
+    let urlencoded = Some("application/x-www-form-urlencoded; charset=utf-8");
+    for (body, content_type) in [
+        ("a=1&_method=DELETE", urlencoded),
+        ("_Method=DELETE", Some("Application/X-WWW-Form-URLEncoded")),
+        ("a=1&%5f%6Dethod=DELETE", urlencoded),
+        ("%2Emethod=DELETE", urlencoded),
+        ("_method[]=DELETE", urlencoded),
+        ("_method=DELETE", None),
+        (
+            "--b\r\nContent-Disposition: form-data; name=\"a\"\r\n\r\n1\r\n--b--\r\n",
+            Some("multipart/form-data; boundary=b"),
+        ),
+    ] {
+        let reply = c.request(form(body, content_type)).await;
+        assert_eq!(reply.seal_error(), "policy_denied", "{body}");
+    }
+    let reply = c.request(form("amount=1&payment_method=pm_1&method_x=1", urlencoded)).await;
+    assert_eq!(reply.status, StatusCode::OK, "the connection survives, other fields pass");
+    let reply = c.request(form("{\"_method\":\"x\"}", Some("application/json"))).await;
+    assert_eq!(reply.status, StatusCode::OK, "only form bodies are read");
+    let seen = h.seen();
+    assert_eq!(seen.len(), 2);
+    assert_eq!(seen[0].body, b"amount=1&payment_method=pm_1&method_x=1");
+    let allowed: Vec<u64> =
+        h.resolver.take_completions().iter().filter(|c| c.outcome == Outcome::Allowed).map(|c| c.bytes_up).collect();
+    assert_eq!(allowed, [39, 15], "a read form body is counted as sent");
+
+    let reply = c.request(form("_method=DELETE&", urlencoded)).await;
+    assert_eq!(reply.seal_error(), "policy_denied");
+    let big = Bytes::from(vec![b'a'; (1 << 20) + 1]);
+    let reply = c
+        .request(
+            get("/v1/models")
+                .method("POST")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Full::new(big))
+                .unwrap(),
+        )
+        .await;
+    assert_eq!(reply.seal_error(), "policy_denied", "too large to check");
+    c.closed().await.unwrap();
+}
+
+#[tokio::test]
+async fn form_bodies_stream_without_method_rules() {
+    let h = Harness::default().await;
+    let mut c = h.connect().await;
+    let req = get("/v1/upload").method("POST").header("content-type", "multipart/form-data; boundary=b");
+    let reply = c.request(req.body(Full::new(Bytes::from("--b--\r\n"))).unwrap()).await;
+    assert_eq!(reply.status, StatusCode::OK);
+    let req = get("/v1/upload").method("POST").header("content-type", "application/x-www-form-urlencoded");
+    assert_eq!(c.request(req.body(Full::new(Bytes::from("_method=PUT"))).unwrap()).await.status, StatusCode::OK);
+    let reply = c.get("/v1/models?_method=DELETE").await;
+    assert_eq!(reply.seal_error(), "policy_denied", "the query parameter is refused under any policy");
+}
+
+#[tokio::test]
 async fn range_headers_are_dropped() {
     let h = Harness::default().await;
     let mut c = h.connect().await;

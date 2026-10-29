@@ -3,12 +3,14 @@
 mod common;
 
 use common::{key, Log, T};
+use seal_proto::codec::labeled_digest;
 use seal_proto::identity::IdentityMatcher;
 use seal_proto::release::LogEntry;
 use seal_proto::signed::Signed;
 use seal_proto::state::{
-    AdminKey, LoggedRoot, LoggedState, SignedTenantState, TenantAnchor, TenantBundle, TenantKeyVersions, TenantRoot,
-    TenantState, MAX_PENDING_WINDOW_SECS, TENANT_ANCHOR_LABEL, TENANT_ROOT_LABEL, TENANT_STATE_LABEL,
+    AdminKey, LoggedRoot, LoggedState, SignedTenantState, StateFreshness, TenantAnchor, TenantBundle,
+    TenantKeyVersions, TenantRoot, TenantState, MAX_PENDING_WINDOW_SECS, STATE_FRESHNESS_LABEL, TENANT_ANCHOR_LABEL,
+    TENANT_ROOT_LABEL, TENANT_STATE_LABEL,
 };
 use seal_proto::{KeyId, PlatformId, PublicKey, TenantId, TenantKeyVersion, TrustedTime, UnixTime};
 use seal_verify::{Change, TenantTrust, TenantVerifier, VerifiedTenant, VerifyError};
@@ -288,6 +290,49 @@ fn lengthening_the_freshness_window_waits_the_pending_window() {
     assert_eq!((in_force(&v), v.latest_state().version, v.fresh_until()), (2, 3, T + 900));
     let v = t.verify(T + 200 + HOUR);
     assert_eq!((in_force(&v), v.fresh_until()), (3, T + 200 + HOUR + seal_proto::state::STATE_FRESHNESS_SECS));
+}
+
+/// `signers`' freshness statements for the latest state at `now`, with the log's.
+fn verify_signed(t: &mut Tenant, signers: &[u8], now: UnixTime) -> Result<VerifiedTenant, VerifyError> {
+    let mut bundle = t.bundle_from(0, now);
+    let latest = t.latest();
+    for &signer in signers {
+        let body = StateFreshness {
+            tenant: acme(),
+            version: latest.version,
+            digest: labeled_digest(TENANT_STATE_LABEL, &latest),
+            signed_at: now,
+        };
+        bundle.freshness.push(signed(STATE_FRESHNESS_LABEL, body, &[signer]));
+    }
+    TenantVerifier::new(t.trust(), vec![]).verify(&acme(), &bundle, &TrustedTime::exact(now))
+}
+
+#[test]
+fn a_change_of_freshness_signers_waits_the_pending_window() {
+    const A: u8 = 52;
+    const B: u8 = 53;
+    let mut t = Tenant::new(T);
+    // A first signer narrows: in force at once.
+    t.change(T + 100, None, |s| {
+        s.freshness_keys.insert(key(A).public_key());
+    });
+    assert_eq!(verify_signed(&mut t, &[], T + 101).unwrap_err(), VerifyError::StateNotFresh);
+    assert_eq!(in_force(&verify_signed(&mut t, &[A], T + 101).unwrap()), 2);
+    // Replacing it widens (B alone could vouch): pending, and while it is, both must vouch.
+    t.change(T + 200, None, |s| s.freshness_keys = [key(B).public_key()].into());
+    assert_eq!(verify_signed(&mut t, &[B], T + 300).unwrap_err(), VerifyError::StateNotFresh);
+    assert_eq!(verify_signed(&mut t, &[A], T + 300).unwrap_err(), VerifyError::StateNotFresh);
+    let v = verify_signed(&mut t, &[A, B], T + 300).unwrap();
+    assert_eq!((in_force(&v), v.latest_state().version), (2, 3));
+    // Once in force, B alone.
+    assert_eq!(in_force(&verify_signed(&mut t, &[B], T + 200 + HOUR).unwrap()), 3);
+
+    // Removing the last signer widens too: the one in force still has to vouch until then.
+    t.change(T + 300 + HOUR, None, |s| s.freshness_keys.clear());
+    assert_eq!(verify_signed(&mut t, &[], T + 400 + HOUR).unwrap_err(), VerifyError::StateNotFresh);
+    assert_eq!(in_force(&verify_signed(&mut t, &[B], T + 400 + HOUR).unwrap()), 3);
+    assert_eq!(in_force(&verify_signed(&mut t, &[], T + 300 + 2 * HOUR).unwrap()), 4);
 }
 
 #[test]

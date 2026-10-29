@@ -123,6 +123,23 @@ struct Inner {
     /// Woken when `max_batch` entries wait.
     wake: tokio::sync::Notify,
     flusher: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// Whether the flusher was started and whether it has ended (`Flusher`).
+    flusher_state: tokio::sync::watch::Sender<Flusher>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Flusher {
+    NotStarted,
+    Running,
+    Ended,
+}
+
+/// Marks the flusher ended when its future is dropped: it returned, panicked or was aborted.
+struct FlusherGuard(Arc<Inner>);
+impl Drop for FlusherGuard {
+    fn drop(&mut self) {
+        self.0.flusher_state.send_replace(Flusher::Ended);
+    }
 }
 
 struct Buffer {
@@ -272,6 +289,7 @@ impl ControlTelemetry {
                 shipper: tokio::sync::Mutex::new(shipper),
                 wake: tokio::sync::Notify::new(),
                 flusher: Mutex::new(None),
+                flusher_state: tokio::sync::watch::Sender::new(Flusher::NotStarted),
             }),
         }
     }
@@ -288,8 +306,16 @@ impl ControlTelemetry {
         self.install(signer);
         let mut flusher = lock(&self.inner.flusher);
         if flusher.is_none() {
+            self.inner.flusher_state.send_replace(Flusher::Running);
             *flusher = Some(tokio::spawn(flush_periodically(self.inner.clone())));
         }
+    }
+
+    /// Resolves once the flusher, started, has ended: it runs until `shutdown`, so before
+    /// that this means it panicked and nothing more is shipped. Never resolves before `start`.
+    pub async fn flusher_ended(&self) {
+        let mut state = self.inner.flusher_state.subscribe();
+        let _ = state.wait_for(|s| *s == Flusher::Ended).await;
     }
 
     /// `begin` without the flusher.
@@ -359,6 +385,7 @@ impl Drop for ControlTelemetry {
 }
 
 async fn flush_periodically(inner: Arc<Inner>) {
+    let _ended = FlusherGuard(inner.clone());
     loop {
         tokio::select! {
             _ = tokio::time::sleep(inner.limits.flush) => {}

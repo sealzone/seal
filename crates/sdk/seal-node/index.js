@@ -410,7 +410,7 @@ class Client {
 
   /** Verifies the enclave and resolves to a client. Options not given come from the
    * environment: `SEAL_ENDPOINT` (the enclave replicas, comma-separated), `SEAL_TENANT`
-   * (`<tenant>` or `<tenant>@<root id>`) and the first workload identity found
+   * (`<tenant>@<root id>`; `<tenant>` alone cannot seal) and the first workload identity found
    * (`SEAL_APP_KEY`, Azure, Kubernetes, GCP, GitHub Actions). `trust` is the release trust
    * (`trust.json`): a path, or its JSON as a Buffer or string; by default the one this
    * build ships. */

@@ -9,6 +9,7 @@
 
 use seal_proto::telemetry::{Dependency, RefusalContext};
 use std::collections::{BTreeMap, HashMap};
+use std::future::Future;
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -108,12 +109,12 @@ pub(crate) struct Runtime {
     activity: hosted::Activity,
 }
 
-/// The background tasks; aborted when dropped.
-pub(crate) struct Tasks(Vec<tokio::task::AbortHandle>);
+/// The background tasks, by name; aborted when dropped.
+pub(crate) struct Tasks(Vec<(&'static str, tokio::task::JoinHandle<()>)>);
 
 impl Drop for Tasks {
     fn drop(&mut self) {
-        for task in &self.0 {
+        for (_, task) in &self.0 {
             task.abort();
         }
     }
@@ -144,7 +145,25 @@ impl Tasks {
             }
         });
         let monitor = tokio::spawn(live::monitor(runtime.clone()));
-        Self(vec![attestation.abort_handle(), state.abort_handle(), monitor.abort_handle()])
+        Self(vec![("periodic attestation", attestation), ("state reload", state), ("session monitor", monitor)])
+    }
+
+    /// Resolves when a task ends, naming it and how. They run for the service's lifetime, so
+    /// that means one panicked.
+    pub(crate) async fn ended(&mut self) -> String {
+        std::future::poll_fn(|cx| {
+            for i in 0..self.0.len() {
+                if let std::task::Poll::Ready(result) = std::pin::Pin::new(&mut self.0[i].1).poll(cx) {
+                    let (name, _) = self.0.swap_remove(i);
+                    return std::task::Poll::Ready(match result {
+                        Err(e) if e.is_panic() => format!("{name} panicked"),
+                        _ => format!("{name} stopped"),
+                    });
+                }
+            }
+            std::task::Poll::Pending
+        })
+        .await
     }
 }
 
@@ -236,7 +255,8 @@ impl Runtime {
         c.tenants.publish_service_key_certificate(&keys.certificate).await?;
 
         let ServiceKeys { token, ingest, telemetry, tls, ticket, telemetry_public_keys, certificate, .. } = keys;
-        let telemetry_keys = telemetry_public_keys.iter().map(|(_, k)| *k).collect();
+        let telemetry_keys =
+            seal_verify::telemetry_keys_in_force(&certificate.body, Some(&release.fresh.checkpoint.policy));
         let tenant = state::verify_bundle(&config.trust, platform, &pin, &bundle, telemetry_keys, &time)?;
         let state = Arc::new(StateCache::new(pin.tenant.clone()));
         state.update(tenant)?;

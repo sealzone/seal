@@ -38,7 +38,8 @@ The module-level `seal.seal`, `seal.session` and `seal.signal` build a client fr
 environment on first use. It reads:
 
 - `SEAL_ENDPOINT`, the tenant's enclave replicas, comma-separated
-- `SEAL_TENANT`, as `<tenant>` or `<tenant>@<root id>`
+- `SEAL_TENANT`, as `<tenant>@<root id>` (the console's Connect page shows it). Sealing
+  needs the root id; sessions also work with `<tenant>` alone, since a blob names its root
 - the first workload identity it finds: `SEAL_APP_KEY`, Azure managed identity with
   `SEAL_AZURE_AUDIENCE`, a Kubernetes projected token, GCP, or GitHub Actions
 

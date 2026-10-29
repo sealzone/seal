@@ -8,22 +8,24 @@ use std::collections::BTreeMap;
 use seal_crypto::telemetry::TelemetryReaderKey;
 use seal_proto::api::TelemetryReceipt;
 use seal_proto::identity::WorkloadIdentity;
-use seal_proto::release::SignedServiceKeyCertificate;
+use seal_proto::release::{ReleaseConstraints, SignedServiceKeyCertificate};
 use seal_proto::telemetry::{SignedTelemetryBatch, TelemetryEntry};
 use seal_proto::{PlatformId, PublicKey, TenantId, TenantRootId, UnixTime};
 use seal_verify::telemetry::Finding;
 
 use crate::config::hex;
 
-/// The telemetry public keys of every certificate that verifies under `guardians` and is for
-/// `tenant` and `root_id`; the rest are listed in the returned findings.
+/// The telemetry public keys still in force under `policy` (a verified checkpoint's release
+/// constraints) of every certificate that verifies under `guardians` and is for `tenant` and
+/// `root_id`; the rest are listed in the returned findings.
 pub fn certified_keys(
     guardians: &BTreeMap<PlatformId, PublicKey>,
     tenant: &TenantId,
     root_id: &TenantRootId,
     certificates: &[SignedServiceKeyCertificate],
+    policy: Option<&ReleaseConstraints>,
 ) -> (Vec<PublicKey>, Vec<String>) {
-    let (keys, findings) = seal_verify::telemetry::certified_keys(guardians, tenant, root_id, certificates);
+    let (keys, findings) = seal_verify::telemetry::certified_keys(guardians, tenant, root_id, certificates, policy);
     (keys, findings.iter().map(line).collect())
 }
 

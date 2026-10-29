@@ -3,6 +3,7 @@
 use base64::Engine;
 use serde::{de::DeserializeOwned, Serialize};
 use sha2::{Digest, Sha256};
+use zeroize::Zeroizing;
 
 use crate::ProtoError;
 
@@ -11,6 +12,44 @@ pub fn canonical<T: Serialize>(value: &T) -> Vec<u8> {
     let mut out = Vec::new();
     ciborium::into_writer(value, &mut out).expect("CBOR encoding into a Vec cannot fail");
     out
+}
+
+/// `canonical` for values that carry secrets (seal payloads, released keys): sized first,
+/// then encoded into a buffer of exactly that capacity, so the encoding is never copied by
+/// a reallocation and leaves no freed copy behind; zeroized when dropped. Decoding cannot
+/// promise the same: ciborium reads through its own scratch buffer.
+pub fn canonical_secret<T: Serialize>(value: &T) -> Zeroizing<Vec<u8>> {
+    struct Size(usize);
+    impl std::io::Write for Size {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0 += buf.len();
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut size = Size(0);
+    ciborium::into_writer(value, &mut size).expect("CBOR encoding into a counter cannot fail");
+    let mut out = Zeroizing::new(Vec::with_capacity(size.0));
+    let mut writer = Bounded(&mut out);
+    ciborium::into_writer(value, &mut writer).expect("a value encodes to the same size twice");
+    out
+}
+
+/// Writes into a `Vec` only within its capacity, so it never reallocates.
+struct Bounded<'a>(&'a mut Vec<u8>);
+impl std::io::Write for Bounded<'_> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if buf.len() > self.0.capacity() - self.0.len() {
+            return Err(std::io::ErrorKind::WriteZero.into());
+        }
+        self.0.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 pub fn from_canonical<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, ProtoError> {
@@ -98,5 +137,21 @@ pub mod array_b64 {
     pub fn deserialize<'de, D: Deserializer<'de>, const N: usize>(d: D) -> Result<[u8; N], D::Error> {
         let v = super::bytes_b64::deserialize(d)?;
         v.try_into().map_err(|v: Vec<u8>| serde::de::Error::custom(format!("expected {N} bytes, got {}", v.len())))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::secret::SecretVec;
+
+    #[test]
+    fn canonical_secret_is_canonical_in_an_exact_buffer() {
+        for len in [0, 1, 23, 24, 255, 256, 70_000] {
+            let value = (SecretVec::new(vec![7; len]), "policy", [1u32, 2, 3]);
+            let encoded = canonical_secret(&value);
+            assert_eq!(&encoded[..], &canonical(&value)[..], "{len}");
+            assert_eq!(encoded.capacity(), encoded.len(), "{len}: sized once, never grown");
+        }
     }
 }

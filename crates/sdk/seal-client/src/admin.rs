@@ -633,9 +633,13 @@ impl Admin {
     ) -> Result<Current, ClientError> {
         let mut bundle = self.control.get_bundle(&self.tenant).await.map_err(control_error)?;
         let state = &bundle.state.body;
-        if !state.freshness_keys.contains(&signer.public_key()) {
+        // During a pending window the state in force's signers vouch for the latest state too.
+        let listed = std::iter::once(state)
+            .chain(bundle.states.iter().map(|s| &s.state.body))
+            .any(|s| s.freshness_keys.contains(&signer.public_key()));
+        if !listed {
             return Err(ClientError::Invalid(format!(
-                "{} is not a freshness key of state version {}",
+                "{} is not a freshness key of state version {} or of the state in force",
                 signer.public_key(),
                 state.version
             )));

@@ -280,7 +280,8 @@ impl<'a> TenantAuthorizer<'a> {
 
     /// A fresh proof for a live session: `request`'s caller must be `current.caller`, the
     /// session must not have ended early (`SessionEnded`), and it must still pass everything `session` checks (grants with the new proof's
-    /// scope, expiry, key version, suspension, endpoint report). The permit carries
+    /// scope, expiry, key version, suspension, endpoint report, and the `min_tier` it started
+    /// with, carried in its claims). The permit carries
     /// the new authentication scope; the enclave issues the new token from it.
     pub fn extend<'p>(
         &'p self,
@@ -309,6 +310,10 @@ impl<'a> TenantAuthorizer<'a> {
         }
         // Recomputed from the fresh report every extend: a hardened blob stops working
         // within one extend of its endpoint's attestation going silent.
+        if let Some(required) = current.min_tier.filter(|min| offered_tier < *min) {
+            return Err(AuthzError::denied(ErrorCode::TierTooLow, "the session would be below min_tier")
+                .with(RefusalContext::TierTooLow { required, offered: offered_tier }));
+        }
         if let Some(required) = current.blob.policy.min_tier().filter(|min| offered_tier < *min) {
             return Err(AuthzError::denied(ErrorCode::TierTooLow, "the blob requires a higher tier")
                 .with(RefusalContext::TierTooLow { required, offered: offered_tier }));
@@ -327,8 +332,9 @@ impl<'a> TenantAuthorizer<'a> {
         self.still_holds(&claims.app, &claims.blob, &claims.authentication, &claims.caller, time)
     }
 
-    /// The suspension in force for `identity` at `time`, if any: an uncleared signal whose
-    /// severity maps to `Suspend`, still within its duration. Session starts, extends and
+    /// The suspension in force for `identity` at `time`, if any: an uncleared signal about it
+    /// (`WorkloadIdentity::same_subject`) whose severity maps to `Suspend`, still within its
+    /// duration. Session starts, extends and
     /// live sessions all check this. Of several, the one lasting longest.
     pub(crate) fn suspension(&self, identity: &WorkloadIdentity, time: &TrustedTime) -> Option<Suspension> {
         let state = self.tenant.state();
@@ -336,7 +342,7 @@ impl<'a> TenantAuthorizer<'a> {
         self.tenant
             .signals()
             .iter()
-            .filter(|s| &s.identity == identity && s.tenant == state.tenant && policy.is_live(s, time))
+            .filter(|s| s.identity.same_subject(identity) && s.tenant == state.tenant && policy.is_live(s, time))
             .filter_map(|s| match policy.action_for(s.severity) {
                 IntegrityAction::Suspend { secs } => Some(Suspension {
                     code: s.code.clone(),

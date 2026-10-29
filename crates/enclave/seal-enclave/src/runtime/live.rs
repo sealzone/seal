@@ -3,6 +3,7 @@
 //! monitor that rechecks every live session when the tenant state changes.
 
 use std::collections::HashMap;
+use std::net::IpAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock, Weak};
 
@@ -15,7 +16,7 @@ use seal_proto::integrity::SignalSource;
 use seal_proto::policy::SecretPolicy;
 use seal_proto::session::SessionClaims;
 use seal_proto::telemetry::TelemetryEvent;
-use seal_proto::tunnel::LOCAL_KEY_PREFIX;
+use seal_proto::tunnel::{TunnelConnect, LOCAL_KEY_PREFIX};
 use seal_proto::{AppName, BlobId, ErrorCode, TenantId, TrustedTime, UnixTime};
 use seal_verify::VerifiedTenant;
 use sha2::{Digest, Sha256};
@@ -69,15 +70,17 @@ impl Registry {
 /// One connection's session. Its claims start as the token's; an `Extend` preamble moves
 /// their expiry (and authentication scope) forward. It ends, with the reason `ended`
 /// returns, when its expiry passes, when a recheck against the tenant state fails (grant or
-/// key version retired, suspension, `SessionEnd` from any replica, a stale
-/// state, this replica no longer listed), or when this replica ends the
-/// session.
+/// key version retired, suspension, `SessionEnd` from any replica, its tunnel's peer outside
+/// the app's networks, a stale state, this replica no longer listed), or when this replica
+/// ends the session.
 pub(crate) struct LiveSession {
     runtime: Arc<Runtime>,
     tenant: TenantId,
     app: AppName,
     session_id: [u8; 16],
     caller: WorkloadIdentity,
+    /// The tunnel's peer, which every recheck holds to the app's network rule.
+    peer: Option<IpAddr>,
     claims: RwLock<SessionClaims>,
     opened: OpenedBlob,
     connection_id: u64,
@@ -86,9 +89,16 @@ pub(crate) struct LiveSession {
 }
 
 impl LiveSession {
-    fn new(runtime: Arc<Runtime>, claims: SessionClaims, opened: OpenedBlob, connection_id: u64) -> Self {
+    fn new(
+        runtime: Arc<Runtime>,
+        claims: SessionClaims,
+        opened: OpenedBlob,
+        connection_id: u64,
+        peer: Option<IpAddr>,
+    ) -> Self {
         Self {
             runtime,
+            peer,
             tenant: claims.tenant.clone(),
             app: claims.app.clone(),
             session_id: claims.session_id,
@@ -138,11 +148,12 @@ impl LiveSession {
     }
 
     /// The session against `tenant`: the replica still serves sessions, and the claims pass
-    /// `TenantAuthorizer::recheck`.
+    /// `TenantAuthorizer::recheck` from the tunnel's peer, so a network rule added or narrowed
+    /// later also ends tunnels already open from outside it.
     fn recheck(&self, tenant: &VerifiedTenant, time: &TrustedTime) -> Result<(), ErrorCode> {
         self.runtime.serving(tenant).map_err(|e| e.code)?;
         let claims = self.claims.read().unwrap_or_else(|e| e.into_inner());
-        TenantAuthorizer::new(tenant).recheck(&claims, time).map_err(|e| e.code())
+        TenantAuthorizer::new(tenant).with_source(self.peer).recheck(&claims, time).map_err(|e| e.code())
     }
 
     /// What the tenant's policy makes of a detector's finding about this session's caller.
@@ -181,6 +192,10 @@ impl Session for LiveSession {
     }
     fn secret(&self) -> &[u8] {
         self.opened.secret()
+    }
+    /// The tunnel's token redeems to this session's `session_id`.
+    fn same_session(&self, tunnel: &TunnelConnect) -> bool {
+        self.runtime.redeem(tunnel.token.expose()).is_ok_and(|claims| claims.session_id == self.session_id)
     }
 
     /// Rechecks the session against the current state (a failure ends it and refuses the
@@ -351,7 +366,8 @@ impl Runtime {
         // Running work from here until the session is live, which then keeps the replica up.
         let _busy = self.activity.begin()?;
         let opened = self.open(&claims.blob, &tenant).await?;
-        let session = Arc::new(LiveSession::new(self.clone(), claims, opened, meta.connection_id));
+        let peer = meta.peer.map(|p| p.ip());
+        let session = Arc::new(LiveSession::new(self.clone(), claims, opened, meta.connection_id, peer));
         self.live.insert(&session);
         Ok(session)
     }

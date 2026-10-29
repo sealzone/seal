@@ -276,6 +276,7 @@ impl Runtime {
             platform: self.platform,
             issued_at: time.now,
             expires_at,
+            min_tier: permit.request().request().min_tier,
         };
         let token = self.service.token.issue(&claims, &mut rng());
         let resealed = if decision.reseal {
@@ -372,6 +373,7 @@ impl Runtime {
             platform: c.platform,
             issued_at: time.now,
             expires_at,
+            min_tier: c.min_tier,
         };
         let token = self.service.token.issue(&claims, &mut rng());
         self.record(Some(identity), TelemetryEvent::Extend { session_id: c.session_id, expires_at });
@@ -383,11 +385,19 @@ impl Runtime {
         self.refused(Operation::End, result)
     }
 
+    /// Only a token that has not expired ends its session: an older token of an extended
+    /// session, once past its own expiry, ends nothing. Clock uncertainty counts in the
+    /// caller's favour.
     async fn end_refusable(&self, request: EndRequest) -> Result<(), Refusal> {
         let claims = self.redeem(request.token.expose())?;
         let identity = claims.caller.clone();
         let _busy = self.activity.begin().by(&identity)?;
         let time = self.now().await.by(&identity)?;
+        if time.earliest() >= claims.expires_at {
+            return Err(fail(ErrorCode::SessionExpired, "session token expired")
+                .with(RefusalContext::SessionExpired { expired_at: claims.expires_at }))
+            .by(&identity);
+        }
         self.snapshot(&time).by(&identity)?;
         let signed = self.close_session(claims.session_id, ErrorCode::SessionEnded, &identity, &time);
         self.tenants.publish_session_end(&signed).await.by(&identity)

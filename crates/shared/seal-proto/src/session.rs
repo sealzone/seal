@@ -94,6 +94,10 @@ pub struct SessionClaims {
     pub platform: PlatformId,
     pub issued_at: UnixTime,
     pub expires_at: UnixTime,
+    /// The `min_tier` the session was started with: every extend is held to it too. Absent
+    /// from tokens issued without one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_tier: Option<ConsumerTier>,
 }
 
 /// `s.info` in the SDK: read-only facts about a session.

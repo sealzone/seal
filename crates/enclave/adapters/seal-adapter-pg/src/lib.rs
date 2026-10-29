@@ -100,7 +100,7 @@ impl Adapter for PostgresAdapter {
             Ok(login) => match login? {
                 Some(client::Start::Login(login)) => login,
                 Some(client::Start::Cancel { pid, key }) => {
-                    return self.cancels.cancel(pid, key, &*ctx.upstream).await;
+                    return self.cancels.cancel(pid, key, &meta.tunnel, &*ctx.upstream).await;
                 }
                 None => return Ok(()),
             },
