@@ -331,6 +331,13 @@ elsewhere, and the session token never leaves the SDK.
   carries one fixed name. A replica is reached at whatever address `SEAL_ENDPOINT` lists,
   and the release templates use port 8443. A replica that serves no sessions (draining, or
   not listed in the state in force) drops a tunnel on its ClientHello, before the handshake.
+
+  The port holds at most `MAX_CONNECTIONS` (1024) connections at once, API and tunnels
+  together, and `MAX_CONNECTIONS_PER_SOURCE` (512) from one source, an IPv4 address or an
+  IPv6 /64 (callers behind one translated address share it). A connection past either is
+  closed before its TLS handshake, and the PROXY header and handshake must finish within
+  10 s. A tunnel holds its place until it ends, an API connection until it goes 120 s with no
+  byte moving either way. The open calls' rate limits use the same sources.
 - **Tunnel connections.** Each goes to the replica that last answered. When that replica
   does not answer, the tunnel tries the others at once and uses the first to answer from
   then on. The preamble goes out with the app's first bytes.
@@ -345,8 +352,9 @@ elsewhere, and the session token never leaves the SDK.
   successfully sends one more end in the background. The enclave ends a session itself when
   a detector's finding maps to `Verdict::End`. The tunnel never restarts an ended session.
 - **Every connection and request** is checked against the session (expiry, grants,
-  suspension) and passes `Session::observe`. Live connections are rechecked on every tenant
-  state change.
+  suspension) and passes `Session::observe`. A tunnel's session is checked on its `Connect`
+  preamble, against the connection's address too, before any adapter runs. Live connections
+  are rechecked on every tenant state change.
 
 ### How access ends
 
@@ -554,11 +562,12 @@ rules:
   ignoring ASCII case; the destination prefix matches exactly.
 - **Postgres** drops startup `options` and refuses replication and `FunctionCall`. It gives
   the client a `BackendKeyData` of its own, random per connection and never the upstream's.
-  A `CancelRequest` naming that key, on a new connection to the same replica while the
-  connection lives, passes `Session::observe` (action `CANCEL`). It then goes upstream with
-  the upstream's key over a new verified TLS connection. Any other pair is closed without a
-  reply. Postgres authenticates upstream with SCRAM-SHA-256 only (SCRAM-SHA-256-PLUS bound to
-  the TLS connection when offered) and never sends the secret any other way.
+  A `CancelRequest` naming that key, on a new tunnel connection to the same replica while the
+  connection lives, passes `Session::observe` (action `CANCEL`). That tunnel's own session
+  must be live, as for any tunnel. The cancel then goes upstream with the upstream's key over
+  a new verified TLS connection. Any other pair is closed without a reply. Postgres
+  authenticates upstream with SCRAM-SHA-256 only (SCRAM-SHA-256-PLUS bound to the TLS
+  connection when offered) and never sends the secret any other way.
 - **Redis** refuses re-`AUTH` and `HELLO … AUTH`. It also refuses commands outside the
   destination's db (`SELECT` of another db, `SWAPDB`, `MOVE`, `COPY … DB`, `FLUSHALL`,
   `MIGRATE`), commands that break one reply per command (`RESET`, `CLIENT REPLY OFF|SKIP`,
@@ -875,6 +884,9 @@ Who may read and write a tenant's documents (the crate docs hold the full route 
 - **Postgres cancels** reach only the replica holding the connection. One sent to another
   replica does nothing. A tunnel sends its connections to the replica that last answered, so
   a cancel lands there unless that replica stopped answering in between.
+- **Connection slots are first come.** A caller with many sources (IPv6 /64s are cheap)
+  that keeps connections open, sending a byte within every 120 s, can hold the port's
+  `MAX_CONNECTIONS` and keep new callers out until it stops. Live tunnels need a session.
 - **Anyone can start** a tenant's stopped hosted replica by connecting to
   `<tenant>.enclave.seal.zone`. It costs Seal a replica start and nothing else. Starts are
   rate limited and keep nothing running, since unauthenticated requests do not count as

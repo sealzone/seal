@@ -11,7 +11,16 @@
 //! - `POST /v1/tickets` and `POST /v1/blobs`, which anyone may call, are rate limited per
 //!   connection source (the peer's IPv4 address, or its IPv6 /64): a bucket of `TICKET_BURST`
 //!   tickets refilled at `TICKETS_PER_SEC`, and one of `SEAL_BURST` seals refilled at
-//!   `SEALS_PER_SEC`. Over the limit is `BudgetExceeded`.
+//!   `SEALS_PER_SEC`. Over the limit is `BudgetExceeded`. Each limiter tracks at most
+//!   `SOURCES` sources; when every one is mid-burst, a new source displaces the fullest
+//!   bucket, so sources cycled in never refill anyone else's.
+//!
+//! The port holds at most `MAX_CONNECTIONS` connections at once, API and tunnels together,
+//! and `MAX_CONNECTIONS_PER_SOURCE` from one source (keyed as the rate limits are); a
+//! connection past either is closed before its TLS handshake. A connection holds its slot
+//! from the accept until it closes: the PROXY header and handshake within `HANDSHAKE_TIMEOUT`,
+//! then a tunnel until it ends, or an API connection until it goes `API_IDLE_TIMEOUT` with no
+//! byte moving either way.
 //!
 //! `serve` terminates TLS itself with the enclave's TLS key (`SealService::tls_config`), the
 //! same key the attestation binds, so clients pin it before sending anything. The port is the
@@ -22,8 +31,11 @@
 
 use std::collections::HashMap;
 use std::future::Future;
+use std::io;
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -43,8 +55,10 @@ use seal_proto::freshness::ProofTicket;
 use seal_proto::tunnel::ALPN;
 use seal_proto::ErrorCode;
 use serde::de::DeserializeOwned;
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::time::Instant;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::time::{Instant, Sleep};
 use tokio_rustls::server::TlsStream;
 
 use crate::{SealService, ServiceError};
@@ -62,10 +76,21 @@ pub const SEAL_BURST: u32 = 20;
 /// Rate at which a source's seal bucket refills.
 pub const SEALS_PER_SEC: u32 = 2;
 
-/// Sources a limiter tracks at most; past it, sources whose bucket has refilled are forgotten.
+/// Connections the port holds at once, API and tunnels together: with a 1 MiB request body
+/// buffered on each, about 1 GiB, half the container.
+pub const MAX_CONNECTIONS: usize = 1024;
+/// Connections one source (an IPv4 address or an IPv6 /64) may hold at once. Callers behind
+/// one translated address share it.
+pub const MAX_CONNECTIONS_PER_SOURCE: usize = MAX_CONNECTIONS / 2;
+
+/// Sources a limiter tracks at most; past it, sources whose bucket has refilled are forgotten,
+/// or else the fullest (`RateLimiter::allow`).
 const SOURCES: usize = 10_000;
 /// Time from an accepted connection to a finished TLS handshake.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+/// Time an API connection may go with no byte moving either way, between requests or within
+/// one. Well past any request's own work (each outbound call has 10 s).
+const API_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// The operations the router calls: `SealService`'s, as a seam the router's tests implement.
 #[async_trait]
@@ -121,9 +146,9 @@ pub async fn serve(
     listener: TcpListener,
     tls: Arc<rustls::ServerConfig>,
     shutdown: impl Future<Output = ()> + Send + 'static,
-) -> std::io::Result<()> {
+) -> io::Result<()> {
     let tunnels: Arc<dyn Tunnels> = service.clone();
-    serve_router(routes(service), listener, tls, tunnels, shutdown).await
+    serve_router(routes(service), listener, tls, tunnels, PortLimits::default(), shutdown).await
 }
 
 async fn serve_router(
@@ -131,9 +156,10 @@ async fn serve_router(
     listener: TcpListener,
     tls: Arc<rustls::ServerConfig>,
     tunnels: Arc<dyn Tunnels>,
+    limits: PortLimits,
     shutdown: impl Future<Output = ()> + Send + 'static,
-) -> std::io::Result<()> {
-    let listener = TlsListener::new(listener, tls, tunnels)?;
+) -> io::Result<()> {
+    let listener = TlsListener::new(listener, tls, tunnels, limits)?;
     axum::serve(listener, router.into_make_service_with_connect_info::<Source>()).with_graceful_shutdown(shutdown).await
 }
 
@@ -347,8 +373,18 @@ impl RateLimiter {
         if buckets.len() >= SOURCES && !buckets.contains_key(&source) {
             buckets.retain(|_, bucket| self.refilled(*bucket, now) < self.burst);
             if buckets.len() >= SOURCES {
-                // Every tracked source is mid-burst: start over rather than grow without bound.
-                buckets.clear();
+                // Every tracked source is mid-burst: forget the fullest, which gains the least
+                // by starting over. A drained bucket goes only once every other one is as
+                // drained, which costs whoever cycles sources a burst each. (The scan is cheap
+                // next to the TLS handshake every new source costs.)
+                let fullest = buckets
+                    .iter()
+                    .map(|(source, bucket)| (*source, self.refilled(*bucket, now)))
+                    .max_by(|a, b| a.1.total_cmp(&b.1))
+                    .map(|(source, _)| source);
+                if let Some(fullest) = fullest {
+                    buckets.remove(&fullest);
+                }
             }
         }
         let bucket = buckets.entry(source).or_insert((self.burst, now));
@@ -398,11 +434,145 @@ impl Tunnels for SealService {
     }
 }
 
-/// Accepts TCP connections and completes their TLS handshakes in the background (each within
-/// `HANDSHAKE_TIMEOUT`), so a slow client never holds up the others; tunnels go to `tunnels`,
-/// the rest to the API. Stops accepting once dropped.
+/// The port's connection limits: `MAX_CONNECTIONS`, `MAX_CONNECTIONS_PER_SOURCE` and
+/// `API_IDLE_TIMEOUT` (smaller in tests).
+#[derive(Clone, Copy, Debug)]
+struct PortLimits {
+    connections: usize,
+    per_source: usize,
+    idle: Duration,
+}
+
+impl Default for PortLimits {
+    fn default() -> Self {
+        Self { connections: MAX_CONNECTIONS, per_source: MAX_CONNECTIONS_PER_SOURCE, idle: API_IDLE_TIMEOUT }
+    }
+}
+
+/// The connections the port holds: a permit each, and a count per source (`bucket_key`).
+struct Slots {
+    all: Arc<Semaphore>,
+    per_source: usize,
+    held: Mutex<HashMap<IpAddr, usize>>,
+}
+
+impl Slots {
+    fn new(limits: &PortLimits) -> Arc<Self> {
+        Arc::new(Self {
+            all: Arc::new(Semaphore::new(limits.connections)),
+            per_source: limits.per_source,
+            held: Mutex::new(HashMap::new()),
+        })
+    }
+
+    /// The slot of a connection holding `permit` from `ip`, unless its source holds its share.
+    fn take(self: &Arc<Self>, permit: OwnedSemaphorePermit, ip: IpAddr) -> Option<Slot> {
+        let source = bucket_key(ip);
+        let mut held = crate::lock(&self.held);
+        let count = held.get(&source).copied().unwrap_or(0);
+        if count >= self.per_source {
+            return None;
+        }
+        held.insert(source, count + 1);
+        Some(Slot { slots: self.clone(), source, _permit: permit })
+    }
+}
+
+/// One connection's place in `Slots`, given back when dropped.
+struct Slot {
+    slots: Arc<Slots>,
+    source: IpAddr,
+    _permit: OwnedSemaphorePermit,
+}
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        let mut held = crate::lock(&self.slots.held);
+        if let Some(count) = held.get_mut(&self.source) {
+            *count -= 1;
+            if *count == 0 {
+                held.remove(&self.source);
+            }
+        }
+    }
+}
+
+/// An API connection: its TLS stream, which fails once no byte has moved either way for
+/// `idle`, and its slot.
+struct ApiStream {
+    tls: TlsStream<TcpStream>,
+    idle: Duration,
+    deadline: Pin<Box<Sleep>>,
+    _slot: Slot,
+}
+
+impl ApiStream {
+    fn new(tls: TlsStream<TcpStream>, idle: Duration, slot: Slot) -> Self {
+        Self { tls, idle, deadline: Box::pin(tokio::time::sleep(idle)), _slot: slot }
+    }
+
+    /// `poll` of the stream, which moves the deadline when it is ready and fails once the
+    /// deadline passes while it is not.
+    fn poll_io<T>(&mut self, cx: &mut Context<'_>, poll: Poll<io::Result<T>>) -> Poll<io::Result<T>> {
+        match poll {
+            Poll::Ready(result) => {
+                self.deadline.as_mut().reset(Instant::now() + self.idle);
+                Poll::Ready(result)
+            }
+            Poll::Pending => match self.deadline.as_mut().poll(cx) {
+                Poll::Ready(()) => Poll::Ready(Err(io::Error::new(io::ErrorKind::TimedOut, "API connection idle"))),
+                Poll::Pending => Poll::Pending,
+            },
+        }
+    }
+}
+
+impl AsyncRead for ApiStream {
+    fn poll_read(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
+        let this = self.get_mut();
+        let poll = Pin::new(&mut this.tls).poll_read(cx, buf);
+        this.poll_io(cx, poll)
+    }
+}
+
+impl AsyncWrite for ApiStream {
+    fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
+        let this = self.get_mut();
+        let poll = Pin::new(&mut this.tls).poll_write(cx, buf);
+        this.poll_io(cx, poll)
+    }
+
+    fn poll_write_vectored(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &[io::IoSlice<'_>],
+    ) -> Poll<io::Result<usize>> {
+        let this = self.get_mut();
+        let poll = Pin::new(&mut this.tls).poll_write_vectored(cx, bufs);
+        this.poll_io(cx, poll)
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        self.tls.is_write_vectored()
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        let this = self.get_mut();
+        let poll = Pin::new(&mut this.tls).poll_flush(cx);
+        this.poll_io(cx, poll)
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.get_mut().tls).poll_shutdown(cx)
+    }
+}
+
+/// Accepts TCP connections within `PortLimits` (past them, a connection is closed at once) and
+/// completes their TLS handshakes in the background (each within `HANDSHAKE_TIMEOUT`), so a
+/// slow client never holds up the others; tunnels go to `tunnels`, the rest to the API. Stops
+/// accepting once dropped.
 struct TlsListener {
-    rx: tokio::sync::mpsc::Receiver<(TlsStream<TcpStream>, SocketAddr)>,
+    rx: tokio::sync::mpsc::Receiver<(ApiStream, SocketAddr)>,
     local: SocketAddr,
 }
 
@@ -411,9 +581,11 @@ impl TlsListener {
         listener: TcpListener,
         config: Arc<rustls::ServerConfig>,
         tunnels: Arc<dyn Tunnels>,
-    ) -> std::io::Result<Self> {
+        limits: PortLimits,
+    ) -> io::Result<Self> {
         let local = listener.local_addr()?;
         let (tx, rx) = tokio::sync::mpsc::channel(64);
+        let slots = Slots::new(&limits);
         tokio::spawn(async move {
             loop {
                 let accepted = tokio::select! {
@@ -428,28 +600,38 @@ impl TlsListener {
                         continue;
                     }
                 };
+                let Ok(permit) = slots.all.clone().try_acquire_owned() else {
+                    tracing::debug!(peer = %socket_peer, "connection refused: the port is full");
+                    continue;
+                };
                 // Small writes (TLS handshakes, preambles, requests) go out at once.
                 let _ = tcp.set_nodelay(true);
-                let (config, tunnels, tx) = (config.clone(), tunnels.clone(), tx.clone());
+                let (config, tunnels, tx, slots) = (config.clone(), tunnels.clone(), tx.clone(), slots.clone());
                 tokio::spawn(async move {
                     // A PROXY header first, if the connection starts with one: its client
                     // address stands for the socket's only on a replica behind the front door.
                     let accepting = async {
                         let named = crate::proxy::read(&mut tcp).await?;
                         let peer = named.filter(|_| tunnels.behind_front_door()).unwrap_or(socket_peer);
-                        Ok::<_, std::io::Error>((handshake(tcp, config, &*tunnels).await?, peer))
+                        let Some(slot) = slots.take(permit, peer.ip()) else {
+                            tracing::debug!(%peer, "connection refused: its source holds its share of the port");
+                            return Ok(None);
+                        };
+                        let accepted = handshake(tcp, config, &*tunnels).await?;
+                        Ok::<_, io::Error>(accepted.map(|accepted| (accepted, peer, slot)))
                     };
                     let peer = socket_peer;
-                    let ((tls, tunnel), peer) = match tokio::time::timeout(HANDSHAKE_TIMEOUT, accepting).await {
-                        Ok(Ok((Some(accepted), peer))) => (accepted, peer),
-                        Ok(Ok((None, _))) => return,
+                    let ((tls, tunnel), peer, slot) = match tokio::time::timeout(HANDSHAKE_TIMEOUT, accepting).await {
+                        Ok(Ok(Some(accepted))) => accepted,
+                        Ok(Ok(None)) => return,
                         Ok(Err(e)) => return tracing::debug!(%peer, error = %e, "TLS handshake failed"),
                         Err(_) => return tracing::debug!(%peer, "TLS handshake timed out"),
                     };
                     if tunnel {
                         tunnels.serve(tls, peer).await;
+                        drop(slot);
                     } else {
-                        let _ = tx.send((tls, peer)).await;
+                        let _ = tx.send((ApiStream::new(tls, limits.idle, slot), peer)).await;
                     }
                 });
             }
@@ -464,7 +646,7 @@ async fn handshake(
     tcp: TcpStream,
     config: Arc<rustls::ServerConfig>,
     tunnels: &dyn Tunnels,
-) -> std::io::Result<Option<(TlsStream<TcpStream>, bool)>> {
+) -> io::Result<Option<(TlsStream<TcpStream>, bool)>> {
     let start = tokio_rustls::LazyConfigAcceptor::new(rustls::server::Acceptor::default(), tcp).await?;
     let tunnel = start.client_hello().alpn().is_some_and(|mut offered| offered.any(|p| p == ALPN));
     if tunnel && !tunnels.admit() {
@@ -478,7 +660,7 @@ async fn handshake(
 }
 
 impl Listener for TlsListener {
-    type Io = TlsStream<TcpStream>;
+    type Io = ApiStream;
     type Addr = SocketAddr;
 
     async fn accept(&mut self) -> (Self::Io, Self::Addr) {
@@ -489,7 +671,7 @@ impl Listener for TlsListener {
         }
     }
 
-    fn local_addr(&self) -> std::io::Result<Self::Addr> {
+    fn local_addr(&self) -> io::Result<Self::Addr> {
         Ok(self.local)
     }
 }
@@ -655,7 +837,8 @@ pub(crate) mod tests {
         let tunnels = Arc::new(FakeTunnels { admit: true.into() });
         let router = routes_with(Arc::new(Fake::default()), Limits::default());
         let served = tunnels.clone() as Arc<dyn Tunnels>;
-        tokio::spawn(serve_router(router, listener, tls_config(&key, &names), served, std::future::pending()));
+        let limits = PortLimits::default();
+        tokio::spawn(serve_router(router, listener, tls_config(&key, &names), served, limits, std::future::pending()));
         let mut roots = rustls::RootCertStore::empty();
         roots.add(rustls::pki_types::CertificateDer::from(key.ca_certificate_der(&names).unwrap())).unwrap();
         let connect = |alpn: &[u8]| {
@@ -688,6 +871,102 @@ pub(crate) mod tests {
         assert!(got.starts_with(b"HTTP/1.1 400"), "{}", String::from_utf8_lossy(&got));
     }
 
+    /// Serves the routes over a `Fake`, and tunnels that are admitted, on a local port within
+    /// `limits`.
+    async fn serve_port(limits: PortLimits) -> SocketAddr {
+        let key = tls_key();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let tunnels = Arc::new(FakeTunnels { admit: true.into() });
+        let router = routes_with(Arc::new(Fake::default()), Limits::default());
+        let config = tls_config(&key, &[HOST.to_string()]);
+        tokio::spawn(serve_router(router, listener, config, tunnels, limits, std::future::pending()));
+        addr
+    }
+
+    /// A TLS connection to `addr` from the loopback address `from`, offering `alpn`.
+    async fn dial(
+        addr: SocketAddr,
+        from: [u8; 4],
+        alpn: &[u8],
+    ) -> io::Result<tokio_rustls::client::TlsStream<TcpStream>> {
+        let mut roots = rustls::RootCertStore::empty();
+        let ca = tls_key().ca_certificate_der(&[HOST.to_string()]).unwrap();
+        roots.add(rustls::pki_types::CertificateDer::from(ca)).unwrap();
+        let mut config =
+            rustls::ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+                .with_safe_default_protocol_versions()
+                .unwrap()
+                .with_root_certificates(roots)
+                .with_no_client_auth();
+        config.alpn_protocols = vec![alpn.to_vec()];
+        let socket = tokio::net::TcpSocket::new_v4()?;
+        socket.bind(SocketAddr::from((from, 0)))?;
+        let tcp = socket.connect(addr).await?;
+        let name = rustls::pki_types::ServerName::try_from(HOST).unwrap();
+        tokio_rustls::TlsConnector::from(Arc::new(config)).connect(name, tcp).await
+    }
+
+    /// Dials until a connection is accepted (a closed one frees its slot soon after), within 5 s.
+    async fn dial_until_accepted(
+        addr: SocketAddr,
+        from: [u8; 4],
+        alpn: &[u8],
+    ) -> tokio_rustls::client::TlsStream<TcpStream> {
+        let accepted = async {
+            loop {
+                if let Ok(tls) = dial(addr, from, alpn).await {
+                    return tls;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        };
+        tokio::time::timeout(Duration::from_secs(5), accepted).await.expect("a slot was freed")
+    }
+
+    #[tokio::test]
+    async fn connections_are_capped_in_all_and_per_source_and_freed_when_they_end() {
+        use tokio::io::AsyncReadExt;
+
+        let limits = PortLimits { connections: 2, per_source: 1, ..PortLimits::default() };
+        let addr = serve_port(limits).await;
+        let (a, b, c) = ([127, 0, 0, 1], [127, 0, 0, 2], [127, 0, 0, 3]);
+        let held = dial(addr, a, b"http/1.1").await.unwrap();
+        assert!(dial(addr, a, b"http/1.1").await.is_err(), "a source holds at most its share");
+        let other = dial(addr, b, b"http/1.1").await.unwrap();
+        assert!(dial(addr, c, b"http/1.1").await.is_err(), "the port holds at most its connections");
+        assert!(dial(addr, c, ALPN).await.is_err(), "tunnels count too");
+        // A closed API connection gives its slot back, in all and for its source.
+        drop(held);
+        let _held = dial_until_accepted(addr, a, b"http/1.1").await;
+        drop(other);
+        // So does a tunnel once it ends.
+        let mut tunnel = dial_until_accepted(addr, c, ALPN).await;
+        let mut got = Vec::new();
+        tunnel.read_to_end(&mut got).await.unwrap();
+        assert_eq!(got, b"served");
+        dial_until_accepted(addr, b, b"http/1.1").await;
+    }
+
+    #[tokio::test]
+    async fn an_idle_api_connection_is_closed() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let idle = Duration::from_millis(300);
+        let addr = serve_port(PortLimits { idle, ..PortLimits::default() }).await;
+        let mut tls = dial(addr, [127, 0, 0, 1], b"http/1.1").await.unwrap();
+        // Kept alive after a request, it closes once nothing has moved for `idle`.
+        tls.write_all(b"GET /v1/nothing HTTP/1.1\r\nhost: enclave.test\r\n\r\n").await.unwrap();
+        let mut first = [0u8; 12];
+        tls.read_exact(&mut first).await.unwrap();
+        assert_eq!(&first, b"HTTP/1.1 400");
+        let start = Instant::now();
+        let mut rest = Vec::new();
+        let closed = tokio::time::timeout(Duration::from_secs(5), tls.read_to_end(&mut rest)).await;
+        assert!(closed.is_ok(), "closed when idle");
+        assert!(start.elapsed() >= idle - Duration::from_millis(100), "{:?}", start.elapsed());
+    }
+
     /// Serves `router` over HTTPS (`serve_router`) for `HOST` on a local port; an HTTPS client
     /// that reaches it for any host and trusts its CA.
     pub(crate) async fn serve_tls(router: Router) -> HttpsClient {
@@ -696,7 +975,8 @@ pub(crate) mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let tunnels = Arc::new(FakeTunnels { admit: false.into() });
-        tokio::spawn(serve_router(router, listener, tls_config(&key, &names), tunnels, std::future::pending()));
+        let limits = PortLimits::default();
+        tokio::spawn(serve_router(router, listener, tls_config(&key, &names), tunnels, limits, std::future::pending()));
         let b64 = base64::engine::general_purpose::STANDARD.encode(key.ca_certificate_der(&names).unwrap());
         let pem = format!("-----BEGIN CERTIFICATE-----\n{b64}\n-----END CERTIFICATE-----\n");
         let connector = BakedRootsConnector::with_extra_roots(Arc::new(FixedDialer(addr)), pem.as_bytes()).unwrap();
@@ -886,6 +1166,20 @@ pub(crate) mod tests {
         // Refills never exceed the burst.
         let later = start + Duration::from_secs(60);
         assert!(limiter.allow(a, later) && limiter.allow(a, later) && !limiter.allow(a, later));
+    }
+
+    #[test]
+    fn sources_cycled_in_never_refill_a_drained_bucket() {
+        let limiter = RateLimiter::new(2, 0);
+        let now = Instant::now();
+        let honest = Some("10.0.0.1".parse().unwrap());
+        assert!(limiter.allow(honest, now) && limiter.allow(honest, now) && !limiter.allow(honest, now));
+        // Every other tracked source mid-burst, then more of them than the limiter tracks.
+        for n in 0..SOURCES as u32 + 100 {
+            assert!(limiter.allow(Some(IpAddr::from((0x0b00_0000 + n).to_be_bytes())), now));
+        }
+        assert_eq!(limiter.buckets.lock().unwrap().len(), SOURCES);
+        assert!(!limiter.allow(honest, now), "the drained bucket was kept");
     }
 
     #[test]

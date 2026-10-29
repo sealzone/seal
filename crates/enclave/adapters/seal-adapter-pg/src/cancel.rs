@@ -1,7 +1,7 @@
 //! Cancel requests. A relayed connection's client gets a `BackendKeyData` of the adapter's own:
 //! a random process ID and secret key (63 random bits together), never the upstream's. A
-//! `CancelRequest` naming that pair, on a new connection to the same replica while the relayed
-//! connection lives, is passed to the session's `observe` (action `CANCEL`) and then sent as a
+//! `CancelRequest` naming that pair, on a new tunnel connection to the same replica while the
+//! relayed connection lives (the core admits the tunnel only for a live session), is passed to the session's `observe` (action `CANCEL`) and then sent as a
 //! `CancelRequest` with the upstream's own key, over a new verified TLS connection to the
 //! session's destination. Any other pair is closed without a reply, as Postgres does. So a
 //! client cancels only queries of a connection whose key it was given, and the upstream's key

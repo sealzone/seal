@@ -317,8 +317,9 @@ impl SealService {
     }
     /// A tunnel connection after its TLS handshake (ALPN `seal_proto::tunnel::ALPN`) from
     /// `peer`, which the apps' network rules (`TenantState::app_networks`) are checked against;
-    /// without one, an app with a network rule is refused. A `Connect` preamble's session says
-    /// the protocol, whose adapter serves the rest. An `Extend` preamble never reaches an
+    /// without one, an app with a network rule is refused. A `Connect` preamble's session must
+    /// pass that recheck (live, granted, inside the networks) before anything else, and says the
+    /// protocol, whose adapter serves the rest. An `Extend` preamble never reaches an
     /// adapter: it moves the expiry of this replica's live connections for the token's session
     /// (same caller, later expiry), answers `EXTEND_OK` and closes.
     pub async fn serve_tunnel(

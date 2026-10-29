@@ -57,7 +57,8 @@ pub(crate) fn admit(runtime: &Runtime) -> Result<(), ServiceError> {
 
 /// `SealService::serve_tunnel`: a tunnel connection after its TLS handshake. A `Connect`
 /// preamble's token says the session, and its blob the protocol whose adapter serves the
-/// bytes that follow; an `Extend` preamble never reaches an adapter.
+/// bytes that follow, once the session passes `TenantAuthorizer::recheck` from `peer` (live,
+/// granted, inside the app's networks); an `Extend` preamble never reaches an adapter.
 pub(crate) async fn serve(
     runtime: &Arc<Runtime>,
     stream: BoxStream,
@@ -70,8 +71,12 @@ pub(crate) async fn serve(
         TunnelPreamble::Extend { token } => return extend(runtime, stream, &token, peer).await,
         TunnelPreamble::Connect(connect) => connect,
     };
-    // The resolver checks the token in full when the adapter presents the local key.
-    let protocol = runtime.redeem(connect.token.expose())?.blob.policy.destination().protocol();
+    // Before any adapter runs, for whatever the connection carries (a Postgres cancel too);
+    // the resolver checks again, with the local key, when the adapter presents it.
+    let (time, tenant) = runtime.serving_now().await?;
+    let claims = runtime.redeem(connect.token.expose())?;
+    TenantAuthorizer::new(&tenant).with_source(peer.map(|p| p.ip())).recheck(&claims, &time)?;
+    let protocol = claims.blob.policy.destination().protocol();
     let adapter = runtime
         .adapters
         .iter()

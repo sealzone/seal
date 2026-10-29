@@ -122,7 +122,8 @@ impl AdapterError {
 }
 
 /// One wire protocol. `serve` handles one inbound connection (already TLS-
-/// terminated, preamble already consumed by the core) until either side closes.
+/// terminated, preamble already consumed by the core, and the preamble's session already
+/// rechecked: live, granted, from inside the app's networks) until either side closes.
 #[async_trait]
 pub trait Adapter: Send + Sync {
     fn protocol(&self) -> Protocol;

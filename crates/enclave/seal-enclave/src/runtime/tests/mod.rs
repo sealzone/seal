@@ -695,11 +695,7 @@ impl Harness {
 
     /// An HTTP/1.1 connection through a tunnel for `token`, whose app presents `LOCAL_KEY`.
     pub async fn connect(&self, token: &Bearer) -> Conn {
-        let connect = TunnelPreamble::Connect(seal_proto::tunnel::TunnelConnect {
-            token: token.duplicate(),
-            local_key_sha256: <sha2::Sha256 as sha2::Digest>::digest(LOCAL_KEY.as_bytes()).into(),
-        });
-        self.connect_with(&connect).await
+        self.connect_with(&connect_preamble(token)).await
     }
 
     /// An HTTP/1.1 connection through a tunnel opened with `preamble`.
@@ -747,6 +743,14 @@ impl Harness {
     pub fn events(&self) -> Vec<TelemetryEvent> {
         self.telemetry.entries.lock().unwrap().iter().map(|e| e.event.clone()).collect()
     }
+}
+
+/// The `Connect` preamble of a tunnel for `token` whose app presents `LOCAL_KEY`.
+pub(super) fn connect_preamble(token: &Bearer) -> TunnelPreamble {
+    TunnelPreamble::Connect(seal_proto::tunnel::TunnelConnect {
+        token: token.duplicate(),
+        local_key_sha256: <sha2::Sha256 as sha2::Digest>::digest(LOCAL_KEY.as_bytes()).into(),
+    })
 }
 
 /// `GET path` with `credential` in the `authorization` header: status and body.

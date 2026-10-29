@@ -67,9 +67,8 @@ async fn seal_session_request_extend_end() {
     h.end(&token).await.unwrap();
     assert_eq!(h.stores.ends.lock().unwrap()[1], ends[0]);
     assert_eq!(h.extend(CONSUMER, &extended.token, None).await.unwrap_err().code, ErrorCode::SessionEnded);
-    let mut conn = h.connect(&extended.token).await;
-    let (status, body) = get(&mut conn, "/v1/chat", LOCAL_KEY).await;
-    assert_eq!((status, seal_error(&body)), (401, ErrorCode::SessionEnded));
+    let (_tls, served) = h.tls(Some(&connect_preamble(&extended.token))).await;
+    assert_eq!(served.await.unwrap().unwrap_err().code, ErrorCode::SessionEnded);
 
     // Telemetry: one entry per operation and request, attributed to the caller.
     let events = h.events();
@@ -198,6 +197,32 @@ async fn refuses_a_local_key_that_is_not_the_tunnels() {
     let (mut tls, served) = h.tls(None).await;
     tls.write_all(b"GET / HTTP/1.1\r\nhost: x\r\n\r\n").await.unwrap();
     assert_eq!(served.await.unwrap().unwrap_err().code, ErrorCode::BadRequest);
+    assert!(h.seen.lock().unwrap().is_empty());
+}
+
+/// A tunnel's session is rechecked before any adapter runs, so a connection that never
+/// presents the local key (a Postgres cancel) is held to it too: an ended session, or one used
+/// from outside its app's networks, gets the tunnel closed after the preamble.
+#[tokio::test]
+async fn a_tunnel_needs_a_live_session_before_any_adapter_runs() {
+    let mut h = Boot::new().start().await.map_err(|(e, _)| e).unwrap();
+    let ended = h.sealed_session().await;
+    let outside = h.sealed_session().await;
+    h.end(&ended.token).await.unwrap();
+    async fn refused(h: &Harness, token: &Bearer) -> ErrorCode {
+        let (_tls, served) = h.tls(Some(&connect_preamble(token))).await;
+        let served = tokio::time::timeout(Duration::from_secs(5), served).await.expect("closed at the preamble");
+        served.unwrap().unwrap_err().code
+    }
+    assert_eq!(refused(&h, &ended.token).await, ErrorCode::SessionEnded);
+
+    // No client address (`tls` gives none) is outside any network rule.
+    let bundle = h.world.publish(|s| {
+        s.app_networks.insert(checkout(), ["203.0.113.0/24".parse().unwrap()].into());
+    });
+    h.reload(bundle).await;
+    assert_eq!(refused(&h, &outside.token).await, ErrorCode::NotAllowed);
+    assert!(h.live(&ended.info.session_id).is_empty() && h.live(&outside.info.session_id).is_empty());
     assert!(h.seen.lock().unwrap().is_empty());
 }
 
