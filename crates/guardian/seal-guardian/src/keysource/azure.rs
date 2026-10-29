@@ -398,7 +398,7 @@ impl KeyVault {
                 wrapped_root: Some(wrapped),
             };
             let opened = self.unwrap_root(&released, &copy)?;
-            if opened.expose() != root.expose() {
+            if !seal_proto::secret::ct_eq(opened.expose(), root.expose()) {
                 return Err(GuardianError::Root(format!("key vault: {what}: the new copy does not open to the root")));
             }
             tracing::info!(key = %what, version = %copy.key_version, "root stored in Key Vault");

@@ -387,7 +387,7 @@ impl Conn {
             return Err(Refusal::close(ErrorCode::NotAllowed, "the request carries no Seal credential"));
         };
         match bound {
-            Some(b) if *b.credential == *credential => Ok(name),
+            Some(b) if seal_proto::secret::ct_eq(b.credential.as_bytes(), credential.as_bytes()) => Ok(name),
             Some(_) => Err(Refusal::close(ErrorCode::NotAllowed, "the Seal credential is not this connection's")),
             None => {
                 let session = self

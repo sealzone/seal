@@ -23,9 +23,10 @@
 //! of a short length would find them. A needle of any length is still masked: passing an echo
 //! through would be worse. Nothing else about the scrubber depends on how much of the text
 //! resembles the secret: neither what it releases and when (`Scrubber`), nor the work it does
-//! per byte (`Engine`).
+//! per byte (`Engine`), nor the work of building one (`Scrubber::new`).
 
 use seal_proto::policy::MIN_SECRET_BYTES;
+use seal_proto::secret::ct_eq;
 use zeroize::{Zeroize, Zeroizing};
 
 /// Streaming scrubber: overwrites every occurrence of any needle, in any of the forms the
@@ -71,7 +72,11 @@ pub const MASK: u8 = b'*';
 const LONGEST_SPELLING: usize = 6;
 
 impl Scrubber {
-    /// Empty needles are ignored.
+    /// Empty needles are ignored. The work, and the memory it touches, depend only on the
+    /// needles' lengths and on which of them equal or contain another, never on their bytes:
+    /// the engine's tables are the patterns' classes transposed, a fixed sequence of word
+    /// operations, and needles and patterns are compared in constant time. Adapters build one
+    /// per connection or response, which a consumer can time.
     pub fn new(needles: Vec<Zeroizing<Vec<u8>>>) -> Self {
         Self::build(needles, false)
     }
@@ -89,7 +94,8 @@ impl Scrubber {
         // A needle that contains another one with base64 forms needs none of its own: the
         // other's forms already mask every character carrying its bytes.
         let encodes = |n: &[u8]| n.len() >= MIN_SECRET_BYTES;
-        let covered = |n: &[u8]| needles.iter().any(|m| m.len() < n.len() && encodes(m) && contains(n, m));
+        let covered =
+            |n: &[u8]| needles.iter().fold(false, |any, m| any | (m.len() < n.len() && encodes(m) && contains(n, m)));
         for &needle in &needles {
             let plain = Zeroizing::new(needle.iter().map(|&b| Class::of(b)).collect());
             let encoded = if encodes(needle) && !covered(needle) { base64_patterns(needle) } else { Vec::new() };
@@ -97,7 +103,7 @@ impl Scrubber {
                 if fold_case {
                     p.iter_mut().for_each(Class::fold_ascii_case);
                 }
-                if !patterns.contains(&p) {
+                if !patterns.iter().fold(false, |any, q| any | same(q, &p)) {
                     patterns.push(p);
                 }
             }
@@ -184,6 +190,12 @@ impl Scrubber {
     fn work(&self) -> u64 {
         self.engine.as_ref().map_or(0, |e| e.work) + self.reversed.iter().flatten().map(|e| e.work).sum::<u64>()
     }
+
+    /// Words the engine's construction built: the build's work, for tests.
+    #[cfg(test)]
+    fn build_work(&self) -> u64 {
+        self.engine.as_ref().map_or(0, |e| e.built)
+    }
 }
 
 impl Drop for Scrubber {
@@ -192,8 +204,15 @@ impl Drop for Scrubber {
     }
 }
 
+/// Whether `needle` occurs in `haystack`, comparing every window in constant time.
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {
-    haystack.windows(needle.len()).any(|w| w == needle)
+    haystack.windows(needle.len()).fold(false, |found, w| found | ct_eq(w, needle))
+}
+
+/// Whether two patterns are the same, comparing every class whole.
+fn same(a: &Pattern, b: &Pattern) -> bool {
+    let diff = a.iter().zip(b.iter()).fold(0u64, |d, (x, y)| d | x.0.iter().zip(y.0).fold(0, |d, (u, v)| d | (u ^ v)));
+    a.len() == b.len() && ct_eq(&diff.to_le_bytes(), &[0; 8])
 }
 
 /// Where the occurrence of `pattern` that completes at the end of `buf` starts: the earliest
@@ -231,16 +250,24 @@ impl Class {
         c
     }
     fn add(&mut self, b: u8) {
-        self.0[usize::from(b >> 6)] |= 1 << (b & 63);
+        self.add_if(b, true);
     }
-    /// Adds the other case of every ASCII letter it holds.
+    /// Adds `b` if `yes`, the same work either way.
+    fn add_if(&mut self, b: u8, yes: bool) {
+        self.0[usize::from(b >> 6)] |= u64::from(yes) << (b & 63);
+    }
+    /// 1 if it holds `b`, else 0.
+    fn has(&self, b: u8) -> u64 {
+        self.0[usize::from(b >> 6)] >> (b & 63) & 1
+    }
+    /// Adds the other case of every ASCII letter it holds, without branching on which.
     fn fold_ascii_case(&mut self) {
         for b in (b'A'..=b'Z').chain(b'a'..=b'z') {
-            if self.0[usize::from(b >> 6)] >> (b & 63) & 1 == 1 {
-                self.add(b ^ 0x20);
-            }
+            let other = b ^ 0x20;
+            self.0[usize::from(other >> 6)] |= self.has(b) << (other & 63);
         }
     }
+    #[cfg(test)]
     fn members(&self) -> impl Iterator<Item = u8> + '_ {
         (0..=255u8).filter(|&b| self.0[usize::from(b >> 6)] >> (b & 63) & 1 == 1)
     }
@@ -281,10 +308,12 @@ fn base64_patterns(needle: &[u8]) -> Vec<Pattern> {
                 if known == 0 {
                     continue;
                 }
+                // Every sextet value, whichever agree: the same work for any needle bits.
                 let mut class = Class::default();
-                for v in (0..64u8).filter(|v| v & known == sextet & known) {
-                    class.add(STD[usize::from(v)]);
-                    class.add(URL[usize::from(v)]);
+                for v in 0..64u8 {
+                    let agrees = v & known == sextet & known;
+                    class.add_if(STD[usize::from(v)], agrees);
+                    class.add_if(URL[usize::from(v)], agrees);
                 }
                 pattern.push(class);
             }
@@ -335,6 +364,9 @@ struct Engine {
     /// Words stepped, for tests.
     #[cfg(test)]
     work: u64,
+    /// Words of positions `new` built tables for, for tests.
+    #[cfg(test)]
+    built: u64,
 }
 
 const STATE: usize = 8;
@@ -391,27 +423,45 @@ impl Engine {
             state: Zeroizing::new(vec![[0; STATE]; words]),
             #[cfg(test)]
             work: 0,
+            #[cfg(test)]
+            built: 0,
         };
+        let classes: Vec<&Class> = patterns.iter().flat_map(|p| p.iter()).collect();
         let mut p = 0;
         for pattern in patterns {
             e.marks[p / 64].0 |= 1 << (p % 64);
-            for class in pattern.iter() {
-                let (w, bit) = (p / 64, 1u64 << (p % 64));
-                for b in class.members() {
-                    e.plain[usize::from(b) * words + w] |= bit;
-                    if b == b' ' {
-                        e.plain[usize::from(b'+') * words + w] |= bit;
-                    }
-                    e.hi[usize::from(b >> 4) * words + w] |= bit;
-                    e.lo[usize::from(b & 0x0f) * words + w] |= bit;
-                    if let Some(i) = SHORT.iter().position(|&(s, _)| s == b) {
-                        e.short[i * words + w] |= bit;
-                    }
-                }
-                p += 1;
-            }
+            p += pattern.len();
             e.marks[(p - 1) / 64].1 |= 1 << ((p - 1) % 64);
             e.last.push(p - 1);
+        }
+        // The tables are the classes transposed, 64 positions by 64 bytes at a time: fixed work
+        // per word, whichever bytes the classes hold, and no entry touched for being a member.
+        let mut block = Zeroizing::new([0u64; 64]);
+        for w in 0..words {
+            for quarter in 0..4 {
+                for (i, row) in block.iter_mut().enumerate() {
+                    *row = classes.get(w * 64 + i).map_or(0, |c| c.0[quarter]);
+                }
+                transpose(&mut block);
+                for (i, &row) in block.iter().enumerate() {
+                    e.plain[(quarter * 64 + i) * words + w] = row;
+                }
+            }
+            let plain = |b: usize| e.plain[b * words + w];
+            for d in 0..16 {
+                e.hi[d * words + w] = (0..16).fold(0, |acc, lo| acc | plain(d << 4 | lo));
+                e.lo[d * words + w] = (0..16).fold(0, |acc, hi| acc | plain(hi << 4 | d));
+            }
+            for (i, &(escaped, _)) in SHORT.iter().enumerate() {
+                e.short[i * words + w] = plain(usize::from(escaped));
+            }
+            // `+` spells a space (forms), after the escapes, which spell members only.
+            let space = plain(usize::from(b' '));
+            e.plain[usize::from(b'+') * words + w] |= space;
+            #[cfg(test)]
+            {
+                e.built += 1;
+            }
         }
         e
     }
@@ -472,6 +522,24 @@ impl Engine {
     /// The patterns that completed at the last step.
     fn completed(&self) -> impl Iterator<Item = usize> + '_ {
         self.last.iter().enumerate().filter(|(_, &p)| self.state[p / 64][0] >> (p % 64) & 1 == 1).map(|(q, _)| q)
+    }
+}
+
+/// Transposes a 64 by 64 bit matrix in place (row `r`, column `c` is bit `c` of `m[r]`) by
+/// swapping ever smaller blocks across the diagonal: the same steps for any bits.
+fn transpose(m: &mut [u64; 64]) {
+    let mut j = 32;
+    let mut mask = 0x0000_0000_ffff_ffff_u64;
+    while j != 0 {
+        let mut k = 0;
+        while k < 64 {
+            let t = ((m[k] >> j) ^ m[k + j]) & mask;
+            m[k] ^= t << j;
+            m[k + j] ^= t;
+            k = (k + j + 1) & !j;
+        }
+        j >>= 1;
+        mask ^= mask << j;
     }
 }
 
@@ -701,6 +769,65 @@ mod tests {
             b"\\u00\\u00\\u00\\u00\\u00\\u00\\u00\\u00\\",
         ] {
             assert_eq!(work(secret, echo), base, "{}", String::from_utf8_lossy(echo));
+        }
+    }
+
+    #[test]
+    fn tables_hold_every_member_and_nothing_else() {
+        // The transposed tables against the classes, bit by bit.
+        let secret: &[u8] = b"sk-live/4f+a&b<c>=Z9q?~ \"\\\n\t";
+        let rendered = [b"Bearer ".as_slice(), secret].concat();
+        let folded = Scrubber::ignoring_ascii_case(vec![Zeroizing::new(secret.to_vec())]);
+        for s in [scrubber(&[secret, &rendered]), folded] {
+            let e = s.engine.as_ref().unwrap();
+            let classes: Vec<&Class> = s.patterns.iter().flat_map(|p| p.iter()).collect();
+            assert!(classes.len() > 64, "more than one word");
+            let at = |table: &[u64], row: usize, p: usize| table[row * e.words + p / 64] >> (p % 64) & 1 == 1;
+            for (p, class) in classes.iter().enumerate() {
+                let members: Vec<u8> = class.members().collect();
+                for b in 0..=255u8 {
+                    let plain = members.contains(&b) || (b == b'+' && members.contains(&b' '));
+                    assert_eq!(at(&e.plain, usize::from(b), p), plain, "plain {b} at {p}");
+                }
+                for d in 0..17u8 {
+                    assert_eq!(at(&e.hi, usize::from(d), p), members.iter().any(|m| m >> 4 == d), "hi {d} at {p}");
+                    assert_eq!(at(&e.lo, usize::from(d), p), members.iter().any(|m| m & 15 == d), "lo {d} at {p}");
+                }
+                for (i, &(escaped, _)) in SHORT.iter().enumerate() {
+                    assert_eq!(at(&e.short, i, p), members.contains(&escaped), "short {i} at {p}");
+                }
+                assert!(!at(&e.short, SHORT.len(), p));
+            }
+        }
+    }
+
+    #[test]
+    fn build_work_never_depends_on_the_secret() {
+        // Adapters build a scrubber per connection or response, which a consumer can time:
+        // secrets of one length must cost the same to build, whatever their bytes. Letters
+        // (which case folding doubles), short-escape bytes, bytes whose base64 uses the
+        // characters the alphabets differ on, and a secret that repeats its header's prefix.
+        let secrets: [&[u8]; 6] = [
+            b"sk-live-9Qz7wPb3nX2mK8vR4tY6",
+            b"0123456789012345678901234567",
+            b"abcdefghijklmnopqrstuvwxyzAB",
+            b"\"\\/\x08\x0c\n\r\t\"\\/\x08\x0c\n\r\t\"\\/\x08\x0c\n\r\t\"\\/\x08",
+            b"\xfb\xff\xbf\xfb\xff\xbf\xfb\xff\xbf\xfb\xff\xbf\xfb\xff\xbf\xfb\xff\xbf\xfb\xff\xbf\xfb\xff\xbf\xfb\xff\xbf\xfb",
+            b"Bearer Bearer Bearer Bearer ",
+        ];
+        let work = |secret: &[u8], fold: bool| {
+            let rendered = [b"Bearer ".as_slice(), secret].concat();
+            let needles = vec![Zeroizing::new(secret.to_vec()), Zeroizing::new(rendered)];
+            let s = if fold { Scrubber::ignoring_ascii_case(needles) } else { Scrubber::new(needles) };
+            (s.build_work(), s.patterns.len(), s.window)
+        };
+        for fold in [false, true] {
+            let base = work(secrets[0], fold);
+            assert!(base.0 > 0);
+            for secret in &secrets[1..] {
+                assert_eq!(secret.len(), secrets[0].len());
+                assert_eq!(work(secret, fold), base, "{} (fold {fold})", String::from_utf8_lossy(secret));
+            }
         }
     }
 

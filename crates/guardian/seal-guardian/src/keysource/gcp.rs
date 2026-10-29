@@ -214,7 +214,7 @@ impl GcpKms {
         for key_name in key_names {
             let wrapped_root = self.encrypt(&access, key_name, root.expose()).await?;
             let opened = self.decrypt(&access, key_name, &wrapped_root).await?;
-            if opened.expose() != root.expose() {
+            if !seal_proto::secret::ct_eq(opened.expose(), root.expose()) {
                 return Err(GuardianError::Root(format!(
                     "gcp kms: {key_name}: the new ciphertext does not open to the root"
                 )));

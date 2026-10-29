@@ -966,9 +966,20 @@ Who may read and write a tenant's documents (the crate docs hold the full route 
   the secret they match: one bit-parallel automaton steps over every spelling state of
   every pattern at each byte. That cost grows with the secret's length: about 8 ms per MiB
   of response for a 28-byte HTTP key and 170 ms per MiB for a 1 KiB one, on one core.
-  The secret's length is not hidden: masking keeps it, and an upstream's header size limit
-  can reveal the injected header's. An HTTP response header or trailer whose name carries a
-  needle in any of these forms, in any ASCII case (names arrive lowercased), is dropped.
+  Building a scrubber, which adapters do per connection (HTTP: per response), costs the same
+  for every secret of a length: the automaton's tables are its classes transposed, a fixed
+  sequence of word operations. The secret's length is not hidden: masking keeps it, and an
+  upstream's header size limit can reveal the injected header's. An HTTP response header or
+  trailer whose name carries a needle in any of these forms, in any ASCII case (names arrive
+  lowercased), is dropped.
+- **Timing of secret checks.** Comparisons of secret-derived bytes take time set by their
+  lengths alone: ticket and guardian challenge MACs (`Mac::verify_slice`), a tunnel's local
+  key against `local_key_sha256` and against the key an HTTP connection is bound to, and
+  `SecretVec` and `Bearer` equality (`seal_proto::secret::ct_eq`). Session tokens and blobs
+  fail only at their AEAD tag, after checks of public header fields. Ed25519 (dalek), X25519,
+  AES-GCM and HMAC are constant time. The guardian's RSA-OAEP decryptions (`rsa`,
+  RUSTSEC-2023-0071) are blinded and happen at boot only, at most once per Key Vault key the
+  build names, on a copy the host supplies (DEPS.md).
 - **Postgres cancels** reach only the replica holding the connection. One sent to another
   replica does nothing. A tunnel sends its connections to the replica that last answered, so
   a cancel lands there unless that replica stopped answering in between.

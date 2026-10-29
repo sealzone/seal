@@ -345,16 +345,17 @@ impl SessionResolver for Resolver {
 }
 
 impl Runtime {
-    /// A local key only through its tunnel (`SHA-256(local key) == local_key_sha256`), redeeming
-    /// the preamble's token. The claims then pass `TenantAuthorizer::recheck` and the blob is
-    /// opened.
+    /// A local key only through its tunnel (`SHA-256(local key) == local_key_sha256`, compared in
+    /// constant time), redeeming the preamble's token. The claims then pass
+    /// `TenantAuthorizer::recheck` and the blob is opened.
     async fn resolve(self: &Arc<Self>, credential: &str, meta: &ConnMeta) -> Result<Arc<LiveSession>, ServiceError> {
         let (time, tenant) = self.serving_now().await?;
         if !credential.starts_with(LOCAL_KEY_PREFIX) {
             return Err(fail(ErrorCode::NotAllowed, "not a Seal credential"));
         }
+        // In constant time: a caller probing guesses learns nothing of the digest.
         let digest: [u8; 32] = Sha256::digest(credential.as_bytes()).into();
-        if digest != meta.tunnel.local_key_sha256 {
+        if !seal_proto::secret::ct_eq(&digest, &meta.tunnel.local_key_sha256) {
             return Err(fail(ErrorCode::NotAllowed, "the local key is not this tunnel's"));
         }
         let claims = self.redeem(meta.tunnel.token.expose())?;
