@@ -1202,7 +1202,12 @@ async fn the_client_round_trips_every_endpoint_over_tls() {
     anyone.post_session_end(&tenant, &end).await.unwrap();
     let b = env.telemetry_signer().sign_into(TELEMETRY_BATCH_LABEL, batch(1, 0, now));
     anyone.post_telemetry(&tenant, &b).await.unwrap();
-    assert_eq!(admin.get_telemetry(&tenant, now).await.unwrap(), vec![b]);
+    assert_eq!(admin.get_telemetry(&tenant, now).await.unwrap(), vec![b.clone()]);
+    let earlier = env.telemetry_signer().sign_into(TELEMETRY_BATCH_LABEL, batch(2, 0, now - 1));
+    anyone.post_telemetry(&tenant, &earlier).await.unwrap();
+    assert_eq!(admin.get_telemetry(&tenant, 0).await.unwrap(), vec![b.clone(), earlier.clone()]);
+    let by_time = admin.get_telemetry_in(&tenant, 0, seal_control::client::TelemetryOrder::Time).await.unwrap();
+    assert_eq!(by_time, vec![earlier, b]);
     assert!(admin.get_telemetry(&tenant, now + 1).await.unwrap().is_empty());
     assert_eq!(
         enclave.get_telemetry(&tenant, now).await.unwrap_err().code(),
@@ -1784,3 +1789,5 @@ async fn enclaves_read_their_bundle_at_boot_by_attesting() {
     assert_eq!(env.put(&format!("/v1/releases/sim/{}", Measurement([7; 48])), &evidence).await, 204);
     assert_eq!(env.get_as(bundle, attested(Measurement([7; 48]), bundle, env.root_id(), false)).await.0, 401);
 }
+
+mod telemetry;

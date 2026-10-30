@@ -48,7 +48,7 @@
 //! | POST   | /v1/tenants/{tenant}/session-ends                  | `SignedSessionEnd` (append, dedup; telemetry key) |
 //! | GET    | /v1/tenants/{tenant}/service-key-certificates      | → `[SignedServiceKeyCertificate]`, every one posted |
 //! | POST   | /v1/tenants/{tenant}/service-key-certificates      | `SignedServiceKeyCertificate` (append, dedup; enclaves post theirs at boot; the platform's guardian key) |
-//! | GET    | /v1/tenants/{tenant}/telemetry?since=T&after=C&limit=N | → one page of `[SignedTelemetryBatch]` with entries at or after `T`, by stream and sequence, after cursor `C` (`<stream hex>-<sequence>` of the previous page's last batch); at most `N` (≤ 1000) batches and about 768 KiB. Ask again until a page is empty |
+//! | GET    | /v1/tenants/{tenant}/telemetry?since=T&after=C&limit=N&order=O | → one page of `[SignedTelemetryBatch]` with entries at or after `T`, by stream and sequence, after cursor `C` (`<stream hex>-<sequence>` of the previous page's last batch); with `order=time`, by `to`, stream and sequence, after `C` = the previous page's `Seal-Telemetry-Next`; at most `N` (≤ 1000) batches and about 768 KiB. Ask again until a page is empty. Unsigned hints: `Seal-Telemetry-Remaining-Batches`, `Seal-Telemetry-Remaining-Bytes` (matching after `C`, this page included), `Seal-Telemetry-Next` |
 //! | POST   | /v1/tenants/{tenant}/telemetry                     | `SignedTelemetryBatch` (append; gaps in `stream`/`sequence` are visible; telemetry key) |
 //! | GET    | /v1/tenants/{tenant}/release-cosigns/{measurement} | → `Signed<ReleaseCosign>`           |
 //! | PUT    | /v1/tenants/{tenant}/release-cosigns/{measurement} | `Signed<ReleaseCosign>`             |

@@ -23,7 +23,7 @@ use seal_proto::release::{ReleaseCosign, ReleaseEvidence, SignedCheckpoint, Sign
 use seal_proto::session::SignedSessionEnd;
 use seal_proto::signed::Signed;
 use seal_proto::state::{LoggedRoot, LoggedState, SignedStateFreshness, SignedTenantState, TenantBundle, TenantRoot};
-use seal_proto::telemetry::SignedTelemetryBatch;
+use seal_proto::telemetry::{SignedTelemetryBatch, TelemetryBatch};
 use seal_proto::{codec, ErrorCode, Measurement, PlatformId, TenantId, TenantRootId, UnixTime};
 
 #[derive(Debug, thiserror::Error)]
@@ -49,6 +49,34 @@ impl ControlError {
             ControlError::Rejected { status: 400..=499 } => ErrorCode::BadRequest,
             _ => ErrorCode::Unavailable,
         }
+    }
+}
+
+/// How `GET /v1/tenants/{tenant}/telemetry` orders a page (`order=stream`, the default, or
+/// `order=time`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TelemetryOrder {
+    /// By `(stream, sequence)`.
+    Stream,
+    /// By `(to, stream, sequence)`.
+    Time,
+}
+
+impl TelemetryOrder {
+    /// The `after` cursor that continues a page ending at `batch`, which the server also sends
+    /// as `Seal-Telemetry-Next`: `<stream hex>-<sequence>` by stream, `<to>-<stream hex>-<sequence>`
+    /// by time.
+    pub fn cursor(self, batch: &TelemetryBatch) -> String {
+        let stream: String = batch.stream.iter().map(|b| format!("{b:02x}")).collect();
+        match self {
+            TelemetryOrder::Stream => format!("{stream}-{}", batch.sequence),
+            TelemetryOrder::Time => format!("{}-{stream}-{}", batch.to, batch.sequence),
+        }
+    }
+    /// Where `batch` falls in this order (`to` is 0 by stream).
+    fn key(self, batch: &TelemetryBatch) -> (UnixTime, [u8; 16], u64) {
+        let to = if self == TelemetryOrder::Time { batch.to } else { 0 };
+        (to, batch.stream, batch.sequence)
     }
 }
 
@@ -367,8 +395,8 @@ impl ControlClient {
     ) -> Result<Vec<SignedServiceKeyCertificate>, ControlError> {
         self.get_json(&format!("/v1/tenants/{tenant}/service-key-certificates"), As::Anyone).await
     }
-    /// Batches with entries at or after `since`, every page. Readers verify each batch against
-    /// the telemetry public keys of an enclave they verified
+    /// Batches with entries at or after `since`, every page, by stream and sequence. Readers
+    /// verify each batch against the telemetry public keys of an enclave they verified
     /// (`AttestationBinding::telemetry_public_keys`) and report gaps in each `stream`'s sequence
     /// and streams without a `last` batch.
     pub async fn get_telemetry(
@@ -376,17 +404,27 @@ impl ControlClient {
         tenant: &TenantId,
         since: UnixTime,
     ) -> Result<Vec<SignedTelemetryBatch>, ControlError> {
+        self.get_telemetry_in(tenant, since, TelemetryOrder::Stream).await
+    }
+    /// As `get_telemetry`, in `order`.
+    pub async fn get_telemetry_in(
+        &self,
+        tenant: &TenantId,
+        since: UnixTime,
+        order: TelemetryOrder,
+    ) -> Result<Vec<SignedTelemetryBatch>, ControlError> {
         let mut all: Vec<SignedTelemetryBatch> = Vec::new();
         loop {
             let mut path = format!("/v1/tenants/{tenant}/telemetry?since={since}");
+            if order == TelemetryOrder::Time {
+                path.push_str("&order=time");
+            }
             if let Some(last) = all.last() {
-                let stream: String = last.body.stream.iter().map(|b| format!("{b:02x}")).collect();
-                path.push_str(&format!("&after={stream}-{}", last.body.sequence));
+                path.push_str(&format!("&after={}", order.cursor(&last.body)));
             }
             let page: Vec<SignedTelemetryBatch> = self.get_json(&path, As::Reader(tenant)).await?;
-            let advanced = page.first().is_some_and(|b| {
-                all.last().is_none_or(|l| (b.body.stream, b.body.sequence) > (l.body.stream, l.body.sequence))
-            });
+            let advanced =
+                page.first().is_some_and(|b| all.last().is_none_or(|l| order.key(&b.body) > order.key(&l.body)));
             if !advanced {
                 return Ok(all);
             }

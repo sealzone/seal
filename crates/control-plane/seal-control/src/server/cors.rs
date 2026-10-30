@@ -4,7 +4,8 @@
 //! `*` from any origin, so a page anywhere can verify releases (seal.zone/transparency); it
 //! needs no preflight. Other requests from other origins get no CORS headers, so browsers
 //! refuse them, and their preflights reach the router (405). Credentials travel in
-//! `Authorization`, never in cookies, so credentialed CORS is not allowed.
+//! `Authorization`, never in cookies, so credentialed CORS is not allowed. Console responses
+//! expose the telemetry page hints (`Seal-Telemetry-*`) to its scripts.
 
 use std::sync::Arc;
 
@@ -15,6 +16,8 @@ use axum::response::{IntoResponse, Response};
 
 const ALLOW_METHODS: &str = "GET, PUT, POST, DELETE";
 const ALLOW_HEADERS: &str = "authorization, content-type";
+/// Response headers the console's scripts may read: the telemetry page hints.
+const EXPOSE_HEADERS: &str = "seal-telemetry-remaining-batches, seal-telemetry-remaining-bytes, seal-telemetry-next";
 /// How long a browser may cache a preflight answer.
 const MAX_AGE_SECS: &str = "600";
 
@@ -46,7 +49,9 @@ pub async fn cors(State(origin): State<Option<Arc<str>>>, request: Request, next
         }
         Some(allow) => {
             let mut response = next.run(request).await;
-            response.headers_mut().insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, allow.clone());
+            let headers = response.headers_mut();
+            headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, allow.clone());
+            headers.insert(header::ACCESS_CONTROL_EXPOSE_HEADERS, HeaderValue::from_static(EXPOSE_HEADERS));
             response
         }
         None => next.run(request).await,

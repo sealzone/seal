@@ -504,6 +504,16 @@ telemetry.
   strictly after the cursor `C`. The cursor is `<stream hex>-<sequence>` of the previous
   page's last batch. A page holds at most `N` (default and maximum 1 000) and stops before
   768 KiB of JSON, with at least one batch. A short page is not the end; an empty one is.
+  With `order=time` (`ControlClient::get_telemetry_in`) a page is ordered by
+  `(to, stream, sequence)` instead, and `C` is the previous page's `Seal-Telemetry-Next`,
+  an opaque cursor; the other rules are the same.
+
+  Each page carries unsigned hints for progress displays, which the console's origin may
+  read: `Seal-Telemetry-Remaining-Batches` and `Seal-Telemetry-Remaining-Bytes`, the batches
+  the query matches after `C` (this page's included) and their size as stored, and, on a
+  page that is not empty, `Seal-Telemetry-Next`, the cursor after its last batch (in the
+  default order, the cursor above). The control plane can make them up like anything else
+  it serves; readers stop on an empty page, not on a count.
 
   Readers verify batches with the telemetry public keys an enclave attests to
   (`AttestationBinding::telemetry_public_keys`, certified by the guardian;
@@ -800,6 +810,10 @@ Who may read and write a tenant's documents (the crate docs hold the full route 
 - **Bundles** carry the states since an anchor (see "Binding and freshness"), the latest
   checkpoint, and each tenant platform's guardian's newest anchor, refreshed hourly
   (`ANCHOR_REFRESH_SECS`).
+- **Telemetry** is stored a file per batch and served in pages (see "Telemetry", Reading).
+  The control plane keeps an index of each tenant's batches (stream, sequence, `to`, size)
+  in memory, built from the files on the tenant's first telemetry read after a start and
+  updated with every batch it stores, so a page reads only its own batches.
 - **Releases.** `GET /v1/releases/{platform}` lists the stored evidence in log order.
   `/v1/releases/{platform}/{measurement}/template` serves a release's deployment template
   (for Azure, the ARM template with its `ccePolicy`), which `seal deploy` checks by

@@ -17,7 +17,7 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
-use seal_control::client::{Documents, Proposal, Proposed, Submitted};
+use seal_control::client::{Documents, Proposal, Proposed, Submitted, TelemetryOrder};
 use seal_crypto::sign::{admin_key_id, key_id, verify, verify_admin, verify_threshold};
 use seal_proto::codec::labeled_digest;
 use seal_proto::integrity::{validate_code, SignalSource, SignedSignal, SIGNAL_LABEL};
@@ -1004,7 +1004,7 @@ async fn post_telemetry(
     check_batch(&tenant, &batch)?;
     let policy = app.release_policy().await;
     let entry = app.store.tenant(&tenant)?;
-    let e = entry.lock().await;
+    let mut e = entry.lock().await;
     if !signed_by_any(&telemetry_keys(&e.docs, policy.as_ref()), TELEMETRY_BATCH_LABEL, &batch) {
         return Err(ApiError::forbidden("not signed by a certified telemetry key of this tenant"));
     }
@@ -1021,9 +1021,12 @@ async fn post_telemetry(
 #[derive(Deserialize)]
 struct TelemetryQuery {
     since: Option<UnixTime>,
-    /// The last batch of the previous page, `<stream hex>-<sequence>`.
+    /// The previous page's cursor: `<stream hex>-<sequence>` of its last batch by stream, its
+    /// `Seal-Telemetry-Next` by time.
     after: Option<String>,
     limit: Option<usize>,
+    /// `stream` (the default) or `time`.
+    order: Option<String>,
 }
 
 /// Batches per telemetry page by default and at most.
@@ -1031,6 +1034,11 @@ pub const TELEMETRY_PAGE_BATCHES: usize = 1_000;
 /// A page stops before its JSON grows past this, after at least one batch: readers' HTTPS
 /// clients cap a response at 1 MiB.
 pub const TELEMETRY_PAGE_BYTES: usize = 768 * 1024;
+/// Telemetry page headers, unsigned hints: the batches the query matches after the cursor,
+/// this page's included, and their JSON bytes as stored; the cursor after this page's last batch.
+pub const TELEMETRY_REMAINING_BATCHES: &str = "seal-telemetry-remaining-batches";
+pub const TELEMETRY_REMAINING_BYTES: &str = "seal-telemetry-remaining-bytes";
+pub const TELEMETRY_NEXT: &str = "seal-telemetry-next";
 
 /// `<32 hex digits>-<sequence>`.
 fn parse_cursor(cursor: &str) -> ApiResult<([u8; 16], u64)> {
@@ -1044,39 +1052,64 @@ fn parse_cursor(cursor: &str) -> ApiResult<([u8; 16], u64)> {
     Ok((bytes.try_into().map_err(|_| bad())?, sequence.parse().map_err(|_| bad())?))
 }
 
-/// One page of batches with entries at or after `since`, by stream and sequence, after the
-/// `after` cursor. A page ends at `limit` batches or `TELEMETRY_PAGE_BYTES`; readers ask again
-/// from its last batch until a page comes back empty.
+/// `TelemetryOrder::Time`'s cursor, `<to>-<stream hex>-<sequence>`.
+fn parse_time_cursor(cursor: &str) -> ApiResult<(UnixTime, [u8; 16], u64)> {
+    let bad = || ApiError::bad("after is a Seal-Telemetry-Next value");
+    let (to, rest) = cursor.split_once('-').ok_or_else(bad)?;
+    let (stream, sequence) = parse_cursor(rest).map_err(|_| bad())?;
+    Ok((to.parse().map_err(|_| bad())?, stream, sequence))
+}
+
+/// One page of batches with entries at or after `since`, after the `after` cursor: by stream
+/// and sequence, or with `order=time` by `to`, stream and sequence. A page ends at `limit`
+/// batches or `TELEMETRY_PAGE_BYTES`; readers ask again from its last batch until a page comes
+/// back empty. Only the page's batch files are read: the tenant's `TelemetryIndex` finds them.
 async fn get_telemetry(
     State(app): State<Arc<App>>,
     Path(tenant): Path<TenantId>,
     Query(query): Query<TelemetryQuery>,
     asked: Asked,
-) -> ApiResult<Json<Vec<SignedTelemetryBatch>>> {
+) -> ApiResult<Response> {
     let since = query.since.unwrap_or(0);
-    let after = query.after.as_deref().map(parse_cursor).transpose()?;
+    let after = query.after.as_deref();
+    let order = match query.order.as_deref() {
+        None | Some("stream") => store::TelemetryOrder::Stream { after: after.map(parse_cursor).transpose()? },
+        Some("time") => store::TelemetryOrder::Time { after: after.map(parse_time_cursor).transpose()? },
+        Some(_) => return Err(ApiError::bad("order is stream or time")),
+    };
     let limit = query.limit.unwrap_or(TELEMETRY_PAGE_BATCHES).clamp(1, TELEMETRY_PAGE_BATCHES);
     let entry = app.store.tenant(&tenant)?;
     let docs = entry.lock().await.docs.clone();
     app.authorize(&Chain::of(&tenant, &docs), &docs, &asked, &[], Rule::Members).await?;
-    let mut batches: Vec<_> = entry
-        .lock()
-        .await
-        .telemetry()?
-        .into_iter()
-        .filter(|b| b.body.to >= since && after.is_none_or(|a| (b.body.stream, b.body.sequence) > a))
-        .collect();
-    batches.sort_by_key(|b| (b.body.stream, b.body.sequence));
-    let mut page = Vec::new();
+    let found = entry.lock().await.telemetry_page(since, order, limit)?;
+    let mut page: Vec<SignedTelemetryBatch> = Vec::new();
     let mut bytes = 0;
-    for batch in batches.into_iter().take(limit) {
+    for file in &found.files {
+        let Some(batch) = store::read_telemetry_batch(file)? else { continue };
         bytes += serde_json::to_vec(&batch).map_or(0, |b| b.len() + 1);
         if !page.is_empty() && bytes > TELEMETRY_PAGE_BYTES {
             break;
         }
         page.push(batch);
     }
-    Ok(Json(page))
+    let mut headers = vec![
+        (TELEMETRY_REMAINING_BATCHES, found.remaining_batches.to_string()),
+        (TELEMETRY_REMAINING_BYTES, found.remaining_bytes.to_string()),
+    ];
+    if let Some(last) = page.last() {
+        let order = match order {
+            store::TelemetryOrder::Stream { .. } => TelemetryOrder::Stream,
+            store::TelemetryOrder::Time { .. } => TelemetryOrder::Time,
+        };
+        headers.push((TELEMETRY_NEXT, order.cursor(&last.body)));
+    }
+    let mut response = Json(page).into_response();
+    for (name, value) in headers {
+        if let Ok(value) = axum::http::HeaderValue::from_str(&value) {
+            response.headers_mut().insert(name, value);
+        }
+    }
+    Ok(response)
 }
 
 /// Public: a co-signature names a public release, and an enclave's key requests carry it
