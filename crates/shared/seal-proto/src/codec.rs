@@ -1,6 +1,5 @@
 //! Canonical encodings shared by every component.
 
-use base64::Engine;
 use serde::{de::DeserializeOwned, Serialize};
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
@@ -71,22 +70,19 @@ pub fn labeled_digest<T: Serialize>(label: &str, value: &T) -> [u8; 32] {
     h.finalize().into()
 }
 
+/// Unpadded base64url. Constant time (`base64ct`): no table lookup or branch depends on the
+/// bytes, since secrets travel this way (`SecretVec` in JSON, session tokens).
 pub fn b64url(bytes: &[u8]) -> String {
-    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+    use base64ct::Encoding as _;
+    base64ct::Base64UrlUnpadded::encode_string(bytes)
 }
 
-/// The error names where decoding failed, never the offending byte: secrets travel base64url
-/// encoded (`SecretVec`, bearer tokens), and error messages reach callers and logs.
+/// Strict unpadded base64url (no padding, no stray trailing bits), in constant time like
+/// `b64url`. The error never says where decoding failed: that would locate a byte of a secret
+/// in messages that reach callers and logs.
 pub fn from_b64url(s: &str) -> Result<Vec<u8>, ProtoError> {
-    use base64::DecodeError;
-    base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(s).map_err(|e| {
-        ProtoError::Malformed(match e {
-            DecodeError::InvalidByte(at, _) => format!("base64url: invalid character at offset {at}"),
-            DecodeError::InvalidLastSymbol(at, _) => format!("base64url: invalid last character at offset {at}"),
-            DecodeError::InvalidLength(len) => format!("base64url: invalid length {len}"),
-            DecodeError::InvalidPadding => "base64url: invalid padding".into(),
-        })
-    })
+    use base64ct::Encoding as _;
+    base64ct::Base64UrlUnpadded::decode_vec(s).map_err(|_| ProtoError::Malformed("base64url: not canonical".into()))
 }
 
 /// Serde helper: byte fields as base64url strings in JSON, bytes in CBOR.
@@ -144,6 +140,32 @@ pub mod array_b64 {
 mod tests {
     use super::*;
     use crate::secret::SecretVec;
+
+    /// The constant-time codec accepts and produces exactly what the `base64` crate's strict
+    /// unpadded URL-safe engine does: no padding, no stray trailing bits, no other alphabet.
+    #[test]
+    fn b64url_matches_the_strict_table_codec() {
+        use base64::Engine as _;
+        let table = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        for len in 0..70 {
+            let bytes: Vec<u8> = (0..len).map(|i| (i * 37 + len * 11) as u8).collect();
+            let text = b64url(&bytes);
+            assert_eq!(text, table.encode(&bytes), "{len}");
+            assert_eq!(from_b64url(&text).unwrap(), bytes, "{len}");
+        }
+        for text in ["", "AA", "AB", "AAA", "AAB", "AAAA", "A", "AAAAA", "AA==", "A+", "A/", "_-", "-_8", "AA A"] {
+            assert_eq!(from_b64url(text).ok(), table.decode(text).ok(), "{text:?}");
+        }
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn b64url_decodes_like_the_table_codec(text in "[A-Za-z0-9_-]{0,23}[A-Za-z0-9_+/= -]?") {
+            use base64::Engine as _;
+            let table = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(&text).ok();
+            proptest::prop_assert_eq!(from_b64url(&text).ok(), table);
+        }
+    }
 
     #[test]
     fn canonical_secret_is_canonical_in_an_exact_buffer() {

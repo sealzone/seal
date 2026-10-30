@@ -3324,6 +3324,7 @@ dependencies = [
  "aes-kw",
  "async-trait",
  "base64 0.22.1",
+ "base64ct",
  "hex",
  "http-body-util",
  "hyper",
@@ -3660,6 +3661,7 @@ name = "sealzone-proto"
 version = "0.2.7"
 dependencies = [
  "base64 0.22.1",
+ "base64ct",
  "ciborium",
  "hex",
  "proptest",

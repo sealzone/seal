@@ -244,15 +244,16 @@ impl Zeroize for Class {
 }
 
 impl Class {
+    /// The class of a needle's byte: all four words written by arithmetic alone, so which word
+    /// holds the bit (the byte's top two bits) picks no address and no branch.
     fn of(b: u8) -> Self {
-        let mut c = Self::default();
-        c.add(b);
-        c
+        let bit = 1u64 << (b & 63);
+        let quarter = u64::from(b >> 6);
+        // `(q ^ quarter) - 1` borrows into bit 63 only when they are equal.
+        Self(std::array::from_fn(|q| bit & 0u64.wrapping_sub((q as u64 ^ quarter).wrapping_sub(1) >> 63)))
     }
-    fn add(&mut self, b: u8) {
-        self.add_if(b, true);
-    }
-    /// Adds `b` if `yes`, the same work either way.
+    /// Adds `b` if `yes`, the same work either way. `b` picks the word: only for bytes that
+    /// are not secret (alphabets, letters).
     fn add_if(&mut self, b: u8, yes: bool) {
         self.0[usize::from(b >> 6)] |= u64::from(yes) << (b & 63);
     }
@@ -769,6 +770,16 @@ mod tests {
             b"\\u00\\u00\\u00\\u00\\u00\\u00\\u00\\u00\\",
         ] {
             assert_eq!(work(secret, echo), base, "{}", String::from_utf8_lossy(echo));
+        }
+    }
+
+    #[test]
+    fn a_needle_byte_class_holds_that_byte_alone() {
+        for b in 0..=255u8 {
+            assert_eq!(Class::of(b).members().collect::<Vec<_>>(), vec![b], "{b}");
+            let mut c = Class::default();
+            c.add_if(b, true);
+            assert!(c == Class::of(b), "{b}");
         }
     }
 

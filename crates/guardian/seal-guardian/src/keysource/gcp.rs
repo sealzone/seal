@@ -402,15 +402,17 @@ fn to_body(value: &serde_json::Value) -> SecretVec {
 }
 
 /// The encrypt request, `{"plaintext":"<base64>","additionalAuthenticatedData":"<aad_b64>"}`,
-/// built in one allocation, so no unwiped copy of the secret is left behind.
+/// built in one allocation, so no unwiped copy of the secret is left behind, and encoded in
+/// constant time (`base64ct`).
 fn encrypt_body(secret: &[u8], aad_b64: &str) -> SecretVec {
+    use base64ct::Encoding as _;
     let head = "{\"plaintext\":\"";
     let tail = format!("\",\"additionalAuthenticatedData\":\"{aad_b64}\"}}");
-    let encoded = base64::encoded_len(secret.len(), true).expect("a small secret");
+    let encoded = base64ct::Base64::encoded_len(secret);
     let mut body = Vec::with_capacity(head.len() + encoded + tail.len());
     body.extend_from_slice(head.as_bytes());
     body.resize(head.len() + encoded, 0);
-    let written = STANDARD.encode_slice(secret, &mut body[head.len()..]).expect("sized above");
+    let written = base64ct::Base64::encode(secret, &mut body[head.len()..]).expect("sized above").len();
     debug_assert_eq!(written, encoded);
     body.extend_from_slice(tail.as_bytes());
     SecretVec::new(body)
@@ -452,7 +454,8 @@ mod standard_b64 {
     }
 }
 
-/// Standard base64 straight into a `SecretVec`, without an owned copy of the encoded secret.
+/// Standard base64 straight into a `SecretVec`, without an owned copy of the encoded secret,
+/// in constant time (`base64ct`): the root's characters pick no table entry and no branch.
 fn secret_b64<'de, D: serde::Deserializer<'de>>(d: D) -> Result<SecretVec, D::Error> {
     struct V;
     impl serde::de::Visitor<'_> for V {
@@ -461,14 +464,43 @@ fn secret_b64<'de, D: serde::Deserializer<'de>>(d: D) -> Result<SecretVec, D::Er
             f.write_str("a standard base64 string")
         }
         fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<SecretVec, E> {
-            let mut out = vec![0; base64::decoded_len_estimate(v.len())];
-            let decoded = STANDARD.decode_slice(v, &mut out);
+            use base64ct::Encoding as _;
+            let mut out = vec![0; v.len().div_ceil(4) * 3];
+            let decoded = base64ct::Base64::decode(v, &mut out).map(<[u8]>::len);
             // Truncating keeps the allocation, so the `SecretVec` wipes all of it.
             out.truncate(*decoded.as_ref().unwrap_or(&0));
             let out = SecretVec::new(out);
-            // The decoder's message names a symbol of the encoded secret, so it is not kept.
             decoded.map(|_| out).map_err(|_| E::custom("plaintext is not standard base64"))
         }
     }
     d.deserialize_str(V)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decrypted_roots_decode_strictly() {
+        let plaintext =
+            |json: &str| serde_json::from_str::<DecryptResponse>(json).map(|r| r.plaintext.expose().to_vec());
+        for len in [0, 1, 2, 3, 31, 32, 33] {
+            let root: Vec<u8> = (0..len).map(|i| (i * 53 + 7) as u8).collect();
+            let json = format!(r#"{{"plaintext":"{}","usedPrimary":true}}"#, STANDARD.encode(&root));
+            assert_eq!(plaintext(&json).unwrap(), root, "{len}");
+        }
+        // Unpadded, URL-safe, stray trailing bits, a broken group: refused.
+        for bad in ["AAA", "AB==", "-_8=", "AA=A", "A===", "AAAA AAAA"] {
+            assert!(plaintext(&format!(r#"{{"plaintext":"{bad}"}}"#)).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn encrypt_body_is_the_json_request() {
+        let root = [0xfbu8; 32];
+        let body = encrypt_body(&root, "YWFk");
+        let value: serde_json::Value = serde_json::from_slice(body.expose()).unwrap();
+        assert_eq!(value["plaintext"], STANDARD.encode(root));
+        assert_eq!(value["additionalAuthenticatedData"], "YWFk");
+    }
 }

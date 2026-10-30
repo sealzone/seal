@@ -379,8 +379,13 @@ impl SecretPolicy {
                 format!("shorter than {MIN_SECRET_BYTES} bytes: responses masking it could reveal it"),
             ));
         }
+        let printable = |max: usize| secret.len() <= max && secret.iter().all(|b| (0x20..0x7f).contains(b));
         let ok = match self.destination {
-            Destination::Https { .. } => secret.len() <= 8192 && secret.iter().all(|b| (0x20..0x7f).contains(b)),
+            Destination::Https { .. } => printable(8192),
+            // SCRAM normalizes the password (SASLprep) on every upstream login: printable ASCII
+            // takes one path whatever the characters, anything else branches per character in
+            // ways a host watching the enclave could follow, as often as an app opens connections.
+            Destination::Postgres { .. } => printable(1024),
             _ => secret.len() <= 1024 && !secret.contains(&0),
         };
         if ok {
@@ -483,6 +488,9 @@ mod tests {
         assert!(http.validate_secret(b"sk-live-0123456\n").is_err(), "not a header value");
         assert!(pg.validate_secret(&[b'k'; 1025]).is_err());
         assert!(pg.validate_secret(b"pg-password-0123\0").is_err());
+        assert!(pg.validate_secret("pg-pässword-0123".as_bytes()).is_err(), "non-ASCII: SASLprep branches on it");
+        assert!(pg.validate_secret(b"pg-password\t0123").is_err(), "control characters too");
+        assert!(pg.validate_secret(b"pg password ~!@#$%^&*()").is_ok());
     }
 
     #[test]

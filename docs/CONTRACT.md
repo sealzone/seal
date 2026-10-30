@@ -998,10 +998,14 @@ Who may read and write a tenant's documents (the crate docs hold the full route 
   lengths alone: ticket and guardian challenge MACs (`Mac::verify_slice`), a tunnel's local
   key against `local_key_sha256` and against the key an HTTP connection is bound to, and
   `SecretVec` and `Bearer` equality (`seal_proto::secret::ct_eq`). Session tokens and blobs
-  fail only at their AEAD tag, after checks of public header fields. Ed25519 (dalek), X25519,
-  AES-GCM and HMAC are constant time. The guardian's RSA-OAEP decryptions (`rsa`,
+  fail only at their AEAD tag, after checks of public header fields, and their base64url is
+  decoded in constant time (`base64ct`), as is the guardian's Cloud KMS root. Ed25519 (dalek),
+  X25519, AES-GCM and HMAC are constant time. The guardian's RSA-OAEP decryptions (`rsa`,
   RUSTSEC-2023-0071) are blinded and happen at boot only, at most once per Key Vault key the
-  build names, on a copy the host supplies (DEPS.md).
+  build names, on a copy the host supplies (DEPS.md). A Postgres secret holding a control
+  character or non-ASCII text would be SASLprep-normalized on every upstream login by
+  table-driven code whose memory accesses follow its characters, so sealing refuses one: a
+  Postgres secret is printable ASCII, which skips it. Blobs sealed before that rule still open.
 - **Postgres cancels** reach only the replica holding the connection. One sent to another
   replica does nothing. A tunnel sends its connections to the replica that last answered, so
   a cancel lands there unless that replica stopped answering in between.

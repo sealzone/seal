@@ -28,8 +28,9 @@ tracing.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
 http-body-util.workspace = true
-# Cloud KMS JSON carries bytes as standard base64.
+# Cloud KMS JSON carries bytes as standard base64; the decrypted root goes through `base64ct`.
 base64.workspace = true
+base64ct.workspace = true
 # Key Vault: RSA-OAEP (the ephemeral key, the wrapped root), AES-KWP (the released key), the
 # release JWS's certificate (webpki through rustls, the SPKI through x509-cert).
 rsa.workspace = true

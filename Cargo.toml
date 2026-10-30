@@ -47,6 +47,9 @@ seal-sim = { path = "crates/sim/seal-sim", version = "0.2.7" }
 # external. Every crate takes versions from here. Read docs/DEPS.md before adding or upgrading.
 async-trait = "0.1"
 base64 = "0.22"
+# Constant-time base64 (RustCrypto): every base64url codec value (session tokens, keys) and the
+# guardian's Cloud KMS plaintext. `base64` stays for public data only.
+base64ct = { version = "1.8", features = ["alloc"] }
 bytes = "1"
 ciborium = "0.2"
 hex = "0.4"
