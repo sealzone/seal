@@ -11,7 +11,7 @@
 #   SEAL_SIM_HOLD=1                     keep everything running after the app's flow, until Ctrl-C
 #   SEAL_CONTAINER_RUNTIME=podman       the container runtime (default: docker, else podman)
 #
-# Every process logs to <work>/logs/; all of them, the Postgres container and (unless kept) the
+# Every process logs to <work>/logs/; all of them, the Postgres containers and (unless kept) the
 # work directory are removed on exit.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -37,6 +37,7 @@ WORK=$(mktemp -d "${TMPDIR:-/tmp}/seal-sim.XXXXXX")
 mkdir -p "$WORK/logs"
 PIDS=()
 PG_CONTAINER=
+DB_CONTAINER=
 PG_RUNTIME=
 cleanup() {
     local status=$?
@@ -46,6 +47,7 @@ cleanup() {
         wait "${PIDS[i]}" 2>/dev/null || true
     done
     [[ -n "$PG_CONTAINER" ]] && "$PG_RUNTIME" rm -f "$PG_CONTAINER" >/dev/null 2>&1 || true
+    [[ -n "$DB_CONTAINER" ]] && "$DB_RUNTIME" rm -f "$DB_CONTAINER" >/dev/null 2>&1 || true
     if [[ $status -ne 0 ]]; then
         echo "failed; the last lines of each log:" >&2
         for log in "$WORK"/logs/*.log; do [[ -f "$log" ]] && { echo "--- $log" >&2; tail -n 15 "$log" >&2; }; done
@@ -82,7 +84,10 @@ bold "Start the dev log, the guardian (file root) behind a TLS proxy, and the co
 start log "$BIN/seal-tlog-dev" --dir "$D/log" --listen "127.0.0.1:$(port log)" --seed "$LOG_SEED"
 SEAL_SIM=1 SEAL_GUARDIAN_CONFIG="$D/guardian.json" start guardian "$BIN/seal-guardian"
 start proxy "$BIN/seal-sim" proxy --dir "$D"
-start control "$BIN/seal-control" --config "$D/control.json"
+"$BIN/seal-sim" control-db > "$WORK/control-db.out"
+DB_RUNTIME=$(sed -n 's/^runtime //p' "$WORK/control-db.out")
+DB_CONTAINER=$(sed -n 's/^container //p' "$WORK/control-db.out")
+SEAL_CONTROL_DATABASE_URL=$(sed -n 's/^destination //p' "$WORK/control-db.out") start control "$BIN/seal-control" --config "$D/control.json"
 wait_port "$(port log)"; wait_port "$(port guardian)"; wait_port "$(port guardian_tls)"; wait_port "$(port control)"
 grep -h "guardian booted" "$WORK/logs/guardian.log"
 
@@ -151,6 +156,6 @@ grep -h "shutting down" "$WORK/logs/enclave.log"
 bold "Telemetry, verified with the certificate the enclave posted at boot"
 # The control plane does not serve certificates yet: take them from its store.
 cp "$D/control/tenants/$TENANT/service-key-certificates.json" "$WORK/certificates.json"
-run "$SEAL" telemetry --certificates "$WORK/certificates.json"
+run "$SEAL" telemetry --key-file "$ADMIN_KEY" --certificates "$WORK/certificates.json"
 
 bold "Done"

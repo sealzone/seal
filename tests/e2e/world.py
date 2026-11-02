@@ -51,6 +51,7 @@ class World:
         self.replicas: List[int] = []  # n of each running replica-n
         self.pin = ""  # SEAL_TENANT: acme@<root id>
         self.conf: dict = {}
+        self.control_db = ""  # the control plane's database URL
         (work / "logs").mkdir(parents=True)
 
     # ---- starting the system -------------------------------------------------------------
@@ -96,8 +97,12 @@ class World:
         assert "keys released purpose=service" in w.log("guardian")
 
     def start_control(self) -> None:
-        """The control plane keeps its state in files, so a restart picks up where it was."""
-        self.start("control", "seal-control", "--config", str(self.dir / "control.json"))
+        """The control plane keeps its state in files and this world's Postgres, so a restart
+        picks up where it was."""
+        if not self.control_db:
+            self.control_db = self.parse_container(self.run("seal-sim", "control-db"))
+        self.start("control", "seal-control", "--config", str(self.dir / "control.json"),
+                   env={"SEAL_CONTROL_DATABASE_URL": self.control_db})
         wait_for_port(self.port("control"))
 
     def start_replica(self, n: int) -> None:
@@ -132,7 +137,10 @@ class World:
         return self.start_container("redis", REDIS_PASSWORD)
 
     def start_container(self, kind: str, password: str) -> str:
-        out = self.run("seal-sim", kind, "--dir", str(self.dir), stdin=password)
+        return self.parse_container(self.run("seal-sim", kind, "--dir", str(self.dir), stdin=password))
+
+    def parse_container(self, out: str) -> str:
+        """Remembers a container `seal-sim` left running; returns its `destination`."""
         fields = dict(line.split(" ", 1) for line in out.splitlines() if " " in line)
         self.containers.append((fields["runtime"], fields["container"]))
         return fields["destination"]

@@ -810,15 +810,12 @@ Who may read and write a tenant's documents (the crate docs hold the full route 
 - **Bundles** carry the states since an anchor (see "Binding and freshness"), the latest
   checkpoint, and each tenant platform's guardian's newest anchor, refreshed hourly
   (`ANCHOR_REFRESH_SECS`).
-- **Telemetry** is served in pages (see "Telemetry", Reading). With a database
-  (`SEAL_CONTROL_DATABASE_URL`, optionally `SEAL_CONTROL_DATABASE_AUTH=entra`) batches are rows in Postgres, partitioned by the week they
-  arrived, and a transaction that stores a batch also adds it to the tenant's counts:
-  `/telemetry/usage` and `/telemetry/metrics`, and the holes and stopped streams at
+- **Telemetry** is served in pages (see "Telemetry", Reading). Batches are rows in Postgres
+  (`SEAL_CONTROL_DATABASE_URL`, optionally `SEAL_CONTROL_DATABASE_AUTH=entra`), partitioned by
+  the week they arrived, and the transaction that stores a batch also adds it to the tenant's
+  counts: `/telemetry/usage` and `/telemetry/metrics`, and the holes and stopped streams at
   `/telemetry/gaps`. These are unverified: only batches can be verified. Optional retention
-  (`telemetry_retention_days`) applies to every tenant, by whole weeks; daily counts stay. Without
-  a database, for local runs, telemetry is a file per batch with an in-memory index, and the
-  count routes answer 404. `seal-control --config FILE import-telemetry` moves a deployment's
-  files into its database.
+  (`telemetry_retention_days`) applies to every tenant, by whole weeks; daily counts stay.
 - **Releases.** `GET /v1/releases/{platform}` lists the stored evidence in log order.
   `/v1/releases/{platform}/{measurement}/template` serves a release's deployment template
   (for Azure, the ARM template with its `ccePolicy`), which `seal deploy` checks by

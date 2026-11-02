@@ -44,6 +44,7 @@ use seal_verify::{TenantTrust, TenantVerifier};
 use seal_control::client::SigningKeyCredential;
 
 use super::store::Store;
+use super::telemetry_db;
 use super::upstream::{Appended, UpstreamError, Upstreams};
 use super::*;
 
@@ -208,6 +209,7 @@ impl Upstreams for DevUpstreams {
 /// state 1 are logged (not yet stored).
 struct Env {
     up: Arc<DevUpstreams>,
+    telemetry: Arc<telemetry_db::TelemetryDb>,
     addr: SocketAddr,
     dir: PathBuf,
     /// Added to the wall clock for the server (the dev log takes the same offset).
@@ -241,7 +243,13 @@ fn release_trust(up: &DevUpstreams) -> seal_verify::ReleaseTrust {
     }
 }
 
-fn app(up: Arc<DevUpstreams>, dir: &std::path::Path, offset: Arc<AtomicI64>, registrar: bool) -> Arc<App> {
+fn app(
+    up: Arc<DevUpstreams>,
+    dir: &std::path::Path,
+    telemetry: Arc<telemetry_db::TelemetryDb>,
+    offset: Arc<AtomicI64>,
+    registrar: bool,
+) -> Arc<App> {
     let trust = up.log().trust();
     let settings = Settings {
         write_token: TOKEN.into(),
@@ -254,7 +262,7 @@ fn app(up: Arc<DevUpstreams>, dir: &std::path::Path, offset: Arc<AtomicI64>, reg
         checkpoint_cache_secs: CHECKPOINT_CACHE_SECS,
     };
     let clock: Clock = Arc::new(move || wall_clock().saturating_add_signed(offset.load(Ordering::SeqCst)));
-    Arc::new(App::new(settings, Store::open(&dir.join("data")).unwrap(), up, clock).unwrap())
+    Arc::new(App::new(settings, Store::open(&dir.join("data")).unwrap(), telemetry, up, clock).unwrap())
 }
 
 const RELEASE: u8 = 40;
@@ -336,16 +344,18 @@ impl Env {
             anchor_fetches: AtomicUsize::new(0),
         });
         let offset = Arc::new(AtomicI64::new(0));
-        let addr = spawn(app(up.clone(), &dir, offset.clone(), registrar)).await;
+        let telemetry = Arc::new(telemetry_db::test_support::db(None).await);
+        let addr = spawn(app(up.clone(), &dir, telemetry.clone(), offset.clone(), registrar)).await;
         let root_id = root_id(&v1.root.body);
         let released = pmk().release_service(&acme(), &root_id, ServiceKeyVersion(1));
         let keys = ServiceKeys::from_released(PlatformId::Sim, &released).unwrap();
-        Self { up, addr, dir, offset, registrar, v1, s1, keys }
+        Self { up, telemetry, addr, dir, offset, registrar, v1, s1, keys }
     }
 
     /// Restarts the server on the same data directory.
     async fn restart(&mut self) {
-        self.addr = spawn(app(self.up.clone(), &self.dir, self.offset.clone(), self.registrar)).await;
+        self.addr =
+            spawn(app(self.up.clone(), &self.dir, self.telemetry.clone(), self.offset.clone(), self.registrar)).await;
     }
 
     fn advance(&self, secs: i64) {
@@ -1162,7 +1172,7 @@ async fn the_client_round_trips_every_endpoint_over_tls() {
     };
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    let server = app(env.up.clone(), &env.dir.join("tls"), env.offset.clone(), true);
+    let server = app(env.up.clone(), &env.dir.join("tls"), env.telemetry.clone(), env.offset.clone(), true);
     let listener = tls::TlsListener::new(listener, identity.server_config().unwrap()).unwrap();
     tokio::spawn(async move { axum::serve(listener, router(server)).await });
 

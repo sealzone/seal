@@ -23,11 +23,10 @@
 //!
 //! - `write_token`: the bearer token admin writes need; `SEAL_CONTROL_WRITE_TOKEN` in the
 //!   environment takes precedence. At least 16 characters.
-//! - `SEAL_CONTROL_DATABASE_URL` in the environment: Postgres for telemetry
-//!   (`telemetry_db`), `sslmode=verify-full` in production. Without it telemetry stays in
-//!   `data_dir`, and nothing counts it: for local runs. `SEAL_CONTROL_DATABASE_AUTH=entra` signs
+//! - `SEAL_CONTROL_DATABASE_URL` in the environment, required: Postgres for telemetry
+//!   (`telemetry_db`), `sslmode=verify-full` in production. `SEAL_CONTROL_DATABASE_AUTH=entra` signs
 //!   in with the VM's managed identity's Entra token instead of a password in the URL.
-//! - `telemetry_retention_days`: optional, with the database; batches and hourly counts older
+//! - `telemetry_retention_days`: optional; batches and hourly counts older
 //!   than this, by whole weeks, are deleted. Without it nothing is. It applies to every tenant.
 //! - `tls`: PEM files the server presents, reread when they change (`tls::ReloadingCert`), so a
 //!   certificate renewed next to the server takes over without a restart. Without it the

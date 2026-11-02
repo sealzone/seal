@@ -1,10 +1,6 @@
-//! Telemetry pages over many streams: pages match what reading every batch gives, and the
-//! benchmark behind the store's index.
-
-use std::time::{Duration, Instant};
+//! Telemetry pages over many streams: pages match what reading every batch gives.
 
 use super::*;
-use crate::server::{store, telemetry_db};
 use seal_control::client::TelemetryOrder;
 
 /// A batch of `entries` entries, one second apart from `at`.
@@ -37,55 +33,13 @@ fn stream_id(n: u32) -> [u8; 16] {
     id
 }
 
-fn telemetry_dir(env: &Env) -> PathBuf {
-    env.dir.join("data").join("tenants").join("acme").join("telemetry")
-}
-
-/// Writes batches where the store keeps them, without the API (setting up large fixtures).
-fn store_batches(env: &Env, batches: &[SignedTelemetryBatch]) {
-    let dir = telemetry_dir(env);
-    std::fs::create_dir_all(&dir).unwrap();
-    for b in batches {
-        let stream: String = b.body.stream.iter().map(|x| format!("{x:02x}")).collect();
-        let path = dir.join(format!("{stream}-{:020}.json", b.body.sequence));
-        std::fs::write(path, serde_json::to_vec(b).unwrap()).unwrap();
-    }
-}
-
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-fn median(mut samples: Vec<Duration>) -> Duration {
-    samples.sort();
-    samples[samples.len() / 2]
-}
-
-/// Times `path` `runs` times; returns the median and the last body.
-async fn time_get(env: &Env, path: &str, runs: usize) -> (Duration, Vec<u8>) {
-    let mut samples = Vec::new();
-    let mut last = Vec::new();
-    for _ in 0..runs {
-        let start = Instant::now();
-        let (status, body) = env.get(path).await;
-        samples.push(start.elapsed());
-        assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
-        last = body;
-    }
-    (median(samples), last)
-}
-
-/// Every stored batch with its file's size, read from disk.
-fn stored(env: &Env) -> Vec<(SignedTelemetryBatch, u64)> {
-    let mut all = Vec::new();
-    for entry in std::fs::read_dir(telemetry_dir(env)).unwrap() {
-        let path = entry.unwrap().path();
-        if path.extension().is_some_and(|e| e == "json") {
-            let bytes = std::fs::read(&path).unwrap();
-            all.push((serde_json::from_slice(&bytes).unwrap(), bytes.len() as u64));
-        }
-    }
-    all
+/// Every batch with its size as stored.
+fn stored(batches: &[SignedTelemetryBatch]) -> Vec<(SignedTelemetryBatch, u64)> {
+    batches.iter().map(|b| (b.clone(), serde_json::to_vec(b).unwrap().len() as u64)).collect()
 }
 
 /// Cuts a page from batches already filtered and ordered, as the route does.
@@ -119,12 +73,11 @@ fn reference_page(
 }
 
 /// The fixture: 40 streams of 1 to 23 batches of 1 to 60 entries, some of 2 000 (so bytes end
-/// pages), overlapping in time, one stream going back in time, six sharing their times. Streams
-/// 0..30 are on disk before the first read; 30..40 are posted after it, out of order.
+/// pages), overlapping in time, one stream going back in time, six sharing their times, posted
+/// out of order.
 async fn many_streams(env: &Env) -> Vec<SignedTelemetryBatch> {
     let sign = |b: TelemetryBatch| env.telemetry_signer().sign_into(TELEMETRY_BATCH_LABEL, b);
-    let mut on_disk = Vec::new();
-    let mut posted = Vec::new();
+    let mut batches = Vec::new();
     for s in 0..40u32 {
         for q in 0..u64::from(1 + s * 7 % 23) {
             let entries = if (s + q as u32).is_multiple_of(29) { 2_000 } else { 1 + (s * 31 + q as u32 * 17) % 60 };
@@ -133,21 +86,14 @@ async fn many_streams(env: &Env) -> Vec<SignedTelemetryBatch> {
                 30..=35 => 2_000 + q * 50,
                 _ => 1_000 + u64::from(s) * 13 + q * 20,
             };
-            let b = sign(wide_batch(stream_id((s * 7_919) % 1_000), q, at, entries));
-            if s < 30 {
-                on_disk.push(b)
-            } else {
-                posted.push(b)
-            }
+            batches.push(sign(wide_batch(stream_id((s * 7_919) % 1_000), q, at, entries)));
         }
     }
-    store_batches(env, &on_disk);
-    assert_eq!(env.get("/v1/tenants/acme/telemetry?limit=1").await.0, 200, "builds the index");
-    posted.sort_by_key(|b| (b.body.sequence % 3, std::cmp::Reverse(b.body.sequence), b.body.stream));
-    for b in &posted {
+    batches.sort_by_key(|b| (b.body.sequence % 3, std::cmp::Reverse(b.body.sequence), b.body.stream));
+    for b in &batches {
         assert_eq!(env.post("/v1/tenants/acme/telemetry", b).await, 204);
     }
-    on_disk.into_iter().chain(posted).collect()
+    batches
 }
 
 fn header(headers: &hyper::HeaderMap, name: &str) -> Option<String> {
@@ -172,9 +118,7 @@ async fn walk(env: &Env, query: &str) -> Vec<(Vec<u8>, hyper::HeaderMap)> {
 async fn stream_pages_are_what_reading_every_batch_gave() {
     let mut env = Env::new().await;
     env.ready().await;
-    let fixture = many_streams(&env).await;
-    let all = stored(&env);
-    assert_eq!(all.len(), fixture.len());
+    let all = stored(&many_streams(&env).await);
     let mut cut_by_bytes = false;
     for since in [0, 1_300, 1_600, 4_000, 99_999] {
         for limit in [None, Some(7), Some(1_000)].into_iter().chain((since == 1_600).then_some(Some(1))) {
@@ -211,7 +155,7 @@ async fn stream_pages_are_what_reading_every_batch_gave() {
     }
     assert!(cut_by_bytes, "some pages end on bytes");
 
-    // The same answers after a restart, from a rebuilt index.
+    // The same answers after a restart.
     let before = walk(&env, "since=1300&limit=9").await;
     env.restart().await;
     let after = walk(&env, "since=1300&limit=9").await;
@@ -238,8 +182,7 @@ async fn stream_pages_are_what_reading_every_batch_gave() {
 async fn time_order_pages_cover_every_batch_once_by_time() {
     let env = Env::new().await;
     env.ready().await;
-    many_streams(&env).await;
-    let all = stored(&env);
+    let all = stored(&many_streams(&env).await);
     let key = |b: &SignedTelemetryBatch| (b.body.to, b.body.stream, b.body.sequence);
     for since in [0, 1_600] {
         for limit in [None, Some(13)].into_iter().chain((since == 1_600).then_some(Some(1))) {
@@ -286,115 +229,10 @@ async fn the_console_reads_the_page_hints() {
     assert_eq!(header(&headers, TELEMETRY_NEXT), None, "an empty page has no next");
 }
 
-/// `cargo test -p sealzone-control --release -- --ignored telemetry_page_benchmark --nocapture`;
-/// `SEAL_BENCH_BATCHES` (default 100 000) batches across 500 streams.
 #[tokio::test]
-#[ignore = "benchmark"]
-async fn telemetry_page_benchmark() {
+async fn a_batch_needs_a_certified_key_and_keeps_its_place() {
     let env = Env::new().await;
     env.ready().await;
-    let total: u32 = std::env::var("SEAL_BENCH_BATCHES").ok().and_then(|n| n.parse().ok()).unwrap_or(100_000);
-    let streams = 500;
-    let per_stream = total / streams;
-    let start = Instant::now();
-    let signer = env.telemetry_signer();
-    let mut batches = Vec::new();
-    for s in 0..streams {
-        for q in 0..per_stream {
-            let at = 1_000_000 + u64::from(s) * 37 + u64::from(q) * 10;
-            batches.push(signer.sign_into(TELEMETRY_BATCH_LABEL, wide_batch(stream_id(s), q.into(), at, 4)));
-        }
-        if batches.len() >= 10_000 {
-            store_batches(&env, &batches);
-            batches.clear();
-        }
-    }
-    store_batches(&env, &batches);
-    println!("fixture: {} batches in {:?}", streams * per_stream, start.elapsed());
-
-    let base = "/v1/tenants/acme/telemetry";
-    let (first, _) = time_get(&env, &format!("{base}?since=0"), 1).await;
-    println!("first page (cold): {first:?}");
-    let (warm, body) = time_get(&env, &format!("{base}?since=0"), 5).await;
-    let page: Vec<SignedTelemetryBatch> = serde_json::from_slice(&body).unwrap();
-    println!("first page (warm): {warm:?}, {} batches, {} bytes", page.len(), body.len());
-    let middle = format!("{}-{}", hex(&stream_id(streams / 2)), per_stream / 2);
-    let (mid, _) = time_get(&env, &format!("{base}?since=0&after={middle}"), 5).await;
-    println!("middle page: {mid:?}");
-    let late = 1_000_000 + u64::from(per_stream) * 10;
-    let (recent, body) = time_get(&env, &format!("{base}?since={late}"), 5).await;
-    let page: Vec<SignedTelemetryBatch> = serde_json::from_slice(&body).unwrap();
-    println!("since late: {recent:?}, {} batches", page.len());
-    let (small, _) = time_get(&env, &format!("{base}?since=0&after={middle}&limit=50"), 5).await;
-    println!("middle page, limit 50: {small:?}");
-    let (by_time, body) = time_get(&env, &format!("{base}?since=0&order=time"), 5).await;
-    let page: Vec<SignedTelemetryBatch> = serde_json::from_slice(&body).unwrap();
-    let cursor = TelemetryOrder::Time.cursor(&page.last().unwrap().body);
-    println!("first page by time: {by_time:?}");
-    let mid_time = 1_000_000 + u64::from(per_stream) * 5;
-    let (by_time_mid, _) = time_get(&env, &format!("{base}?since={mid_time}&order=time&after={cursor}"), 5).await;
-    println!("page by time, since the middle: {by_time_mid:?}");
-
-    let store = Store::open(&env.dir.join("data")).unwrap();
-    let entry = store.tenant(&acme()).unwrap();
-    let start = Instant::now();
-    entry.lock().await.telemetry_page(0, store::TelemetryOrder::Stream { after: None }, 1).unwrap();
-    println!("index rebuild in a fresh store: {:?}", start.elapsed());
-}
-
-impl Env {
-    /// Restarts the server with telemetry in `db`.
-    async fn use_telemetry_db(&mut self, db: telemetry_db::TelemetryDb) {
-        let app = app(self.up.clone(), &self.dir, self.offset.clone(), self.registrar);
-        let app = Arc::into_inner(app).unwrap().with_telemetry_db(Arc::new(db));
-        self.addr = spawn(Arc::new(app)).await;
-    }
-}
-
-/// Readers cannot tell the two stores apart: the same bytes, pages and hints.
-#[tokio::test]
-async fn pages_from_the_database_are_what_files_give() {
-    let Some(db) = telemetry_db::test_support::db(None).await else { return };
-    let files = Env::new().await;
-    files.ready().await;
-    let mut pg = Env::new().await;
-    pg.ready().await;
-    pg.use_telemetry_db(db).await;
-    let mut posted = 0;
-    for s in 0..12u32 {
-        for q in 0..u64::from(1 + s * 7 % 11) {
-            let entries = if (s + q as u32).is_multiple_of(9) { 2_000 } else { 1 + (s * 31 + q as u32 * 17) % 60 };
-            let at = if s == 5 { 5_000 - q * 100 } else { 1_000 + u64::from(s) * 13 + q * 20 };
-            let batch = files
-                .telemetry_signer()
-                .sign_into(TELEMETRY_BATCH_LABEL, wide_batch(stream_id(s * 7_919 % 1_000), q, at, entries));
-            assert_eq!(files.post("/v1/tenants/acme/telemetry", &batch).await, 204);
-            assert_eq!(pg.post("/v1/tenants/acme/telemetry", &batch).await, 204);
-            assert_eq!(pg.post("/v1/tenants/acme/telemetry", &batch).await, 204, "a retry");
-            posted += 1;
-        }
-    }
-    assert!(posted > 40);
-    for query in ["limit=7", "order=time&limit=7", "since=1100&limit=5", "since=1100&order=time&limit=5", "limit=1000"]
-    {
-        let (want, got) = (walk(&files, query).await, walk(&pg, query).await);
-        assert_eq!(want.len(), got.len(), "{query}: pages");
-        for ((want_body, want_headers), (got_body, got_headers)) in want.iter().zip(&got) {
-            assert_eq!(want_body, got_body, "{query}");
-            for name in [TELEMETRY_REMAINING_BATCHES, TELEMETRY_NEXT] {
-                assert_eq!(header(want_headers, name), header(got_headers, name), "{query}: {name}");
-            }
-            assert_eq!(header(got_headers, "content-type").as_deref(), Some("application/json"));
-        }
-    }
-}
-
-#[tokio::test]
-async fn a_batch_needs_a_certified_key_and_keeps_its_place_in_the_database() {
-    let Some(db) = telemetry_db::test_support::db(None).await else { return };
-    let mut env = Env::new().await;
-    env.ready().await;
-    env.use_telemetry_db(db).await;
     let sign = |b: TelemetryBatch| env.telemetry_signer().sign_into(TELEMETRY_BATCH_LABEL, b);
     let good = sign(wide_batch(stream_id(1), 0, 1_000, 2));
     assert_eq!(env.post("/v1/tenants/acme/telemetry", &good).await, 204);
@@ -407,15 +245,10 @@ async fn a_batch_needs_a_certified_key_and_keeps_its_place_in_the_database() {
 }
 
 #[tokio::test]
-async fn counts_are_for_members_and_need_a_database() {
-    let plain = Env::new().await;
-    plain.ready().await;
+async fn counts_are_for_members() {
     let usage = "/v1/tenants/acme/telemetry/usage?from=0&to=100000";
-    assert_eq!(plain.get_as(usage, Auth::Key(V1_ADMINS[0])).await.0, 404, "files count nothing");
-    let Some(db) = telemetry_db::test_support::db(None).await else { return };
-    let mut env = Env::new().await;
+    let env = Env::new().await;
     env.ready().await;
-    env.use_telemetry_db(db).await;
     let batch = env.telemetry_signer().sign_into(TELEMETRY_BATCH_LABEL, wide_batch(stream_id(1), 0, 90_000, 3));
     assert_eq!(env.post("/v1/tenants/acme/telemetry", &batch).await, 204);
     for path in [usage, "/v1/tenants/acme/telemetry/metrics?from=0&to=100000", "/v1/tenants/acme/telemetry/gaps"] {

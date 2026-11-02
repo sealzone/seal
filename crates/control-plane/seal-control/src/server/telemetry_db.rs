@@ -1,7 +1,5 @@
-//! Telemetry in Postgres, when `SEAL_CONTROL_DATABASE_URL` is set: batches in a table partitioned
-//! by arrival week, and the counts the console shows, added in the transaction that stores each
-//! batch. Without a database, telemetry stays in files (`store`), for local runs, and the count
-//! routes answer 404.
+//! Telemetry in Postgres: batches in a table partitioned by arrival week, and the counts the
+//! console shows, added in the transaction that stores each batch.
 //!
 //! Counts come from batches the server checked were signed by a certified telemetry key, but
 //! readers are told they are unverified: only the batches themselves can be verified.
@@ -18,8 +16,6 @@ use sqlx::PgConnection;
 
 use seal_proto::telemetry::{Outcome, SignedTelemetryBatch, TelemetryEntries, TelemetryEntry, TelemetryEvent};
 use seal_proto::UnixTime;
-
-use super::store::TelemetryOrder;
 
 const WEEK: i64 = 7 * 86_400;
 const HOUR: i64 = 3_600;
@@ -48,6 +44,15 @@ pub enum Error {
     Token(String),
     #[error("a stored batch does not parse: {0}")]
     Stored(#[from] serde_json::Error),
+}
+
+/// How a telemetry page is ordered, and the last batch of the previous page.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Order {
+    /// By `(stream, sequence)`, after this one.
+    Stream { after: Option<([u8; 16], u64)> },
+    /// By `(to, stream, sequence)`, after this one.
+    Time { after: Option<(UnixTime, [u8; 16], u64)> },
 }
 
 /// What became of a posted batch.
@@ -405,18 +410,18 @@ impl TelemetryDb {
         &self,
         tenant: &str,
         since: UnixTime,
-        order: TelemetryOrder,
+        order: Order,
         limit: usize,
         max_bytes: usize,
     ) -> Result<Page, Error> {
         let since = int(since, "since")?;
         // With no cursor, values below any batch's, so each order has one statement.
         let (filter, by, to, stream, sequence) = match order {
-            TelemetryOrder::Stream { after } => {
+            Order::Stream { after } => {
                 let (stream, sequence) = after.map_or((Vec::new(), -1), |(s, q)| (s.to_vec(), clamp(q)));
                 ("(stream, sequence) > ($5::bytea, $6::bigint)", "stream, sequence", None, stream, sequence)
             }
-            TelemetryOrder::Time { after } => {
+            Order::Time { after } => {
                 let (to, stream, sequence) =
                     after.map_or((-1, Vec::new(), -1), |(t, s, q)| (clamp(t), s.to_vec(), clamp(q)));
                 (
@@ -588,36 +593,6 @@ impl TelemetryDb {
         sqlx::query("delete from telemetry_rollups where hour < $1").bind(now - retention).execute(&self.pool).await?;
         Ok(())
     }
-
-    /// Reads every batch file under `data_dir` into the database, once, by the time each file was
-    /// written: moving a deployment from files to Postgres. Safe to run again. Returns how many
-    /// batches were new, and how many files could not be read.
-    pub async fn import_files(&self, data_dir: &std::path::Path) -> Result<(u64, u64), Error> {
-        let (mut new, mut failed) = (0, 0);
-        let Ok(tenants) = std::fs::read_dir(data_dir.join("tenants")) else { return Ok((0, 0)) };
-        for tenant in tenants.flatten() {
-            let Ok(files) = std::fs::read_dir(tenant.path().join("telemetry")) else { continue };
-            for file in files.flatten() {
-                let path = file.path();
-                if path.extension().is_none_or(|e| e != "json") || file.file_name().as_encoded_bytes().starts_with(b".")
-                {
-                    continue;
-                }
-                let read = || -> Option<(SignedTelemetryBatch, u64)> {
-                    let at =
-                        file.metadata().ok()?.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs();
-                    Some((serde_json::from_slice(&std::fs::read(&path).ok()?).ok()?, at))
-                };
-                let Some((batch, at)) = read() else {
-                    tracing::warn!(path = %path.display(), "cannot read a telemetry batch");
-                    failed += 1;
-                    continue;
-                };
-                new += u64::from(self.put(&batch, at).await? == Put::Stored);
-            }
-        }
-        Ok((new, failed))
-    }
 }
 
 /// For this crate's tests.
@@ -636,15 +611,19 @@ pub mod test_support {
         id
     }
 
-    /// A fresh database, or `None` (the test passes) without `SEAL_CONTROL_TEST_DATABASE_URL`.
-    pub async fn db(retention_days: Option<u32>) -> Option<TelemetryDb> {
-        let url = std::env::var("SEAL_CONTROL_TEST_DATABASE_URL").ok()?;
+    /// A fresh database on `SEAL_CONTROL_TEST_DATABASE_URL`'s server.
+    pub async fn db(retention_days: Option<u32>) -> TelemetryDb {
+        let url = std::env::var("SEAL_CONTROL_TEST_DATABASE_URL")
+            .expect("SEAL_CONTROL_TEST_DATABASE_URL: a Postgres whose user may create databases (see CONTRIBUTING.md)");
         let name = format!("control_test_{}", hex(&unique()));
         let mut admin = sqlx::PgConnection::connect(&url).await.unwrap();
         sqlx::query(sqlx::AssertSqlSafe(format!("create database {name}"))).execute(&mut admin).await.unwrap();
+        admin.close().await.unwrap();
         let mut own: url::Url = url.parse().unwrap();
         own.set_path(&format!("/{name}"));
-        Some(TelemetryDb::connect(own.as_str(), retention_days, false).await.unwrap())
+        // Many tests run at once on one server.
+        let pool = PgPoolOptions::new().max_connections(3).connect(own.as_str()).await.unwrap();
+        TelemetryDb::with_pool(pool, retention_days).await.unwrap()
     }
 }
 
@@ -657,7 +636,7 @@ mod tests {
 
     const NOW: UnixTime = 1_900_000_000;
 
-    use super::test_support::{db, unique};
+    use super::test_support::db;
 
     fn acme() -> TenantId {
         TenantId::new("acme").unwrap()
@@ -739,7 +718,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_batch_is_stored_and_counted_once() {
-        let Some(db) = db(None).await else { return };
+        let db = db(None).await;
         let b = batch(1, 0, NOW, vec![request(NOW, "web", 1, Outcome::Allowed)], false);
         assert_eq!(db.put(&b, NOW).await.unwrap(), Put::Stored);
         assert_eq!(db.put(&b, NOW).await.unwrap(), Put::Same);
@@ -752,7 +731,7 @@ mod tests {
 
     #[tokio::test]
     async fn concurrent_posts_of_one_batch_count_it_once() {
-        let Some(db) = db(None).await else { return };
+        let db = db(None).await;
         let db = std::sync::Arc::new(db);
         let b = batch(1, 0, NOW, vec![request(NOW, "web", 1, Outcome::Allowed)], false);
         let mut posts = tokio::task::JoinSet::new();
@@ -770,7 +749,7 @@ mod tests {
 
     #[tokio::test]
     async fn pages_follow_both_orders_and_their_byte_limit() {
-        let Some(db) = db(None).await else { return };
+        let db = db(None).await;
         // Stream 2 ends before stream 1, and the batches land in different weeks.
         for (i, (stream, sequence, at)) in [(1, 0, 100), (1, 1, 400), (2, 0, 200), (2, 1, 300)].into_iter().enumerate()
         {
@@ -786,13 +765,13 @@ mod tests {
                 })
                 .collect()
         };
-        let by_stream = |after| TelemetryOrder::Stream { after };
+        let by_stream = |after| Order::Stream { after };
         let p = db.page("acme", 0, by_stream(None), 3, 1 << 20).await.unwrap();
         assert_eq!(keys(&p), [(1, 0), (1, 1), (2, 0)]);
         assert_eq!(p.remaining_batches, 4);
         let p = db.page("acme", 0, by_stream(Some(([2; 16], 0))), 3, 1 << 20).await.unwrap();
         assert_eq!((keys(&p), p.remaining_batches), (vec![(2, 1)], 1));
-        let by_time = |after| TelemetryOrder::Time { after };
+        let by_time = |after| Order::Time { after };
         let p = db.page("acme", NOW + 150, by_time(None), 10, 1 << 20).await.unwrap();
         assert_eq!(keys(&p), [(2, 0), (2, 1), (1, 1)], "since drops the first");
         let p = db.page("acme", 0, by_time(Some((NOW + 200, [2; 16], 0))), 10, 1 << 20).await.unwrap();
@@ -804,7 +783,7 @@ mod tests {
 
     #[tokio::test]
     async fn metrics_group_as_asked() {
-        let Some(db) = db(None).await else { return };
+        let db = db(None).await;
         let hour = NOW - NOW % 3_600;
         let entries = vec![request(hour, "web", 1, Outcome::Allowed), request(hour + 1, "api", 1, Outcome::Aborted)];
         db.put(&batch(1, 0, hour + 1, entries, false), NOW).await.unwrap();
@@ -825,7 +804,7 @@ mod tests {
 
     #[tokio::test]
     async fn holes_wait_their_grace_and_stopped_streams_need_a_newer_one() {
-        let Some(db) = db(None).await else { return };
+        let db = db(None).await;
         let t = NOW - 1_000;
         db.put(&batch(1, 3, t, Vec::new(), false), t).await.unwrap();
         db.put(&batch(1, 7, t, Vec::new(), false), t).await.unwrap();
@@ -855,33 +834,17 @@ mod tests {
 
     #[tokio::test]
     async fn retention_drops_whole_weeks_and_keeps_daily_counts() {
-        let Some(db) = db(Some(30)).await else { return };
+        let db = db(Some(30)).await;
         let old = NOW - 60 * 86_400;
         db.put(&batch(1, 0, old, vec![request(old, "web", 1, Outcome::Allowed)], false), old).await.unwrap();
         db.put(&batch(2, 0, NOW, vec![request(NOW, "web", 1, Outcome::Allowed)], false), NOW).await.unwrap();
         db.maintain(NOW).await.unwrap();
-        let p = db.page("acme", 0, TelemetryOrder::Stream { after: None }, 10, 1 << 20).await.unwrap();
+        let p = db.page("acme", 0, Order::Stream { after: None }, 10, 1 << 20).await.unwrap();
         assert_eq!(p.bodies.len(), 1, "the old week is gone");
         assert!(db.metrics("acme", old - 3_600, old + 3_600, GroupBy::Event).await.unwrap().is_empty());
         assert_eq!(db.usage("acme", old - 86_400, NOW).await.unwrap().len(), 2, "days stay");
         // A later batch in the current week still lands.
         db.put(&batch(2, 1, NOW, Vec::new(), false), NOW).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn files_import_once() {
-        let Some(db) = db(None).await else { return };
-        let dir = std::env::temp_dir().join(format!("seal-control-import-{}", hex(&unique())));
-        let telemetry = dir.join("tenants").join("acme").join("telemetry");
-        std::fs::create_dir_all(&telemetry).unwrap();
-        let b = batch(1, 0, NOW, vec![request(NOW, "web", 1, Outcome::Allowed)], false);
-        std::fs::write(telemetry.join("a.json"), serde_json::to_vec(&b).unwrap()).unwrap();
-        std::fs::write(telemetry.join("bad.json"), b"{").unwrap();
-        std::fs::write(telemetry.join(".a.json.1.2.tmp"), b"{").unwrap();
-        assert_eq!(db.import_files(&dir).await.unwrap(), (1, 1));
-        assert_eq!(db.import_files(&dir).await.unwrap(), (0, 1), "again changes nothing");
-        assert_eq!(db.usage("acme", NOW - 86_400, NOW).await.unwrap()[0].requests, 1);
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
 
@@ -893,7 +856,7 @@ async fn telemetry_db_ingest_benchmark() {
     use seal_proto::signed::Signed;
     use seal_proto::telemetry::{Completion, TelemetryBatch};
     use seal_proto::{AppName, BlobId, TenantId};
-    let Some(db) = test_support::db(None).await else { return };
+    let db = test_support::db(None).await;
     let db = std::sync::Arc::new(db);
     const NOW: u64 = 1_900_000_000;
     let (writers, each, entries) = (16u8, 500u64, 100u64);

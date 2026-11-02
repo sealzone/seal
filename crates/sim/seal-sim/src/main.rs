@@ -76,6 +76,8 @@ enum Command {
         #[arg(long)]
         record: Option<PathBuf>,
     },
+    /// Start the control plane's telemetry database in Docker or Podman; prints its URL as `destination`
+    ControlDb,
     /// Start a Postgres upstream in Docker or Podman with the password read from stdin
     Postgres {
         #[arg(long)]
@@ -152,6 +154,10 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 None => net::Upstream::default(),
             });
             net::upstream(listener, net::server_config(&sim, &[b"http/1.1"])?, record, true).await;
+        }
+        Command::ControlDb => {
+            let (db, url) = postgres::start_control_db().await?;
+            print_container(db, &url);
         }
         Command::Postgres { dir } => {
             let sim = Sim::load(&dir)?;

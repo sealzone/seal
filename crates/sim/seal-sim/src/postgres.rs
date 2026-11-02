@@ -56,10 +56,31 @@ pub async fn start(sim: &Sim, password: &str) -> anyhow::Result<Postgres> {
     Ok(pg)
 }
 
+/// The control plane's telemetry database, in a container: returns it and its URL. Plain and
+/// published on loopback only: it holds a throwaway run's telemetry.
+pub async fn start_control_db() -> anyhow::Result<(Container, String)> {
+    let env = [("POSTGRES_PASSWORD", "sim"), ("POSTGRES_DB", "control")];
+    let db = container::start(IMAGE, &env, "bash", "exec docker-entrypoint.sh postgres", 5432)?;
+    let deadline = Instant::now() + Duration::from_secs(90);
+    while ssl_answer(db.port).await.is_none() {
+        if Instant::now() > deadline {
+            bail!("the control plane's Postgres did not start");
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    let url = format!("postgres://postgres:sim@127.0.0.1:{}/control?sslmode=disable", db.port);
+    Ok((db, url))
+}
+
 async fn ssl_answers(port: u16) -> bool {
-    let Ok(mut s) = tokio::net::TcpStream::connect(("127.0.0.1", port)).await else { return false };
+    ssl_answer(port).await == Some(b'S')
+}
+
+/// Its answer to `SSLRequest`, which only the final server gives: `S` or `N`.
+async fn ssl_answer(port: u16) -> Option<u8> {
+    let mut s = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.ok()?;
     let mut reply = [0u8; 1];
-    let asked = s.write_all(&[0, 0, 0, 8, 0x04, 0xd2, 0x16, 0x2f]).await.is_ok();
-    let read = tokio::time::timeout(Duration::from_secs(2), s.read_exact(&mut reply));
-    asked && read.await.is_ok_and(|r| r.is_ok()) && reply[0] == b'S'
+    s.write_all(&[0, 0, 0, 8, 0x04, 0xd2, 0x16, 0x2f]).await.ok()?;
+    tokio::time::timeout(Duration::from_secs(2), s.read_exact(&mut reply)).await.ok()?.ok()?;
+    Some(reply[0])
 }

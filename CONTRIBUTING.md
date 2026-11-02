@@ -10,7 +10,10 @@ The published crates keep an MSRV of 1.92 (`rust-version` in `Cargo.toml`).
 
 ```sh
 cargo build --workspace
-cargo test --workspace --locked     # unit and integration tests; no containers needed
+# unit and integration tests; the control plane's need a Postgres whose user may create databases:
+#   docker run -d -p 55433:5432 -e POSTGRES_PASSWORD=x postgres:17
+#   export SEAL_CONTROL_TEST_DATABASE_URL=postgres://postgres:x@127.0.0.1:55433/postgres
+cargo test --workspace --locked
 scripts/e2e.sh                      # end-to-end tests on the simulator (tests/e2e/README.md)
 scripts/py-test.sh                  # the Python SDK's own tests against the simulator
 scripts/sim-demo.sh                 # the whole system, step by step

@@ -173,8 +173,7 @@ type WrapKeyId = (PlatformId, TenantId, TenantRootId, TenantKeyVersion);
 
 pub struct App {
     store: Store,
-    /// Where telemetry lives when set; otherwise in `store`'s files.
-    telemetry_db: Option<Arc<TelemetryDb>>,
+    telemetry: Arc<TelemetryDb>,
     upstreams: Arc<dyn Upstreams>,
     /// SHA-256 of the write token, so the comparison is constant-time over equal lengths.
     write_token: [u8; 32],
@@ -193,14 +192,20 @@ pub struct App {
 
 impl App {
     /// Refuses a console key that is not an Ed25519 public key.
-    pub fn new(settings: Settings, store: Store, upstreams: Arc<dyn Upstreams>, clock: Clock) -> Result<Self, String> {
+    pub fn new(
+        settings: Settings,
+        store: Store,
+        telemetry: Arc<TelemetryDb>,
+        upstreams: Arc<dyn Upstreams>,
+        clock: Clock,
+    ) -> Result<Self, String> {
         let console = match settings.console_keys.as_slice() {
             [] => None,
             keys => Some(ConsoleKeys::new(keys)?),
         };
         Ok(Self {
             store,
-            telemetry_db: None,
+            telemetry,
             upstreams,
             write_token: Sha256::digest(settings.write_token.as_bytes()).into(),
             log: settings.log,
@@ -214,12 +219,6 @@ impl App {
             checkpoint: Mutex::new(None),
             wrap_key_misses: Mutex::new(HashMap::new()),
         })
-    }
-
-    /// Keeps telemetry in `db` instead of files.
-    pub fn with_telemetry_db(mut self, db: Arc<TelemetryDb>) -> Self {
-        self.telemetry_db = Some(db);
-        self
     }
 
     fn now(&self) -> UnixTime {
@@ -1025,25 +1024,14 @@ async fn post_telemetry(
     check_batch(&tenant, &batch)?;
     let policy = app.release_policy().await;
     let entry = app.store.tenant(&tenant)?;
-    let mut e = entry.lock().await;
-    if !signed_by_any(&telemetry_keys(&e.docs, policy.as_ref()), TELEMETRY_BATCH_LABEL, &batch) {
+    // The lock is not held for the write: the tenant's other writes need not wait for it.
+    let keys = telemetry_keys(&entry.lock().await.docs, policy.as_ref());
+    if !signed_by_any(&keys, TELEMETRY_BATCH_LABEL, &batch) {
         return Err(ApiError::forbidden("not signed by a certified telemetry key of this tenant"));
     }
-    if let Some(db) = &app.telemetry_db {
-        // The tenant's other writes need not wait for this one.
-        drop(e);
-        return match db.put(&batch, app.now()).await? {
-            telemetry_db::Put::Stored | telemetry_db::Put::Same => Ok(StatusCode::NO_CONTENT),
-            telemetry_db::Put::Conflict => Err(ApiError::conflict("another batch has this stream and sequence")),
-        };
-    }
-    match e.telemetry_batch(&batch.body.stream, batch.body.sequence)? {
-        Some(stored) if stored == batch => Ok(StatusCode::NO_CONTENT),
-        Some(_) => Err(ApiError::conflict("another batch has this stream and sequence")),
-        None => {
-            e.put_telemetry_batch(&batch)?;
-            Ok(StatusCode::NO_CONTENT)
-        }
+    match app.telemetry.put(&batch, app.now()).await? {
+        telemetry_db::Put::Stored | telemetry_db::Put::Same => Ok(StatusCode::NO_CONTENT),
+        telemetry_db::Put::Conflict => Err(ApiError::conflict("another batch has this stream and sequence")),
     }
 }
 
@@ -1092,7 +1080,7 @@ fn parse_time_cursor(cursor: &str) -> ApiResult<(UnixTime, [u8; 16], u64)> {
 /// One page of batches with entries at or after `since`, after the `after` cursor: by stream
 /// and sequence, or with `order=time` by `to`, stream and sequence. A page ends at `limit`
 /// batches or `TELEMETRY_PAGE_BYTES`; readers ask again from its last batch until a page comes
-/// back empty. Only the page's batch files are read: the tenant's `TelemetryIndex` finds them.
+/// back empty.
 async fn get_telemetry(
     State(app): State<Arc<App>>,
     Path(tenant): Path<TenantId>,
@@ -1102,54 +1090,29 @@ async fn get_telemetry(
     let since = query.since.unwrap_or(0);
     let after = query.after.as_deref();
     let order = match query.order.as_deref() {
-        None | Some("stream") => store::TelemetryOrder::Stream { after: after.map(parse_cursor).transpose()? },
-        Some("time") => store::TelemetryOrder::Time { after: after.map(parse_time_cursor).transpose()? },
+        None | Some("stream") => telemetry_db::Order::Stream { after: after.map(parse_cursor).transpose()? },
+        Some("time") => telemetry_db::Order::Time { after: after.map(parse_time_cursor).transpose()? },
         Some(_) => return Err(ApiError::bad("order is stream or time")),
     };
     let limit = query.limit.unwrap_or(TELEMETRY_PAGE_BATCHES).clamp(1, TELEMETRY_PAGE_BATCHES);
     let entry = app.store.tenant(&tenant)?;
     let docs = entry.lock().await.docs.clone();
     app.authorize(&Chain::of(&tenant, &docs), &docs, &asked, &[], Rule::Members).await?;
-    let (body, remaining_batches, remaining_bytes, next) = match &app.telemetry_db {
-        Some(db) => {
-            let found = db.page(tenant.as_str(), since, order, limit, TELEMETRY_PAGE_BYTES).await?;
-            let next = match found.bodies.last() {
-                Some(last) => {
-                    Some(serde_json::from_slice::<SignedTelemetryBatch>(last).map_err(telemetry_db::Error::from)?)
-                }
-                None => None,
-            };
-            // Served as stored: the array of the batches' own JSON.
-            let body = [b"[".as_slice(), &found.bodies.join(b",".as_slice()), b"]"].concat();
-            (body, found.remaining_batches, found.remaining_bytes, next)
-        }
-        None => {
-            let found = entry.lock().await.telemetry_page(since, order, limit)?;
-            let mut page: Vec<SignedTelemetryBatch> = Vec::new();
-            let mut bytes = 0;
-            for file in &found.files {
-                let Some(batch) = store::read_telemetry_batch(file)? else { continue };
-                bytes += serde_json::to_vec(&batch).map_or(0, |b| b.len() + 1);
-                if !page.is_empty() && bytes > TELEMETRY_PAGE_BYTES {
-                    break;
-                }
-                page.push(batch);
-            }
-            let body = serde_json::to_vec(&page).map_err(|e| std::io::Error::other(e.to_string()))?;
-            (body, found.remaining_batches, found.remaining_bytes, page.pop())
-        }
-    };
+    let found = app.telemetry.page(tenant.as_str(), since, order, limit, TELEMETRY_PAGE_BYTES).await?;
     let mut headers = vec![
-        (TELEMETRY_REMAINING_BATCHES, remaining_batches.to_string()),
-        (TELEMETRY_REMAINING_BYTES, remaining_bytes.to_string()),
+        (TELEMETRY_REMAINING_BATCHES, found.remaining_batches.to_string()),
+        (TELEMETRY_REMAINING_BYTES, found.remaining_bytes.to_string()),
     ];
-    if let Some(last) = next {
+    if let Some(last) = found.bodies.last() {
+        let last: SignedTelemetryBatch = serde_json::from_slice(last).map_err(telemetry_db::Error::from)?;
         let order = match order {
-            store::TelemetryOrder::Stream { .. } => TelemetryOrder::Stream,
-            store::TelemetryOrder::Time { .. } => TelemetryOrder::Time,
+            telemetry_db::Order::Stream { .. } => TelemetryOrder::Stream,
+            telemetry_db::Order::Time { .. } => TelemetryOrder::Time,
         };
         headers.push((TELEMETRY_NEXT, order.cursor(&last.body)));
     }
+    // Served as stored: the array of the batches' own JSON.
+    let body = [b"[".as_slice(), &found.bodies.join(b",".as_slice()), b"]"].concat();
     let mut response = ([(axum::http::header::CONTENT_TYPE, "application/json")], body).into_response();
     for (name, value) in headers {
         if let Ok(value) = axum::http::HeaderValue::from_str(&value) {
@@ -1168,12 +1131,12 @@ struct CountsQuery {
     group_by: Option<String>,
 }
 
-/// The database, for a member of the tenant's console. Without one, 404: nothing is counted.
-async fn counts_db<'a>(app: &'a App, tenant: &TenantId, asked: &Asked) -> ApiResult<&'a TelemetryDb> {
+/// Telemetry's counts are for members of the tenant's console, like its batches.
+async fn authorize_counts(app: &App, tenant: &TenantId, asked: &Asked) -> ApiResult<()> {
     let entry = app.store.tenant(tenant)?;
     let docs = entry.lock().await.docs.clone();
     app.authorize(&Chain::of(tenant, &docs), &docs, asked, &[], Rule::Members).await?;
-    app.telemetry_db.as_deref().ok_or_else(|| ApiError::not_found("this control plane counts no telemetry"))
+    Ok(())
 }
 
 /// Daily counts, unverified: `[{ day, requests, sessions, entries, sealed_entries, active_secrets }]`.
@@ -1183,8 +1146,8 @@ async fn get_telemetry_usage(
     Query(query): Query<CountsQuery>,
     asked: Asked,
 ) -> ApiResult<Response> {
-    let db = counts_db(&app, &tenant, &asked).await?;
-    Ok(Json(db.usage(tenant.as_str(), query.from, query.to).await?).into_response())
+    authorize_counts(&app, &tenant, &asked).await?;
+    Ok(Json(app.telemetry.usage(tenant.as_str(), query.from, query.to).await?).into_response())
 }
 
 /// Hourly counts in `from..to`, unverified: `[{ hour, key, count }]`.
@@ -1200,8 +1163,8 @@ async fn get_telemetry_metrics(
         Some("requests") => telemetry_db::GroupBy::Requests,
         Some(_) => return Err(ApiError::bad("group_by is event, app or requests")),
     };
-    let db = counts_db(&app, &tenant, &asked).await?;
-    Ok(Json(db.metrics(tenant.as_str(), query.from, query.to, by).await?).into_response())
+    authorize_counts(&app, &tenant, &asked).await?;
+    Ok(Json(app.telemetry.metrics(tenant.as_str(), query.from, query.to, by).await?).into_response())
 }
 
 /// Telemetry gaps due now, unverified: holes in a stream, and streams that stopped without
@@ -1211,8 +1174,8 @@ async fn get_telemetry_gaps(
     Path(tenant): Path<TenantId>,
     asked: Asked,
 ) -> ApiResult<Response> {
-    let db = counts_db(&app, &tenant, &asked).await?;
-    Ok(Json(db.gaps(tenant.as_str(), app.now()).await?).into_response())
+    authorize_counts(&app, &tenant, &asked).await?;
+    Ok(Json(app.telemetry.gaps(tenant.as_str(), app.now()).await?).into_response())
 }
 
 /// Public: a co-signature names a public release, and an enclave's key requests carry it
