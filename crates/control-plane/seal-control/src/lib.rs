@@ -76,7 +76,8 @@
 //! of the root the document needs: the latest one, or for a state signed for the next root,
 //! a proposed next root.
 //!
-//! Named secrets (`seal_proto::named`) are rows in Postgres beside telemetry. They are not tenant
+//! Named secrets (`seal_proto::named`) are rows in control's Postgres, beside its documents and
+//! telemetry. They are not tenant
 //! state: each version carries the latest root's threshold of signatures, checked here on the
 //! way in and by every enclave on the way out, and the newest per name is served. A root
 //! rotation leaves versions signed by keys it removed unverifiable until admins publish again.

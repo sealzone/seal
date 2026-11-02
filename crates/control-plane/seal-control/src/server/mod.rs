@@ -1,5 +1,5 @@
 //! The control plane server: the routes of the API table in the library docs, over a
-//! file-backed `Store`. It authorizes reads and writes as the library docs' tables say
+//! `Store` in Postgres. It authorizes reads and writes as the library docs' tables say
 //! (`auth`) and rejects junk; it is untrusted, so nothing it serves is believed without
 //! verification.
 
@@ -134,7 +134,7 @@ impl ApiError {
 
 impl From<telemetry_db::Error> for ApiError {
     fn from(e: telemetry_db::Error) -> Self {
-        tracing::error!(error = %e, "telemetry database");
+        tracing::error!(error = %e, "database");
         Self::new(StatusCode::INTERNAL_SERVER_ERROR, "storage error")
     }
 }
@@ -510,11 +510,11 @@ async fn get_bundle(
     Path(tenant): Path<TenantId>,
     asked: Asked,
 ) -> ApiResult<Json<TenantBundle>> {
-    let entry = app.store.tenant(&tenant)?;
+    let entry = app.store.tenant(&tenant).await?;
     let docs = entry.lock().await.docs.clone();
     // The states the bundle can carry: their freshness signers read it too.
     let keys = docs.state.as_ref().map(|s| app.anchor_keys(&s.body.platforms)).unwrap_or_default();
-    let stored = entry.lock().await.logged_states(oldest_anchored(&keys, &docs.anchors))?;
+    let stored = entry.lock().await.logged_states(oldest_anchored(&keys, &docs.anchors)).await?;
     let chain = Chain::of(&tenant, &docs).with_freshness_signers(stored_signers(&stored));
     app.authorize(&chain, &docs, &asked, &[], Rule::Bundle).await?;
     let (Some(state), Some(root_id)) = (docs.state.clone(), chain_root_id(&docs)) else {
@@ -537,7 +537,7 @@ async fn get_bundle(
                     let mut e = entry.lock().await;
                     if e.docs.state.as_ref() == Some(&state) {
                         let freshness = Freshness { log: Some(fresh.clone()), tenant: e.docs.freshness.tenant.clone() };
-                        if let Err(err) = e.set_freshness(freshness) {
+                        if let Err(err) = e.set_freshness(freshness).await {
                             tracing::error!(error = %err, "storing the log's freshness statement");
                         }
                     }
@@ -574,7 +574,7 @@ async fn get_bundle(
                 all.push(key);
             }
         }
-        if let Err(err) = e.set_wrap_keys(all) {
+        if let Err(err) = e.set_wrap_keys(all).await {
             tracing::error!(error = %err, "caching wrap keys");
         }
     }
@@ -619,7 +619,7 @@ async fn get_bundle(
     bundle.states = app.served_states(stored.clone(), &bundle, &keys, &time);
     if app.refresh_anchors(&tenant, root_id, &keys, &mut bundle, now).await {
         let mut e = entry.lock().await;
-        if let Err(err) = e.set_anchors(bundle.anchors.clone()) {
+        if let Err(err) = e.set_anchors(bundle.anchors.clone()).await {
             tracing::error!(error = %err, "storing anchors");
         }
         drop(e);
@@ -653,7 +653,7 @@ impl App {
     /// Appends `link` to the stored chain: it must be the next version, carry the registrar's
     /// signatures (version 1, when a registrar is configured) or the threshold of the version
     /// before it, and be included in the log. Storing the same link again changes nothing.
-    fn store_root(&self, e: &mut TenantEntry, link: LoggedRoot) -> ApiResult<()> {
+    async fn store_root(&self, e: &mut TenantEntry, link: LoggedRoot) -> ApiResult<()> {
         let root = &link.root.body;
         let have = e.docs.roots.len() as u64;
         if let Some(index) = root.version.checked_sub(1).filter(|&i| i < have) {
@@ -683,7 +683,7 @@ impl App {
             .map_err(|err| ApiError::bad(format!("log inclusion: {err}")))?;
         let mut roots = e.docs.roots.clone();
         roots.push(link);
-        e.set_roots(roots)?;
+        e.set_roots(roots).await?;
         Ok(())
     }
 
@@ -760,7 +760,7 @@ impl App {
         proof: Option<TlogProof>,
     ) -> ApiResult<Option<LoggedState>> {
         if self.check_state(e, &state)? {
-            return Ok(e.logged_state(state.body.version)?);
+            return Ok(e.logged_state(state.body.version).await?);
         }
         let root_id = chain_root_id(&e.docs).ok_or_else(|| ApiError::conflict("the tenant has no root chain"))?;
         let leaf = state_leaf(root_id, &state.body);
@@ -784,9 +784,9 @@ impl App {
             )));
         }
         let logged = LoggedState { state, proof };
-        e.put_logged_state(&logged)?;
-        e.set_state(logged.state.clone())?;
-        e.set_freshness(Freshness { log: Some(statement), tenant: Vec::new() })?;
+        e.put_logged_state(&logged).await?;
+        e.set_state(logged.state.clone()).await?;
+        e.set_freshness(Freshness { log: Some(statement), tenant: Vec::new() }).await?;
         Ok(Some(logged))
     }
 }
@@ -803,7 +803,7 @@ async fn put_root(
 ) -> ApiResult<StatusCode> {
     let link: LoggedRoot = parse(&body)?;
     same_tenant(&tenant, &link.root.body.tenant)?;
-    let entry = app.store.tenant(&tenant)?;
+    let entry = app.store.tenant(&tenant).await?;
     let mut e = entry.lock().await;
     let docs = e.docs.clone();
     // Root version 1 names its own chain and first admins.
@@ -821,10 +821,10 @@ async fn put_root(
     if docs.roots.is_empty() {
         // The tenant's first document goes through the entry kept for its writers.
         drop(e);
-        let entry = app.store.create_tenant(&tenant)?;
-        app.store_root(&mut *entry.lock().await, link)?;
+        let entry = app.store.create_tenant(&tenant).await?;
+        app.store_root(&mut *entry.lock().await, link).await?;
     } else {
-        app.store_root(&mut e, link)?;
+        app.store_root(&mut e, link).await?;
     }
     Ok(StatusCode::NO_CONTENT)
 }
@@ -850,7 +850,7 @@ async fn put_state(
         StateBody::Unlogged(s) => (s, None),
     };
     same_tenant(&tenant, &state.body.tenant)?;
-    let entry = app.store.tenant(&tenant)?;
+    let entry = app.store.tenant(&tenant).await?;
     let mut e = entry.lock().await;
     let docs = e.docs.clone();
     app.authorize(&Chain::of(&tenant, &docs), &docs, &asked, &body, Rule::Submit).await?;
@@ -865,12 +865,12 @@ async fn post_freshness(
 ) -> ApiResult<StatusCode> {
     let statement: SignedStateFreshness = parse(&body)?;
     same_tenant(&tenant, &statement.body.tenant)?;
-    let entry = app.store.tenant(&tenant)?;
+    let entry = app.store.tenant(&tenant).await?;
     let mut e = entry.lock().await;
     let state = &e.docs.state.as_ref().ok_or_else(|| ApiError::conflict("the tenant has no state"))?.body;
     // A signer of the latest state, or of an earlier one a bundle can carry: the state in force
     // is among them, and its signers vouch for the latest until it applies.
-    let stored = e.logged_states(oldest_anchored(&app.anchor_keys(&state.platforms), &e.docs.anchors))?;
+    let stored = e.logged_states(oldest_anchored(&app.anchor_keys(&state.platforms), &e.docs.anchors)).await?;
     let keys: Vec<PublicKey> = state.freshness_keys.iter().copied().chain(stored_signers(&stored)).collect();
     if !signed_by_any(&keys, STATE_FRESHNESS_LABEL, &statement) {
         return Err(ApiError::forbidden("not signed by a freshness key of the latest state or one a bundle carries"));
@@ -889,7 +889,7 @@ async fn post_freshness(
     freshness.tenant.sort_by_key(|s| s.body.signed_at);
     let excess = freshness.tenant.len().saturating_sub(TENANT_STATEMENTS_KEPT);
     freshness.tenant.drain(..excess);
-    e.set_freshness(freshness)?;
+    e.set_freshness(freshness).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -898,7 +898,7 @@ async fn post_signal(State(app): State<Arc<App>>, Path(tenant): Path<TenantId>, 
     same_tenant(&tenant, &signal.body.tenant)?;
     validate_code(&signal.body.code).map_err(|e| ApiError::bad(e.to_string()))?;
     let policy = app.release_policy().await;
-    let entry = app.store.tenant(&tenant)?;
+    let entry = app.store.tenant(&tenant).await?;
     let mut e = entry.lock().await;
     match &signal.body.source {
         SignalSource::Enclave { .. } | SignalSource::Sdk => {
@@ -923,7 +923,7 @@ async fn post_signal(State(app): State<Arc<App>>, Path(tenant): Path<TenantId>, 
     }
     let mut signals = e.docs.signals.clone();
     signals.push(signal);
-    e.set_signals(signals)?;
+    e.set_signals(signals).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -938,7 +938,7 @@ async fn post_session_end(
         return Err(ApiError::bad("a session ends with session_ended or integrity_failed"));
     }
     let policy = app.release_policy().await;
-    let entry = app.store.tenant(&tenant)?;
+    let entry = app.store.tenant(&tenant).await?;
     let mut e = entry.lock().await;
     if !signed_by_any(&telemetry_keys(&e.docs, policy.as_ref()), SESSION_END_LABEL, &end) {
         return Err(ApiError::forbidden("not signed by a certified telemetry key of this tenant"));
@@ -953,7 +953,7 @@ async fn post_session_end(
     if !known && end.body.is_live(&time) {
         ends.push(end);
     }
-    e.set_session_ends(ends)?;
+    e.set_session_ends(ends).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -973,7 +973,7 @@ async fn post_service_key_certificate(
     if let Some(guardian) = app.guardians.get(&certificate.body.platform).map(key_id) {
         certificate.signatures.retain(|sig| sig.signer == guardian);
     }
-    let entry = app.store.tenant(&tenant)?;
+    let entry = app.store.tenant(&tenant).await?;
     let mut e = entry.lock().await;
     let root_id = chain_root_id(&e.docs).ok_or_else(|| ApiError::conflict("the tenant has no root chain"))?;
     if certificate.body.root_id != root_id {
@@ -984,7 +984,7 @@ async fn post_service_key_certificate(
     }
     let mut certificates = e.docs.certificates.clone();
     certificates.push(certificate);
-    e.set_certificates(certificates)?;
+    e.set_certificates(certificates).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -994,7 +994,7 @@ async fn get_service_key_certificates(
     State(app): State<Arc<App>>,
     Path(tenant): Path<TenantId>,
 ) -> ApiResult<Json<Vec<SignedServiceKeyCertificate>>> {
-    let entry = app.store.tenant(&tenant)?;
+    let entry = app.store.tenant(&tenant).await?;
     let certificates = entry.lock().await.docs.certificates.clone();
     Ok(Json(certificates))
 }
@@ -1032,7 +1032,7 @@ async fn post_telemetry(
     let batch: SignedTelemetryBatch = parse(&body)?;
     check_batch(&tenant, &batch)?;
     let policy = app.release_policy().await;
-    let entry = app.store.tenant(&tenant)?;
+    let entry = app.store.tenant(&tenant).await?;
     // The lock is not held for the write: the tenant's other writes need not wait for it.
     let keys = telemetry_keys(&entry.lock().await.docs, policy.as_ref());
     if !signed_by_any(&keys, TELEMETRY_BATCH_LABEL, &batch) {
@@ -1104,7 +1104,7 @@ async fn get_telemetry(
         Some(_) => return Err(ApiError::bad("order is stream or time")),
     };
     let limit = query.limit.unwrap_or(TELEMETRY_PAGE_BATCHES).clamp(1, TELEMETRY_PAGE_BATCHES);
-    let entry = app.store.tenant(&tenant)?;
+    let entry = app.store.tenant(&tenant).await?;
     let docs = entry.lock().await.docs.clone();
     app.authorize(&Chain::of(&tenant, &docs), &docs, &asked, &[], Rule::Members).await?;
     let found = app.telemetry.page(tenant.as_str(), since, order, limit, TELEMETRY_PAGE_BYTES).await?;
@@ -1142,7 +1142,7 @@ struct CountsQuery {
 
 /// Telemetry's counts are for members of the tenant's console, like its batches.
 async fn authorize_counts(app: &App, tenant: &TenantId, asked: &Asked) -> ApiResult<()> {
-    let entry = app.store.tenant(tenant)?;
+    let entry = app.store.tenant(tenant).await?;
     let docs = entry.lock().await.docs.clone();
     app.authorize(&Chain::of(tenant, &docs), &docs, asked, &[], Rule::Members).await?;
     Ok(())
@@ -1195,7 +1195,7 @@ async fn secrets_chain(
     body: &[u8],
     rule: Rule,
 ) -> ApiResult<(TenantRootId, TenantRoot)> {
-    let entry = app.store.tenant(tenant)?;
+    let entry = app.store.tenant(tenant).await?;
     let docs = entry.lock().await.docs.clone();
     app.authorize(&Chain::of(tenant, &docs), &docs, asked, body, rule).await?;
     match (chain_root_id(&docs), docs.roots.last()) {
@@ -1278,8 +1278,8 @@ async fn get_release_cosign(
     State(app): State<Arc<App>>,
     Path((tenant, measurement)): Path<(TenantId, Measurement)>,
 ) -> ApiResult<Json<Signed<ReleaseCosign>>> {
-    let entry = app.store.tenant(&tenant)?;
-    let cosign = entry.lock().await.release_cosign(&measurement)?;
+    let entry = app.store.tenant(&tenant).await?;
+    let cosign = entry.lock().await.release_cosign(&measurement).await?;
     cosign.map(Json).ok_or_else(|| ApiError::not_found("no co-signature for this release"))
 }
 
@@ -1294,13 +1294,13 @@ async fn put_release_cosign(
     if cosign.body.measurement != measurement {
         return Err(ApiError::bad("the co-signature is for another measurement"));
     }
-    let entry = app.store.tenant(&tenant)?;
+    let entry = app.store.tenant(&tenant).await?;
     let e = entry.lock().await;
     app.authorize(&Chain::of(&tenant, &e.docs), &e.docs, &asked, &body, Rule::Submit).await?;
     let latest = &e.docs.roots.last().ok_or_else(|| ApiError::conflict("the tenant has no root chain"))?.root.body;
     TenantVerifier::verify_admin_signed(latest, RELEASE_COSIGN_LABEL, &cosign)
         .map_err(|_| ApiError::bad("not signed by the threshold of the latest root"))?;
-    e.put_release_cosign(&measurement, &cosign)?;
+    e.put_release_cosign(&measurement, &cosign).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1309,7 +1309,8 @@ async fn get_release(
     Path((platform, measurement)): Path<(PlatformId, Measurement)>,
 ) -> ApiResult<Json<ReleaseEvidence>> {
     app.store
-        .release(platform, &measurement)?
+        .release(platform, &measurement)
+        .await?
         .map(Json)
         .ok_or_else(|| ApiError::not_found("no evidence for this release"))
 }
@@ -1330,7 +1331,7 @@ async fn put_release(
     log.inclusion(&LogEntry::Release(manifest.clone()), &evidence.included)
         .map_err(|e| ApiError::bad(format!("log inclusion: {e}")))?;
     log.checkpoint(&evidence.fresh).map_err(|e| ApiError::bad(format!("fresh checkpoint: {e}")))?;
-    app.store.put_release(platform, &measurement, &evidence)?;
+    app.store.put_release(platform, &measurement, &evidence).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1338,7 +1339,7 @@ async fn get_releases(
     State(app): State<Arc<App>>,
     Path(platform): Path<PlatformId>,
 ) -> ApiResult<Json<Vec<ReleaseEvidence>>> {
-    let mut releases = app.store.releases(platform)?;
+    let mut releases = app.store.releases(platform).await?;
     releases.sort_by_key(|e| e.included.leaf_index);
     Ok(Json(releases))
 }
@@ -1348,7 +1349,8 @@ async fn get_release_template(
     Path((platform, measurement)): Path<(PlatformId, Measurement)>,
 ) -> ApiResult<Json<serde_json::Value>> {
     app.store
-        .release_template(platform, &measurement)?
+        .release_template(platform, &measurement)
+        .await?
         .map(Json)
         .ok_or_else(|| ApiError::not_found("no template for this release"))
 }
@@ -1364,10 +1366,10 @@ async fn put_release_template(
     if !template.is_object() {
         return Err(ApiError::bad("a template is a JSON object"));
     }
-    if app.store.release(platform, &measurement)?.is_none() {
+    if app.store.release(platform, &measurement).await?.is_none() {
         return Err(ApiError::conflict("publish the release's evidence first"));
     }
-    app.store.put_release_template(platform, &measurement, &template)?;
+    app.store.put_release_template(platform, &measurement, &template).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1386,10 +1388,10 @@ async fn get_documents(
     Query(query): Query<SinceVersion>,
     asked: Asked,
 ) -> ApiResult<Json<Documents>> {
-    let entry = app.store.tenant(&tenant)?;
+    let entry = app.store.tenant(&tenant).await?;
     let docs = entry.lock().await.docs.clone();
     app.authorize(&Chain::of(&tenant, &docs), &docs, &asked, &[], Rule::Members).await?;
-    let states = entry.lock().await.logged_states(query.since_version)?;
+    let states = entry.lock().await.logged_states(query.since_version).await?;
     let checkpoint = match app.latest_checkpoint().await {
         Ok(checkpoint) => Some(checkpoint),
         Err(e) => {
@@ -1422,13 +1424,13 @@ fn still_open(docs: &TenantDocs, proposal: &Proposal) -> bool {
 }
 
 /// The open proposals, oldest first; the rest are deleted.
-fn open_proposals(e: &TenantEntry) -> ApiResult<Vec<Proposal>> {
+async fn open_proposals(e: &TenantEntry) -> ApiResult<Vec<Proposal>> {
     let mut open = Vec::new();
-    for proposal in e.proposals()? {
+    for proposal in e.proposals().await? {
         if still_open(&e.docs, &proposal) {
             open.push(proposal);
         } else {
-            e.delete_proposal(&proposal.id)?;
+            e.delete_proposal(&proposal.id).await?;
         }
     }
     open.sort_by(|a, b| (a.created_at, &a.id).cmp(&(b.created_at, &b.id)));
@@ -1440,10 +1442,10 @@ async fn get_proposals(
     Path(tenant): Path<TenantId>,
     asked: Asked,
 ) -> ApiResult<Json<Vec<Proposal>>> {
-    let entry = app.store.tenant(&tenant)?;
+    let entry = app.store.tenant(&tenant).await?;
     let e = entry.lock().await;
     app.authorize(&Chain::of(&tenant, &e.docs), &e.docs, &asked, &[], Rule::Members).await?;
-    open_proposals(&e).map(Json)
+    open_proposals(&e).await.map(Json)
 }
 
 /// The signed state or root in `body` whose digest `id` is.
@@ -1531,10 +1533,10 @@ async fn put_proposal(
 ) -> ApiResult<Json<Proposal>> {
     check_proposal_id(&id)?;
     let document = proposed(&id, &body)?;
-    let entry = app.store.tenant(&tenant)?;
+    let entry = app.store.tenant(&tenant).await?;
     let e = entry.lock().await;
     app.authorize(&Chain::of(&tenant, &e.docs), &e.docs, &asked, &body, Rule::Propose).await?;
-    let open = open_proposals(&e)?;
+    let open = open_proposals(&e).await?;
     let roots = signing_roots(&e.docs, &open, &document, &tenant)?;
     let verified = match &document {
         Proposed::State(s) => signatures_verify(&roots, TENANT_STATE_LABEL, s),
@@ -1545,7 +1547,7 @@ async fn put_proposal(
     }
     let now = app.now();
     let existing = open.into_iter().find(|p| p.id == id);
-    if existing.is_none() && e.proposals()?.len() >= MAX_PROPOSALS {
+    if existing.is_none() && e.proposals().await?.len() >= MAX_PROPOSALS {
         return Err(ApiError::conflict(format!("the tenant has {MAX_PROPOSALS} open proposals")));
     }
     let mut proposal = existing.unwrap_or_else(|| Proposal {
@@ -1571,7 +1573,7 @@ async fn put_proposal(
         return Err(ApiError::conflict(format!("a proposal holds at most {MAX_PROPOSAL_SIGNATURES} signatures")));
     }
     proposal.updated_at = now;
-    e.put_proposal(&proposal)?;
+    e.put_proposal(&proposal).await?;
     Ok(Json(proposal))
 }
 
@@ -1581,10 +1583,10 @@ async fn delete_proposal(
     asked: Asked,
 ) -> ApiResult<StatusCode> {
     check_proposal_id(&id)?;
-    let entry = app.store.tenant(&tenant)?;
+    let entry = app.store.tenant(&tenant).await?;
     let e = entry.lock().await;
     app.authorize(&Chain::of(&tenant, &e.docs), &e.docs, &asked, &[], Rule::Propose).await?;
-    if e.delete_proposal(&id)? {
+    if e.delete_proposal(&id).await? {
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::not_found("no such proposal"))
@@ -1600,11 +1602,11 @@ async fn post_proposal_submit(
     body: Bytes,
 ) -> ApiResult<Json<Submitted>> {
     check_proposal_id(&id)?;
-    let entry = app.store.tenant(&tenant)?;
+    let entry = app.store.tenant(&tenant).await?;
     let mut e = entry.lock().await;
     let docs = e.docs.clone();
     app.authorize(&Chain::of(&tenant, &docs), &docs, &asked, &body, Rule::Propose).await?;
-    let proposal = e.proposal(&id)?.ok_or_else(|| ApiError::not_found("no such proposal"))?;
+    let proposal = e.proposal(&id).await?.ok_or_else(|| ApiError::not_found("no such proposal"))?;
     let submitted = match proposal.document {
         Proposed::State(state) => {
             let latest =
@@ -1632,11 +1634,11 @@ async fn post_proposal_submit(
             let leaf = LogEntry::TenantRoot(root.body.clone());
             let proof = app.log(&leaf, app.upstreams.log_append_root(&leaf).await).await?;
             let link = LoggedRoot { root, proof };
-            app.store_root(&mut e, link.clone())?;
+            app.store_root(&mut e, link.clone()).await?;
             Submitted::Root(link)
         }
     };
-    e.delete_proposal(&id)?;
+    e.delete_proposal(&id).await?;
     Ok(Json(submitted))
 }
 

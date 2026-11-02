@@ -3,8 +3,6 @@ and their tunnels fail over between them."""
 
 from __future__ import annotations
 
-import json
-
 import pytest
 
 import seal
@@ -13,7 +11,7 @@ from world import SECRET, World, get
 
 def test_replicas_share_keys_and_tokens(world: World) -> None:
     world.start_replica(2)
-    certificates = json.loads(world.path("control/tenants/acme/service-key-certificates.json").read_text())
+    certificates = world.control_get("tenants/acme/service-key-certificates")
     assert len(certificates) == 1, "both replicas hold the same certified keys"
 
     blob = world.seal_with_cli(SECRET, world.upstream_url, "--format", "Bearer {key}")

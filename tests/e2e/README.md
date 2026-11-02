@@ -41,6 +41,8 @@ def test_clients_and_live_tunnels_fail_over(world: World) -> None:
 | `world.stop("control")` / `start_control()` | take the control plane down and back |
 | `world.start_postgres()` / `start_redis()` | a Postgres or Redis upstream in a container; returns what to seal to |
 | `world.upstream_seen()` | every request the HTTPS upstream received |
+| `world.control_get("tenants/acme/service-key-certificates")` | a public control plane read, as JSON; `certificates_file()` writes the certificates for `seal telemetry` |
+| `world.control_sql(query)` | a query on the control plane's database, for what no route shows |
 | `world.log("replica-1")` | a process's log |
 | `get(url, key, context=, at=)` | one request through a session; returns `(status, body)` |
 | `eventually("what", check)` | wait until `check()` holds |

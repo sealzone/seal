@@ -257,6 +257,7 @@ impl App {
         let mut release = self
             .store
             .release(evidence.platform, &evidence.measurement)
+            .await
             .map_err(|e| e.to_string())?
             .ok_or("no release stored for this measurement")?;
         match self.latest_checkpoint().await {

@@ -52,6 +52,7 @@ class World:
         self.pin = ""  # SEAL_TENANT: acme@<root id>
         self.conf: dict = {}
         self.control_db = ""  # the control plane's database URL
+        self.control_db_container: Tuple[str, str] = ("", "")  # its (runtime, id)
         (work / "logs").mkdir(parents=True)
 
     # ---- starting the system -------------------------------------------------------------
@@ -97,10 +98,11 @@ class World:
         assert "keys released purpose=service" in w.log("guardian")
 
     def start_control(self) -> None:
-        """The control plane keeps its state in files and this world's Postgres, so a restart
-        picks up where it was."""
+        """The control plane keeps everything in this world's Postgres, so a restart picks up
+        where it was."""
         if not self.control_db:
             self.control_db = self.parse_container(self.run("seal-sim", "control-db"))
+            self.control_db_container = self.containers[-1]
         self.start("control", "seal-control", "--config", str(self.dir / "control.json"),
                    env={"SEAL_CONTROL_DATABASE_URL": self.control_db})
         wait_for_port(self.port("control"))
@@ -265,6 +267,36 @@ class World:
 
     def path(self, name: str) -> Path:
         return self.dir / name
+
+    # ---- the control plane's data ----------------------------------------------------------
+
+    def control_get(self, path: str) -> object:
+        """`GET <control>/v1/<path>` with no credentials (what anyone may read), as JSON."""
+        context = ssl.create_default_context(cafile=str(self.dir / "ca.pem"))
+        conn = http.client.HTTPSConnection("localhost", self.port("control"), context=context, timeout=10)
+        try:
+            conn.request("GET", f"/v1/{path}")
+            response = conn.getresponse()
+            body = response.read()
+            assert response.status == 200, f"GET /v1/{path}: {response.status} {body!r}"
+            return json.loads(body)
+        finally:
+            conn.close()
+
+    def certificates_file(self, tenant: str = "acme") -> Path:
+        """The tenant's service key certificates as control serves them, in a file for
+        `seal telemetry --certificates`."""
+        path = self.dir / f"{tenant}-certificates.json"
+        path.write_text(json.dumps(self.control_get(f"tenants/{tenant}/service-key-certificates")))
+        return path
+
+    def control_sql(self, query: str) -> str:
+        """`query` on the control plane's database, unaligned: for what no route shows."""
+        runtime, container = self.control_db_container
+        out = subprocess.run([runtime, "exec", container, "psql", "-U", "postgres", "-d", "control", "-At",
+                              "-c", query], capture_output=True, text=True, timeout=30)
+        assert out.returncode == 0, out.stderr
+        return out.stdout.strip()
 
 
 # ---- helpers --------------------------------------------------------------------------------

@@ -3,7 +3,6 @@
 //! ```json
 //! {
 //!   "listen": "0.0.0.0:8443",
-//!   "data_dir": "/var/lib/seal-control",
 //!   "write_token": "...",
 //!   "tls": { "cert_chain": "/etc/seal-control/chain.pem", "private_key": "/etc/seal-control/key.pem" },
 //!   "log": {
@@ -23,8 +22,9 @@
 //!
 //! - `write_token`: the bearer token admin writes need; `SEAL_CONTROL_WRITE_TOKEN` in the
 //!   environment takes precedence. At least 16 characters.
-//! - `SEAL_CONTROL_DATABASE_URL` in the environment, required: Postgres for telemetry
-//!   (`telemetry_db`), `sslmode=verify-full` in production. `SEAL_CONTROL_DATABASE_AUTH=entra` signs
+//! - `SEAL_CONTROL_DATABASE_URL` in the environment, required: the Postgres control keeps
+//!   everything in, its documents (`store`), named secrets and telemetry (`telemetry_db`);
+//!   `sslmode=verify-full` in production. One control process serves a database. `SEAL_CONTROL_DATABASE_AUTH=entra` signs
 //!   in with the VM's managed identity's Entra token instead of a password in the URL.
 //! - `telemetry_retention_days`: optional; batches and hourly counts older
 //!   than this, by whole weeks, are deleted. Without it nothing is. It applies to every tenant.
@@ -62,7 +62,6 @@ const MIN_WRITE_TOKEN_LEN: usize = 16;
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub listen: SocketAddr,
-    pub data_dir: PathBuf,
     #[serde(default)]
     pub write_token: Option<String>,
     #[serde(default)]
@@ -272,7 +271,7 @@ mod tests {
 
     fn config(extra: &str) -> String {
         format!(
-            r#"{{"listen":"127.0.0.1:0","data_dir":"/tmp/x","write_token":"0123456789abcdef",
+            r#"{{"listen":"127.0.0.1:0","write_token":"0123456789abcdef",
             "log":{{"url":"https://log.example","origin":"o","log_key":"{KEY}","witness_keys":["{KEY}"],"witness_quorum":1}}{extra}}}"#
         )
     }

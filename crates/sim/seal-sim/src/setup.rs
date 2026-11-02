@@ -14,7 +14,7 @@
 //! <dir>/ca.pem                    the test CA, trusted as `extra_roots` everywhere
 //! <dir>/tls-chain.pem, tls-key.pem  a `localhost` certificate and key under it
 //! <dir>/guardian-root, guardian.json   the guardian's root file and `SEAL_GUARDIAN_CONFIG`
-//! <dir>/control.json, control/    the control plane's configuration and data directory
+//! <dir>/control.json              the control plane's configuration (its data: `seal-sim control-db`)
 //! <dir>/enclave.json              `SEAL_ENCLAVE_CONFIG`
 //! <dir>/admin/config.json         `SEAL_HOME` of the admin CLI: URLs and extra roots
 //! ```
@@ -361,7 +361,6 @@ pub fn setup_with(dir: &Path, enclave_binary: &Path, ports: Ports, options: Opti
         &dir.join("control.json"),
         &json!({
             "listen": format!("127.0.0.1:{}", ports.control),
-            "data_dir": path("control"),
             "write_token": write_token,
             "tls": {"cert_chain": path("tls-chain.pem"), "private_key": path("tls-key.pem")},
             "log": {

@@ -420,7 +420,7 @@ tab, or with `seal secret --name NAME`; `seal secrets` lists the names and delet
   for a deletion), signed by the threshold of the root in force under
   `seal/named-secret/v1`. It is not part of signed tenant state: publishing has no pending
   window and is not logged. Versions number 1, 2, … per name, deletions included.
-- **Stored by the control plane** in Postgres beside telemetry: every name's newest version,
+- **Stored by the control plane** in its Postgres, beside its other documents: every name's newest version,
   and the `NAMED_SECRET_VERSIONS_KEPT` (10) newest of each. The control plane checks a version
   before it stores it (the next number, the blob it names, this tenant and chain, the latest
   root's threshold) and refuses more than `MAX_NAMED_SECRETS` (256) names or a blob over
@@ -858,9 +858,14 @@ Who may read and write a tenant's documents (the crate docs hold the full route 
 - **Bundles** carry the states since an anchor (see "Binding and freshness"), the latest
   checkpoint, and each tenant platform's guardian's newest anchor, refreshed hourly
   (`ANCHOR_REFRESH_SECS`).
-- **Telemetry** is served in pages (see "Telemetry", Reading). Batches are rows in Postgres
-  (`SEAL_CONTROL_DATABASE_URL`, optionally `SEAL_CONTROL_DATABASE_AUTH=entra`), partitioned by
-  the week they arrived, and the transaction that stores a batch also adds it to the tenant's
+- **Storage** is one Postgres database (`SEAL_CONTROL_DATABASE_URL`, optionally
+  `SEAL_CONTROL_DATABASE_AUTH=entra`) and nothing on disk: roots, states and their proofs,
+  freshness statements, signals, session ends, certificates, wrap keys, anchors, proposals,
+  release evidence, named secrets and telemetry. Each is stored as the document it is served
+  as, and none is believed for being there. One control process serves a database: it keeps
+  each tenant's small documents in memory.
+- **Telemetry** is served in pages (see "Telemetry", Reading). Batches are partitioned by the
+  week they arrived, and the transaction that stores a batch also adds it to the tenant's
   counts: `/telemetry/usage` and `/telemetry/metrics`, and the holes and stopped streams at
   `/telemetry/gaps`. These are unverified: only batches can be verified. Optional retention
   (`telemetry_retention_days`) applies to every tenant, by whole weeks; daily counts stay.

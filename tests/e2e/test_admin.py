@@ -70,7 +70,8 @@ def test_the_pending_window_delays_widening_changes(world: World) -> None:
     eventually("the added identity takes effect after the window", lambda: may_start(added), timeout=WINDOW + 15)
     assert time.monotonic() - published >= WINDOW + 1, "not before the window passed"
     assert not may_start(cancelled), "the superseded identity never takes effect"
-    assert world.path("control/tenants/acme/anchors.json").exists(), "the control plane holds the guardian's anchor"
+    anchors = world.control_sql("select count(*) from tenant_documents where tenant = 'acme' and kind = 'anchors'")
+    assert anchors == "1", "the control plane holds the guardian's anchor"
 
 
 def test_removing_the_app_ends_its_sessions(world: World) -> None:

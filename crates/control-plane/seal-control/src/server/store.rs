@@ -1,36 +1,30 @@
-//! File-backed storage. Every file is JSON, replaced atomically (written to a temporary file in
-//! the same directory, synced, renamed over the old one, directory synced), so a crash leaves
-//! either the old or the new document, never a torn one.
+//! Control's documents in Postgres (`migrations/0003_documents.sql`), on the one pool control
+//! keeps (`telemetry_db`). Every document is stored as the JSON it is served as, and each write
+//! is one statement, so a crash leaves either the old or the new document, never a torn one.
 //!
 //! ```text
-//! <data_dir>/tenants/<tenant>/roots.json                  [LoggedRoot], versions 1..=N
-//!                            /state.json                  SignedTenantState
-//!                            /freshness.json              {log, tenant: [..]} for the state
-//!                            /signals.json                [SignedSignal]
-//!                            /session-ends.json           [SignedSessionEnd]
-//!                            /service-key-certificates.json [SignedServiceKeyCertificate]
-//!                            /wrap-keys.json              [SignedTenantWrapKey] (fetched, cached)
-//!                            /anchors.json                [SignedTenantAnchor], the newest per guardian (fetched)
-//!                            /states/<version>.json       LoggedState, every state stored with its proof
-//!                            /proposals/<id>.json         Proposal (unsigned or partly signed)
-//!                            /release-cosigns/<measurement>.json
-//! <data_dir>/releases/<platform>/<measurement>.json
-//! <data_dir>/release-templates/<platform>/<measurement>.json
+//! tenant_documents       (tenant, kind)        roots, state, freshness, signals, session-ends,
+//!                                              service-key-certificates, wrap-keys, anchors
+//! tenant_states          (tenant, version)     LoggedState, every state stored with its proof
+//! tenant_proposals       (tenant, id)          Proposal (unsigned or partly signed)
+//! tenant_release_cosigns (tenant, measurement) Signed<ReleaseCosign>
+//! releases               (platform, measurement) ReleaseEvidence
+//! release_templates      (platform, measurement) the console's release template
 //! ```
 //!
 //! A tenant's small documents are loaded once and kept in memory (`TenantDocs`), behind one
-//! async lock per tenant that serializes its writes. Release evidence, co-signatures, logged
-//! states and proposals are read from disk when asked for. Telemetry is in Postgres
-//! (`telemetry_db`).
+//! async lock per tenant that serializes its writes, so one control process serves a database
+//! (another would not see this one's writes until it restarts). Logged states, proposals,
+//! co-signatures and releases are read from the database when asked for.
 
 use std::collections::HashMap;
-use std::io::{self, Write as _};
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::io;
 use std::sync::{Arc, Mutex};
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use sqlx::postgres::PgPool;
+use sqlx::Row;
 
 use seal_control::client::Proposal;
 
@@ -65,327 +59,426 @@ pub struct TenantDocs {
 
 /// One tenant: its documents and where they live. Held through `Store::tenant`'s lock.
 pub struct TenantEntry {
-    dir: PathBuf,
+    pool: PgPool,
+    tenant: TenantId,
     pub docs: TenantDocs,
 }
 
-const ROOTS: &str = "roots.json";
-const STATE: &str = "state.json";
-const FRESHNESS: &str = "freshness.json";
-const SIGNALS: &str = "signals.json";
-const SESSION_ENDS: &str = "session-ends.json";
-const CERTIFICATES: &str = "service-key-certificates.json";
-const WRAP_KEYS: &str = "wrap-keys.json";
-const ANCHORS: &str = "anchors.json";
+const ROOTS: &str = "roots";
+const STATE: &str = "state";
+const FRESHNESS: &str = "freshness";
+const SIGNALS: &str = "signals";
+const SESSION_ENDS: &str = "session-ends";
+const CERTIFICATES: &str = "service-key-certificates";
+const WRAP_KEYS: &str = "wrap-keys";
+const ANCHORS: &str = "anchors";
+
+fn db(e: sqlx::Error) -> io::Error {
+    io::Error::other(format!("database: {e}"))
+}
+
+fn encode<T: Serialize>(value: &T) -> io::Result<Vec<u8>> {
+    serde_json::to_vec(value).map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))
+}
+
+fn decode<T: DeserializeOwned>(what: &str, body: &[u8]) -> io::Result<T> {
+    serde_json::from_slice(body).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("{what}: {e}")))
+}
+
+/// Decodes the `body` column of every row.
+fn decode_all<T: DeserializeOwned>(what: &str, rows: &[sqlx::postgres::PgRow]) -> io::Result<Vec<T>> {
+    rows.iter().map(|r| decode(what, r.get("body"))).collect()
+}
 
 impl TenantEntry {
-    fn load(dir: PathBuf) -> io::Result<Self> {
-        let docs = TenantDocs {
-            roots: read_json(&dir.join(ROOTS))?.unwrap_or_default(),
-            state: read_json(&dir.join(STATE))?,
-            freshness: read_json(&dir.join(FRESHNESS))?.unwrap_or_default(),
-            signals: read_json(&dir.join(SIGNALS))?.unwrap_or_default(),
-            session_ends: read_json(&dir.join(SESSION_ENDS))?.unwrap_or_default(),
-            certificates: read_json(&dir.join(CERTIFICATES))?.unwrap_or_default(),
-            wrap_keys: read_json(&dir.join(WRAP_KEYS))?.unwrap_or_default(),
-            anchors: read_json(&dir.join(ANCHORS))?.unwrap_or_default(),
+    /// The tenant's documents, and whether anything at all is stored for it.
+    async fn load(pool: PgPool, tenant: &TenantId) -> io::Result<(Self, bool)> {
+        let rows = sqlx::query("select kind, body from tenant_documents where tenant = $1")
+            .bind(tenant.as_str())
+            .fetch_all(&pool)
+            .await
+            .map_err(db)?;
+        let mut docs = TenantDocs::default();
+        for row in &rows {
+            let kind: &str = row.get("kind");
+            let body: &[u8] = row.get("body");
+            let what = format!("{tenant} {kind}");
+            match kind {
+                ROOTS => docs.roots = decode(&what, body)?,
+                STATE => docs.state = Some(decode(&what, body)?),
+                FRESHNESS => docs.freshness = decode(&what, body)?,
+                SIGNALS => docs.signals = decode(&what, body)?,
+                SESSION_ENDS => docs.session_ends = decode(&what, body)?,
+                CERTIFICATES => docs.certificates = decode(&what, body)?,
+                WRAP_KEYS => docs.wrap_keys = decode(&what, body)?,
+                ANCHORS => docs.anchors = decode(&what, body)?,
+                _ => return Err(io::Error::new(io::ErrorKind::InvalidData, format!("{what}: unknown document"))),
+            }
+        }
+        let stored = !rows.is_empty() || {
+            let (any,): (bool,) = sqlx::query_as(
+                "select exists (select 1 from tenant_states where tenant = $1)
+                     or exists (select 1 from tenant_proposals where tenant = $1)
+                     or exists (select 1 from tenant_release_cosigns where tenant = $1)",
+            )
+            .bind(tenant.as_str())
+            .fetch_one(&pool)
+            .await
+            .map_err(db)?;
+            any
         };
-        Ok(Self { dir, docs })
+        Ok((Self { pool, tenant: tenant.clone(), docs }, stored))
     }
 
-    // Each setter writes its file first and updates memory only once the write succeeded.
-    pub fn set_roots(&mut self, roots: Vec<LoggedRoot>) -> io::Result<()> {
-        write_json(&self.dir.join(ROOTS), &roots)?;
+    async fn put_doc<T: Serialize>(&self, kind: &str, value: &T) -> io::Result<()> {
+        sqlx::query(
+            "insert into tenant_documents (tenant, kind, body) values ($1, $2, $3)
+               on conflict (tenant, kind) do update set body = excluded.body",
+        )
+        .bind(self.tenant.as_str())
+        .bind(kind)
+        .bind(encode(value)?)
+        .execute(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(())
+    }
+
+    // Each setter stores its document first and updates memory only once the write succeeded.
+    pub async fn set_roots(&mut self, roots: Vec<LoggedRoot>) -> io::Result<()> {
+        self.put_doc(ROOTS, &roots).await?;
         self.docs.roots = roots;
         Ok(())
     }
-    pub fn set_state(&mut self, state: SignedTenantState) -> io::Result<()> {
-        write_json(&self.dir.join(STATE), &state)?;
+    pub async fn set_state(&mut self, state: SignedTenantState) -> io::Result<()> {
+        self.put_doc(STATE, &state).await?;
         self.docs.state = Some(state);
         Ok(())
     }
-    pub fn set_freshness(&mut self, freshness: Freshness) -> io::Result<()> {
-        write_json(&self.dir.join(FRESHNESS), &freshness)?;
+    pub async fn set_freshness(&mut self, freshness: Freshness) -> io::Result<()> {
+        self.put_doc(FRESHNESS, &freshness).await?;
         self.docs.freshness = freshness;
         Ok(())
     }
-    pub fn set_signals(&mut self, signals: Vec<SignedSignal>) -> io::Result<()> {
-        write_json(&self.dir.join(SIGNALS), &signals)?;
+    pub async fn set_signals(&mut self, signals: Vec<SignedSignal>) -> io::Result<()> {
+        self.put_doc(SIGNALS, &signals).await?;
         self.docs.signals = signals;
         Ok(())
     }
-    pub fn set_session_ends(&mut self, ends: Vec<SignedSessionEnd>) -> io::Result<()> {
-        write_json(&self.dir.join(SESSION_ENDS), &ends)?;
+    pub async fn set_session_ends(&mut self, ends: Vec<SignedSessionEnd>) -> io::Result<()> {
+        self.put_doc(SESSION_ENDS, &ends).await?;
         self.docs.session_ends = ends;
         Ok(())
     }
-    pub fn set_certificates(&mut self, certificates: Vec<SignedServiceKeyCertificate>) -> io::Result<()> {
-        write_json(&self.dir.join(CERTIFICATES), &certificates)?;
+    pub async fn set_certificates(&mut self, certificates: Vec<SignedServiceKeyCertificate>) -> io::Result<()> {
+        self.put_doc(CERTIFICATES, &certificates).await?;
         self.docs.certificates = certificates;
         Ok(())
     }
-    pub fn set_wrap_keys(&mut self, keys: Vec<SignedTenantWrapKey>) -> io::Result<()> {
-        write_json(&self.dir.join(WRAP_KEYS), &keys)?;
+    pub async fn set_wrap_keys(&mut self, keys: Vec<SignedTenantWrapKey>) -> io::Result<()> {
+        self.put_doc(WRAP_KEYS, &keys).await?;
         self.docs.wrap_keys = keys;
         Ok(())
     }
-    pub fn set_anchors(&mut self, anchors: Vec<SignedTenantAnchor>) -> io::Result<()> {
-        write_json(&self.dir.join(ANCHORS), &anchors)?;
+    pub async fn set_anchors(&mut self, anchors: Vec<SignedTenantAnchor>) -> io::Result<()> {
+        self.put_doc(ANCHORS, &anchors).await?;
         self.docs.anchors = anchors;
         Ok(())
     }
 
-    fn cosign_path(&self, measurement: &Measurement) -> PathBuf {
-        self.dir.join("release-cosigns").join(format!("{measurement}.json"))
+    pub async fn release_cosign(&self, measurement: &Measurement) -> io::Result<Option<Signed<ReleaseCosign>>> {
+        let row = sqlx::query("select body from tenant_release_cosigns where tenant = $1 and measurement = $2")
+            .bind(self.tenant.as_str())
+            .bind(measurement.to_string())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(db)?;
+        row.map(|r| decode("release co-signature", r.get("body"))).transpose()
     }
-    pub fn release_cosign(&self, measurement: &Measurement) -> io::Result<Option<Signed<ReleaseCosign>>> {
-        read_json(&self.cosign_path(measurement))
-    }
-    pub fn put_release_cosign(&self, measurement: &Measurement, cosign: &Signed<ReleaseCosign>) -> io::Result<()> {
-        write_json(&self.cosign_path(measurement), cosign)
+    pub async fn put_release_cosign(
+        &self,
+        measurement: &Measurement,
+        cosign: &Signed<ReleaseCosign>,
+    ) -> io::Result<()> {
+        sqlx::query(
+            "insert into tenant_release_cosigns (tenant, measurement, body) values ($1, $2, $3)
+               on conflict (tenant, measurement) do update set body = excluded.body",
+        )
+        .bind(self.tenant.as_str())
+        .bind(measurement.to_string())
+        .bind(encode(cosign)?)
+        .execute(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(())
     }
 
-    fn state_path(&self, version: u64) -> PathBuf {
-        self.dir.join("states").join(format!("{version:020}.json"))
+    pub async fn logged_state(&self, version: u64) -> io::Result<Option<LoggedState>> {
+        let row = sqlx::query("select body from tenant_states where tenant = $1 and version = $2")
+            .bind(self.tenant.as_str())
+            .bind(version as i64)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(db)?;
+        row.map(|r| decode("logged state", r.get("body"))).transpose()
     }
-    pub fn logged_state(&self, version: u64) -> io::Result<Option<LoggedState>> {
-        read_json(&self.state_path(version))
-    }
-    pub fn put_logged_state(&self, state: &LoggedState) -> io::Result<()> {
-        write_json(&self.state_path(state.state.body.version), state)
+    pub async fn put_logged_state(&self, state: &LoggedState) -> io::Result<()> {
+        sqlx::query(
+            "insert into tenant_states (tenant, version, body) values ($1, $2, $3)
+               on conflict (tenant, version) do update set body = excluded.body",
+        )
+        .bind(self.tenant.as_str())
+        .bind(state.state.body.version as i64)
+        .bind(encode(state)?)
+        .execute(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(())
     }
     /// Logged states of a version above `after` (all without it), by version.
-    pub fn logged_states(&self, after: Option<u64>) -> io::Result<Vec<LoggedState>> {
-        let mut states: Vec<LoggedState> = read_all(&self.dir.join("states"))?
-            .into_iter()
-            .filter(|s: &LoggedState| after.is_none_or(|v| s.state.body.version > v))
-            .collect();
-        states.sort_by_key(|s| s.state.body.version);
-        Ok(states)
+    pub async fn logged_states(&self, after: Option<u64>) -> io::Result<Vec<LoggedState>> {
+        // Versions are below 2^63 (`put_logged_state` stores them as bigint), so -1 is "none".
+        let after = after.map_or(-1, |v| i64::try_from(v).unwrap_or(i64::MAX));
+        let rows = sqlx::query("select body from tenant_states where tenant = $1 and version > $2 order by version")
+            .bind(self.tenant.as_str())
+            .bind(after)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(db)?;
+        decode_all("logged state", &rows)
     }
 
-    /// `id` must be a proposal id (64 hex digits), which makes it a safe file name.
-    fn proposal_path(&self, id: &str) -> PathBuf {
-        debug_assert!(id.len() == 64 && id.bytes().all(|b| b.is_ascii_hexdigit()));
-        self.dir.join("proposals").join(format!("{id}.json"))
+    pub async fn proposal(&self, id: &str) -> io::Result<Option<Proposal>> {
+        let row = sqlx::query("select body from tenant_proposals where tenant = $1 and id = $2")
+            .bind(self.tenant.as_str())
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(db)?;
+        row.map(|r| decode("proposal", r.get("body"))).transpose()
     }
-    pub fn proposal(&self, id: &str) -> io::Result<Option<Proposal>> {
-        read_json(&self.proposal_path(id))
-    }
-    pub fn put_proposal(&self, proposal: &Proposal) -> io::Result<()> {
-        write_json(&self.proposal_path(&proposal.id), proposal)
+    pub async fn put_proposal(&self, proposal: &Proposal) -> io::Result<()> {
+        sqlx::query(
+            "insert into tenant_proposals (tenant, id, body) values ($1, $2, $3)
+               on conflict (tenant, id) do update set body = excluded.body",
+        )
+        .bind(self.tenant.as_str())
+        .bind(&proposal.id)
+        .bind(encode(proposal)?)
+        .execute(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(())
     }
     /// Whether there was one.
-    pub fn delete_proposal(&self, id: &str) -> io::Result<bool> {
-        match std::fs::remove_file(self.proposal_path(id)) {
-            Ok(()) => Ok(true),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
-            Err(e) => Err(e),
-        }
+    pub async fn delete_proposal(&self, id: &str) -> io::Result<bool> {
+        let done = sqlx::query("delete from tenant_proposals where tenant = $1 and id = $2")
+            .bind(self.tenant.as_str())
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(db)?;
+        Ok(done.rows_affected() > 0)
     }
     /// Every stored proposal, in no particular order.
-    pub fn proposals(&self) -> io::Result<Vec<Proposal>> {
-        read_all(&self.dir.join("proposals"))
+    pub async fn proposals(&self) -> io::Result<Vec<Proposal>> {
+        let rows = sqlx::query("select body from tenant_proposals where tenant = $1")
+            .bind(self.tenant.as_str())
+            .fetch_all(&self.pool)
+            .await
+            .map_err(db)?;
+        decode_all("proposal", &rows)
     }
-}
-
-/// Every `*.json` document in `dir` (none when it does not exist), in no particular order.
-fn read_all<T: DeserializeOwned>(dir: &Path) -> io::Result<Vec<T>> {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(e) => return Err(e),
-    };
-    let mut out = Vec::new();
-    for entry in entries {
-        let path = entry?.path();
-        if path.extension().is_some_and(|ext| ext == "json") {
-            if let Some(doc) = read_json(&path)? {
-                out.push(doc);
-            }
-        }
-    }
-    Ok(out)
 }
 
 pub struct Store {
-    dir: PathBuf,
+    pool: PgPool,
     tenants: Mutex<HashMap<TenantId, Arc<tokio::sync::Mutex<TenantEntry>>>>,
 }
 
+/// A platform as stored: its serde name.
+fn platform_name(platform: PlatformId) -> String {
+    match serde_json::to_value(platform) {
+        Ok(serde_json::Value::String(name)) => name,
+        _ => unreachable!("a PlatformId serializes as a string"),
+    }
+}
+
 impl Store {
-    /// Creates `dir` if needed.
-    pub fn open(dir: &Path) -> io::Result<Self> {
-        std::fs::create_dir_all(dir.join("tenants"))?;
-        std::fs::create_dir_all(dir.join("releases"))?;
-        Ok(Self { dir: dir.to_path_buf(), tenants: Mutex::new(HashMap::new()) })
+    /// On the pool whose migrations have run (`TelemetryDb::connect`).
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool, tenants: Mutex::new(HashMap::new()) }
     }
 
-    /// The tenant's entry, loaded from disk on first use. Lock it to read or write; writers
-    /// hold the lock until their files are written. A tenant with nothing stored gets an empty
-    /// entry that is not kept, so requests naming made-up tenants hold no memory; only
-    /// `create_tenant` writes to one.
-    pub fn tenant(&self, tenant: &TenantId) -> io::Result<Arc<tokio::sync::Mutex<TenantEntry>>> {
-        self.entry(tenant, false)
+    /// The tenant's entry, loaded on first use. Lock it to read or write; writers hold the lock
+    /// until their documents are written. A tenant with nothing stored gets an empty entry that
+    /// is not kept, so requests naming made-up tenants hold no memory; only `create_tenant`
+    /// writes to one.
+    pub async fn tenant(&self, tenant: &TenantId) -> io::Result<Arc<tokio::sync::Mutex<TenantEntry>>> {
+        self.entry(tenant, false).await
     }
 
     /// The tenant's entry, kept from now on even while nothing is stored: for writing its
     /// first document, serialized with any other writer.
-    pub fn create_tenant(&self, tenant: &TenantId) -> io::Result<Arc<tokio::sync::Mutex<TenantEntry>>> {
-        self.entry(tenant, true)
+    pub async fn create_tenant(&self, tenant: &TenantId) -> io::Result<Arc<tokio::sync::Mutex<TenantEntry>>> {
+        self.entry(tenant, true).await
     }
 
-    fn entry(&self, tenant: &TenantId, create: bool) -> io::Result<Arc<tokio::sync::Mutex<TenantEntry>>> {
+    fn cached(&self, tenant: &TenantId) -> Option<Arc<tokio::sync::Mutex<TenantEntry>>> {
+        self.tenants.lock().unwrap_or_else(|p| p.into_inner()).get(tenant).cloned()
+    }
+
+    async fn entry(&self, tenant: &TenantId, create: bool) -> io::Result<Arc<tokio::sync::Mutex<TenantEntry>>> {
+        if let Some(entry) = self.cached(tenant) {
+            return Ok(entry);
+        }
+        let (loaded, stored) = TenantEntry::load(self.pool.clone(), tenant).await?;
+        let entry = Arc::new(tokio::sync::Mutex::new(loaded));
+        if !(create || stored) {
+            return Ok(entry);
+        }
+        // Another request may have loaded it meanwhile: the first one kept is the only one
+        // written through, so later loads give way to it.
         let mut tenants = self.tenants.lock().unwrap_or_else(|p| p.into_inner());
-        if let Some(entry) = tenants.get(tenant) {
-            return Ok(entry.clone());
-        }
-        // Tenant names are `[a-z0-9-]`, so they are safe directory names.
-        let dir = self.dir.join("tenants").join(tenant.as_str());
-        let keep = create || dir.try_exists()?;
-        let entry = Arc::new(tokio::sync::Mutex::new(TenantEntry::load(dir)?));
-        if keep {
-            tenants.insert(tenant.clone(), entry.clone());
-        }
-        Ok(entry)
+        Ok(tenants.entry(tenant.clone()).or_insert(entry).clone())
     }
 
-    fn platform_dir(&self, kind: &str, platform: PlatformId) -> PathBuf {
-        let platform = match serde_json::to_value(platform) {
-            Ok(serde_json::Value::String(name)) => name,
-            _ => unreachable!("a PlatformId serializes as a string"),
-        };
-        self.dir.join(kind).join(platform)
+    pub async fn release(
+        &self,
+        platform: PlatformId,
+        measurement: &Measurement,
+    ) -> io::Result<Option<ReleaseEvidence>> {
+        let row = sqlx::query("select body from releases where platform = $1 and measurement = $2")
+            .bind(platform_name(platform))
+            .bind(measurement.to_string())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(db)?;
+        row.map(|r| decode("release evidence", r.get("body"))).transpose()
     }
-    fn release_path(&self, platform: PlatformId, measurement: &Measurement) -> PathBuf {
-        self.platform_dir("releases", platform).join(format!("{measurement}.json"))
-    }
-    pub fn release(&self, platform: PlatformId, measurement: &Measurement) -> io::Result<Option<ReleaseEvidence>> {
-        read_json(&self.release_path(platform, measurement))
-    }
-    pub fn put_release(
+    pub async fn put_release(
         &self,
         platform: PlatformId,
         measurement: &Measurement,
         evidence: &ReleaseEvidence,
     ) -> io::Result<()> {
-        write_json(&self.release_path(platform, measurement), evidence)
+        sqlx::query(
+            "insert into releases (platform, measurement, body) values ($1, $2, $3)
+               on conflict (platform, measurement) do update set body = excluded.body",
+        )
+        .bind(platform_name(platform))
+        .bind(measurement.to_string())
+        .bind(encode(evidence)?)
+        .execute(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(())
     }
     /// Every release evidence stored for `platform`.
-    pub fn releases(&self, platform: PlatformId) -> io::Result<Vec<ReleaseEvidence>> {
-        let dir = self.platform_dir("releases", platform);
-        let entries = match std::fs::read_dir(&dir) {
-            Ok(entries) => entries,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(e) => return Err(e),
-        };
-        let mut out = Vec::new();
-        for entry in entries {
-            let path = entry?.path();
-            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default();
-            if name.starts_with('.') || !name.ends_with(".json") {
-                continue;
-            }
-            out.extend(read_json(&path)?);
-        }
-        Ok(out)
+    pub async fn releases(&self, platform: PlatformId) -> io::Result<Vec<ReleaseEvidence>> {
+        let rows = sqlx::query("select body from releases where platform = $1")
+            .bind(platform_name(platform))
+            .fetch_all(&self.pool)
+            .await
+            .map_err(db)?;
+        decode_all("release evidence", &rows)
     }
-    fn release_template_path(&self, platform: PlatformId, measurement: &Measurement) -> PathBuf {
-        self.platform_dir("release-templates", platform).join(format!("{measurement}.json"))
-    }
-    pub fn release_template(
+    pub async fn release_template(
         &self,
         platform: PlatformId,
         measurement: &Measurement,
     ) -> io::Result<Option<serde_json::Value>> {
-        read_json(&self.release_template_path(platform, measurement))
+        let row = sqlx::query("select body from release_templates where platform = $1 and measurement = $2")
+            .bind(platform_name(platform))
+            .bind(measurement.to_string())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(db)?;
+        row.map(|r| decode("release template", r.get("body"))).transpose()
     }
-    pub fn put_release_template(
+    pub async fn put_release_template(
         &self,
         platform: PlatformId,
         measurement: &Measurement,
         template: &serde_json::Value,
     ) -> io::Result<()> {
-        write_json(&self.release_template_path(platform, measurement), template)
+        sqlx::query(
+            "insert into release_templates (platform, measurement, body) values ($1, $2, $3)
+               on conflict (platform, measurement) do update set body = excluded.body",
+        )
+        .bind(platform_name(platform))
+        .bind(measurement.to_string())
+        .bind(encode(template)?)
+        .execute(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(())
     }
-}
-
-fn read_json<T: DeserializeOwned>(path: &Path) -> io::Result<Option<T>> {
-    match std::fs::read(path) {
-        Ok(bytes) => serde_json::from_slice(&bytes)
-            .map(Some)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("{}: {e}", path.display()))),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(e),
-    }
-}
-
-/// Distinguishes temporary files of concurrent writers.
-static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-fn write_json<T: Serialize>(path: &Path, value: &T) -> io::Result<()> {
-    let bytes = serde_json::to_vec(value).map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))?;
-    write_atomic(path, &bytes)
-}
-
-fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    let dir = path.parent().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "no parent directory"))?;
-    std::fs::create_dir_all(dir)?;
-    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("file");
-    let tmp = dir.join(format!(".{name}.{}.{}.tmp", std::process::id(), TMP_COUNTER.fetch_add(1, Ordering::Relaxed)));
-    let result = (|| {
-        let mut file = std::fs::File::create(&tmp)?;
-        file.write_all(bytes)?;
-        file.sync_all()?;
-        std::fs::rename(&tmp, path)?;
-        std::fs::File::open(dir)?.sync_all()
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(&tmp);
-    }
-    result
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::telemetry_db::test_support;
     use super::*;
 
-    #[test]
-    fn writes_replace_whole_files_and_leave_no_temporaries() {
-        let dir = std::env::temp_dir().join(format!("seal-control-store-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        let path = dir.join("a").join("doc.json");
-        write_json(&path, &vec![1, 2, 3]).unwrap();
-        write_json(&path, &vec![4]).unwrap();
-        assert_eq!(read_json::<Vec<u8>>(&path).unwrap(), Some(vec![4]));
-        let names: Vec<_> = std::fs::read_dir(dir.join("a")).unwrap().map(|e| e.unwrap().file_name()).collect();
-        assert_eq!(names, vec![std::ffi::OsString::from("doc.json")]);
-        assert_eq!(read_json::<Vec<u8>>(&dir.join("missing.json")).unwrap(), None);
-        std::fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[test]
-    fn only_stored_or_created_tenants_are_kept_in_memory() {
-        let dir = std::env::temp_dir().join(format!("seal-control-store-tenants-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        let store = Store::open(&dir).unwrap();
+    #[tokio::test]
+    async fn only_stored_or_created_tenants_are_kept_in_memory() {
+        let pool = test_support::db(None).await.pool();
+        let store = Store::new(pool.clone());
         let cached = || store.tenants.lock().unwrap().len();
         for n in 0..100 {
-            store.tenant(&TenantId::new(format!("ghost-{n}")).unwrap()).unwrap();
+            store.tenant(&TenantId::new(format!("ghost-{n}")).unwrap()).await.unwrap();
         }
         assert_eq!(cached(), 0, "made-up tenants hold no memory");
-        assert!(!dir.join("tenants").join("ghost-0").exists(), "nor disk");
+        let (rows,): (i64,) = sqlx::query_as("select count(*) from tenant_documents").fetch_one(&pool).await.unwrap();
+        assert_eq!(rows, 0, "nor rows");
 
         let acme = TenantId::new("acme").unwrap();
-        let created = store.create_tenant(&acme).unwrap();
-        assert!(Arc::ptr_eq(&created, &store.tenant(&acme).unwrap()), "one lock for its writers");
+        let created = store.create_tenant(&acme).await.unwrap();
+        assert!(Arc::ptr_eq(&created, &store.tenant(&acme).await.unwrap()), "one lock for its writers");
         assert_eq!(cached(), 1);
 
         let stored = TenantId::new("stored").unwrap();
-        store.tenant(&stored).unwrap().try_lock().unwrap().set_roots(Vec::new()).unwrap();
-        let reopened = Store::open(&dir).unwrap();
-        reopened.tenant(&stored).unwrap();
-        assert_eq!(reopened.tenants.lock().unwrap().len(), 1, "a tenant on disk is kept once loaded");
-        std::fs::remove_dir_all(&dir).unwrap();
+        store.tenant(&stored).await.unwrap().try_lock().unwrap().set_roots(Vec::new()).await.unwrap();
+        let reopened = Store::new(pool.clone());
+        reopened.tenant(&stored).await.unwrap();
+        assert_eq!(reopened.tenants.lock().unwrap().len(), 1, "a stored tenant is kept once loaded");
+
+        // A tenant whose only document is a proposal is stored too.
+        let proposing = TenantId::new("proposing").unwrap();
+        sqlx::query("insert into tenant_proposals (tenant, id, body) values ($1, 'x', '{}')")
+            .bind(proposing.as_str())
+            .execute(&pool)
+            .await
+            .unwrap();
+        reopened.tenant(&proposing).await.unwrap();
+        assert_eq!(reopened.tenants.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn documents_round_trip_and_replace() {
+        let pool = test_support::db(None).await.pool();
+        let store = Store::new(pool.clone());
+        let acme = TenantId::new("acme").unwrap();
+        let entry = store.create_tenant(&acme).await.unwrap();
+        let mut e = entry.lock().await;
+        e.set_freshness(Freshness::default()).await.unwrap();
+        e.set_signals(Vec::new()).await.unwrap();
+        e.set_signals(Vec::new()).await.unwrap();
+        assert!(e.logged_states(None).await.unwrap().is_empty());
+        assert_eq!(e.proposal(&"0".repeat(64)).await.unwrap().map(|p| p.id), None);
+        assert!(!e.delete_proposal(&"0".repeat(64)).await.unwrap());
+        drop(e);
+        let (kinds,): (i64,) = sqlx::query_as("select count(*) from tenant_documents where tenant = 'acme'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(kinds, 2, "one row per document, replaced in place");
+
+        let template = serde_json::json!({ "a": [1, 2, 3] });
+        let m: Measurement = "00".repeat(48).parse().unwrap();
+        store.put_release_template(PlatformId::Sim, &m, &template).await.unwrap();
+        assert_eq!(store.release_template(PlatformId::Sim, &m).await.unwrap(), Some(template));
+        assert!(store.releases(PlatformId::Sim).await.unwrap().is_empty());
     }
 }

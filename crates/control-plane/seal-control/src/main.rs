@@ -28,9 +28,10 @@ fn connector(config: &Config) -> Result<Arc<dyn UpstreamConnector>, String> {
     Ok(Arc::new(BakedRootsConnector::new(dialer)))
 }
 
-async fn telemetry_db(config: &Config) -> Result<server::telemetry_db::TelemetryDb, String> {
+/// The one database control keeps everything in; connecting runs its migrations.
+async fn database(config: &Config) -> Result<server::telemetry_db::TelemetryDb, String> {
     let url = std::env::var(server::config::DATABASE_URL_ENV)
-        .map_err(|_| format!("no telemetry database: set {}", server::config::DATABASE_URL_ENV))?;
+        .map_err(|_| format!("no database: set {}", server::config::DATABASE_URL_ENV))?;
     let entra = match std::env::var(server::config::DATABASE_AUTH_ENV).as_deref() {
         Ok("entra") => true,
         Err(_) => false,
@@ -38,7 +39,7 @@ async fn telemetry_db(config: &Config) -> Result<server::telemetry_db::Telemetry
     };
     server::telemetry_db::TelemetryDb::connect(&url, config.telemetry_retention_days, entra)
         .await
-        .map_err(|e| format!("telemetry database: {e}"))
+        .map_err(|e| format!("database: {e}"))
 }
 
 async fn run(config: Config) -> Result<(), String> {
@@ -58,10 +59,9 @@ async fn run(config: Config) -> Result<(), String> {
         console_origin: config.console.as_ref().map(|c| c.origin.clone()),
         checkpoint_cache_secs: config.checkpoint_cache_secs(),
     };
-    let store = server::store::Store::open(&config.data_dir)
-        .map_err(|e| format!("cannot open {}: {e}", config.data_dir.display()))?;
     let clock = server::system_clock();
-    let telemetry = Arc::new(telemetry_db(&config).await?);
+    let telemetry = Arc::new(database(&config).await?);
+    let store = server::store::Store::new(telemetry.pool());
     telemetry.maintain(clock()).await.map_err(|e| format!("telemetry database: {e}"))?;
     let upkeep = (telemetry.clone(), clock.clone());
     tokio::spawn(async move {

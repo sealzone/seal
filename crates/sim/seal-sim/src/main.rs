@@ -76,7 +76,7 @@ enum Command {
         #[arg(long)]
         record: Option<PathBuf>,
     },
-    /// Start the control plane's telemetry database in Docker or Podman; prints its URL as `destination`
+    /// Start the control plane's database in Docker or Podman; prints its URL as `destination`
     ControlDb,
     /// Start a Postgres upstream in Docker or Podman with the password read from stdin
     Postgres {

@@ -154,8 +154,8 @@ wait "$ENCLAVE_PID" || true
 grep -h "shutting down" "$WORK/logs/enclave.log"
 
 bold "Telemetry, verified with the certificate the enclave posted at boot"
-# The control plane does not serve certificates yet: take them from its store.
-cp "$D/control/tenants/$TENANT/service-key-certificates.json" "$WORK/certificates.json"
+curl -fsS --cacert "$D/ca.pem" "https://localhost:$(port control)/v1/tenants/$TENANT/service-key-certificates" \
+    > "$WORK/certificates.json"
 run "$SEAL" telemetry --key-file "$ADMIN_KEY" --certificates "$WORK/certificates.json"
 
 bold "Done"

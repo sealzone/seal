@@ -14,7 +14,7 @@ from world import SECRET, World, get
 
 def test_telemetry_is_complete_and_matches_kept_receipts(world: World) -> None:
     receipts = world.path("receipts.jsonl")
-    certificates = str(world.path("control/tenants/acme/service-key-certificates.json"))
+    certificates = str(world.certificates_file())
 
     # Things worth recording, each with a receipt where the SDK or the CLI hands one out.
     blob = world.seal_with_cli(SECRET, world.upstream_url, "--receipt-file", str(receipts))

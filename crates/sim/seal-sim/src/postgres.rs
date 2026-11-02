@@ -56,8 +56,8 @@ pub async fn start(sim: &Sim, password: &str) -> anyhow::Result<Postgres> {
     Ok(pg)
 }
 
-/// The control plane's telemetry database, in a container: returns it and its URL. Plain and
-/// published on loopback only: it holds a throwaway run's telemetry.
+/// The control plane's database, in a container: returns it and its URL. Plain and published
+/// on loopback only: it holds a throwaway run's documents and telemetry.
 pub async fn start_control_db() -> anyhow::Result<(Container, String)> {
     let env = [("POSTGRES_PASSWORD", "sim"), ("POSTGRES_DB", "control")];
     let db = container::start(IMAGE, &env, "bash", "exec docker-entrypoint.sh postgres", 5432)?;

@@ -55,7 +55,7 @@ def test_a_hosted_replica_serves_idles_out_and_clients_wait_for_it(world: World)
     # Telemetry of both hosted boots is complete: each idle exit sends its last batch.
     assert world.procs["hosted-2"].wait(timeout=RESTARTED_IDLE_SECS + 30) == 0
     world.stop_replica(1)
-    certificates = str(world.path("control/tenants/acme/service-key-certificates.json"))
+    certificates = str(world.certificates_file())
     out = world.admin("telemetry", "--certificates", certificates)
     streams = {line.split()[1].split("#")[0] for line in out.splitlines() if len(line.split()) > 1}
     assert len(streams) == 3, f"the tenant's replica and two hosted boots:\n{out}"

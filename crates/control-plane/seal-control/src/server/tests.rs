@@ -205,7 +205,7 @@ impl Upstreams for DevUpstreams {
     }
 }
 
-/// A server on a loopback port over a fresh data directory, with a tenant whose root v1 and
+/// A server on a loopback port over a fresh database, with a tenant whose root v1 and
 /// state 1 are logged (not yet stored).
 struct Env {
     up: Arc<DevUpstreams>,
@@ -245,7 +245,6 @@ fn release_trust(up: &DevUpstreams) -> seal_verify::ReleaseTrust {
 
 fn app(
     up: Arc<DevUpstreams>,
-    dir: &std::path::Path,
     telemetry: Arc<telemetry_db::TelemetryDb>,
     offset: Arc<AtomicI64>,
     registrar: bool,
@@ -262,7 +261,7 @@ fn app(
         checkpoint_cache_secs: CHECKPOINT_CACHE_SECS,
     };
     let clock: Clock = Arc::new(move || wall_clock().saturating_add_signed(offset.load(Ordering::SeqCst)));
-    Arc::new(App::new(settings, Store::open(&dir.join("data")).unwrap(), telemetry, up, clock).unwrap())
+    Arc::new(App::new(settings, Store::new(telemetry.pool()), telemetry, up, clock).unwrap())
 }
 
 const RELEASE: u8 = 40;
@@ -345,17 +344,16 @@ impl Env {
         });
         let offset = Arc::new(AtomicI64::new(0));
         let telemetry = Arc::new(telemetry_db::test_support::db(None).await);
-        let addr = spawn(app(up.clone(), &dir, telemetry.clone(), offset.clone(), registrar)).await;
+        let addr = spawn(app(up.clone(), telemetry.clone(), offset.clone(), registrar)).await;
         let root_id = root_id(&v1.root.body);
         let released = pmk().release_service(&acme(), &root_id, ServiceKeyVersion(1));
         let keys = ServiceKeys::from_released(PlatformId::Sim, &released).unwrap();
         Self { up, telemetry, addr, dir, offset, registrar, v1, s1, keys }
     }
 
-    /// Restarts the server on the same data directory.
+    /// Restarts the server on the same database.
     async fn restart(&mut self) {
-        self.addr =
-            spawn(app(self.up.clone(), &self.dir, self.telemetry.clone(), self.offset.clone(), self.registrar)).await;
+        self.addr = spawn(app(self.up.clone(), self.telemetry.clone(), self.offset.clone(), self.registrar)).await;
     }
 
     fn advance(&self, secs: i64) {
@@ -1172,7 +1170,7 @@ async fn the_client_round_trips_every_endpoint_over_tls() {
     };
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    let server = app(env.up.clone(), &env.dir.join("tls"), env.telemetry.clone(), env.offset.clone(), true);
+    let server = app(env.up.clone(), env.telemetry.clone(), env.offset.clone(), true);
     let listener = tls::TlsListener::new(listener, identity.server_config().unwrap()).unwrap();
     tokio::spawn(async move { axum::serve(listener, router(server)).await });
 
