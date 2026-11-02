@@ -12,6 +12,10 @@ repository.workspace = true
 name = "seal_control"
 
 [features]
+# The server binary and its telemetry database. Library users (the enclave links the client) take
+# no default features, so nothing here reaches a TEE (scripts/check-deps.sh).
+default = ["server"]
+server = ["dep:sqlx"]
 # Local runs: trust extra roots for the log and guardians, and reach them over plain HTTP on
 # loopback. Never in production builds.
 sim = ["seal-net/sim", "seal-attest/sim"]
@@ -43,6 +47,8 @@ sha2.workspace = true
 subtle.workspace = true
 hyper-util.workspace = true
 http-body-util.workspace = true
+# Server only: telemetry in Postgres. Never in a TEE image: see the `server` feature.
+sqlx = { workspace = true, optional = true }
 
 [dev-dependencies]
 seal-tlog = { workspace = true, features = ["dev"] }
@@ -52,3 +58,4 @@ base64.workspace = true
 [[bin]]
 name = "seal-control"
 path = "src/main.rs"
+required-features = ["server"]

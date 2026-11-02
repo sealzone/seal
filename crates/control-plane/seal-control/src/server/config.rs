@@ -23,6 +23,12 @@
 //!
 //! - `write_token`: the bearer token admin writes need; `SEAL_CONTROL_WRITE_TOKEN` in the
 //!   environment takes precedence. At least 16 characters.
+//! - `SEAL_CONTROL_DATABASE_URL` in the environment: Postgres for telemetry
+//!   (`telemetry_db`), `sslmode=verify-full` in production. Without it telemetry stays in
+//!   `data_dir`, and nothing counts it: for local runs. `SEAL_CONTROL_DATABASE_AUTH=entra` signs
+//!   in with the VM's managed identity's Entra token instead of a password in the URL.
+//! - `telemetry_retention_days`: optional, with the database; batches and hourly counts older
+//!   than this, by whole weeks, are deleted. Without it nothing is. It applies to every tenant.
 //! - `tls`: PEM files the server presents, reread when they change (`tls::ReloadingCert`), so a
 //!   certificate renewed next to the server takes over without a restart. Without it the
 //!   server speaks plain HTTP, for a TLS-terminating proxy in front.
@@ -49,6 +55,8 @@ use serde::Deserialize;
 use seal_proto::{PlatformId, PublicKey};
 
 pub const WRITE_TOKEN_ENV: &str = "SEAL_CONTROL_WRITE_TOKEN";
+pub const DATABASE_URL_ENV: &str = "SEAL_CONTROL_DATABASE_URL";
+pub const DATABASE_AUTH_ENV: &str = "SEAL_CONTROL_DATABASE_AUTH";
 const MIN_WRITE_TOKEN_LEN: usize = 16;
 
 #[derive(Debug, Deserialize)]
@@ -58,6 +66,8 @@ pub struct Config {
     pub data_dir: PathBuf,
     #[serde(default)]
     pub write_token: Option<String>,
+    #[serde(default)]
+    pub telemetry_retention_days: Option<u32>,
     #[serde(default)]
     pub tls: Option<TlsFiles>,
     pub log: LogConfig,

@@ -34,7 +34,7 @@ seal-authz = { path = "crates/enclave/seal-authz", version = "0.2.7" }
 seal-integrity = { path = "crates/enclave/seal-integrity", version = "0.2.7" }
 seal-cloud = { path = "crates/enclave/seal-cloud", version = "0.2.7" }
 seal-guardian = { path = "crates/guardian/seal-guardian", version = "0.2.7" }
-seal-control = { path = "crates/control-plane/seal-control", version = "0.2.7", package = "sealzone-control" }
+seal-control = { path = "crates/control-plane/seal-control", version = "0.2.7", package = "sealzone-control", default-features = false }
 seal-adapter = { path = "crates/enclave/adapters/seal-adapter", version = "0.2.7" }
 seal-adapter-http = { path = "crates/enclave/adapters/seal-adapter-http", version = "0.2.7" }
 seal-adapter-pg = { path = "crates/enclave/adapters/seal-adapter-pg", version = "0.2.7" }
@@ -95,6 +95,8 @@ webpki-roots = "1"
 hyper = { version = "1", features = ["http1", "client", "server"] }
 hyper-util = { version = "0.1", features = ["tokio", "http1", "client", "client-legacy", "server"] }
 http-body-util = "0.1"
+# The control plane's telemetry database. Not in a TEE image (scripts/check-deps.sh).
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls-ring-webpki", "postgres", "migrate", "macros", "derive"] }
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio"] }
 postgres-protocol = "0.6"
 

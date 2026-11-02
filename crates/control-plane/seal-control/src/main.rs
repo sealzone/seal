@@ -2,7 +2,11 @@
 //!
 //! ```text
 //! seal-control --config FILE
+//! seal-control --config FILE import-telemetry
 //! ```
+//!
+//! `import-telemetry` reads the batch files under `data_dir` into the telemetry database, once;
+//! running it again changes nothing.
 //!
 //! The configuration is described in `server::config`.
 
@@ -28,6 +32,26 @@ fn connector(config: &Config) -> Result<Arc<dyn UpstreamConnector>, String> {
     Ok(Arc::new(BakedRootsConnector::new(dialer)))
 }
 
+async fn telemetry_db(config: &Config) -> Result<Option<server::telemetry_db::TelemetryDb>, String> {
+    let Ok(url) = std::env::var(server::config::DATABASE_URL_ENV) else { return Ok(None) };
+    let entra = match std::env::var(server::config::DATABASE_AUTH_ENV).as_deref() {
+        Ok("entra") => true,
+        Err(_) => false,
+        Ok(other) => return Err(format!("{}: unknown value {other}", server::config::DATABASE_AUTH_ENV)),
+    };
+    let db = server::telemetry_db::TelemetryDb::connect(&url, config.telemetry_retention_days, entra)
+        .await
+        .map_err(|e| format!("telemetry database: {e}"))?;
+    Ok(Some(db))
+}
+
+async fn import_telemetry(config: Config) -> Result<(), String> {
+    let db = telemetry_db(&config).await?.ok_or_else(|| format!("set {}", server::config::DATABASE_URL_ENV))?;
+    let (new, failed) = db.import_files(&config.data_dir).await.map_err(|e| format!("telemetry database: {e}"))?;
+    println!("{new} batches imported, {failed} files could not be read");
+    Ok(())
+}
+
 async fn run(config: Config) -> Result<(), String> {
     let https = Arc::new(HttpsClient::new(connector(&config)?));
     let upstreams = server::upstream::HttpUpstreams::new(
@@ -47,7 +71,22 @@ async fn run(config: Config) -> Result<(), String> {
     };
     let store = server::store::Store::open(&config.data_dir)
         .map_err(|e| format!("cannot open {}: {e}", config.data_dir.display()))?;
-    let app = Arc::new(server::App::new(settings, store, Arc::new(upstreams), server::system_clock())?);
+    let clock = server::system_clock();
+    let mut app = server::App::new(settings, store, Arc::new(upstreams), clock.clone())?;
+    if let Some(db) = telemetry_db(&config).await? {
+        let db = Arc::new(db);
+        db.maintain(clock()).await.map_err(|e| format!("telemetry database: {e}"))?;
+        app = app.with_telemetry_db(db.clone());
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(3_600)).await;
+                if let Err(e) = db.maintain(clock()).await {
+                    tracing::warn!(error = %e, "telemetry database upkeep");
+                }
+            }
+        });
+    }
+    let app = Arc::new(app);
     let tls = match &config.tls {
         Some(files) => {
             let cert = server::tls::ReloadingCert::load(&files.cert_chain, &files.private_key)?;
@@ -70,10 +109,11 @@ async fn run(config: Config) -> Result<(), String> {
 #[tokio::main]
 async fn main() {
     let mut args = std::env::args().skip(1);
-    let path = match (args.next().as_deref(), args.next(), args.next()) {
-        (Some("--config"), Some(path), None) => path,
+    let (path, import) = match (args.next().as_deref(), args.next(), args.next().as_deref(), args.next()) {
+        (Some("--config"), Some(path), None, None) => (path, false),
+        (Some("--config"), Some(path), Some("import-telemetry"), None) => (path, true),
         _ => {
-            eprintln!("usage: seal-control --config FILE");
+            eprintln!("usage: seal-control --config FILE [import-telemetry]");
             std::process::exit(2);
         }
     };
@@ -81,7 +121,8 @@ async fn main() {
         eprintln!("seal-control: {e}");
         std::process::exit(2);
     });
-    if let Err(e) = run(config).await {
+    let result = if import { import_telemetry(config).await } else { run(config).await };
+    if let Err(e) = result {
         eprintln!("seal-control: {e}");
         std::process::exit(1);
     }

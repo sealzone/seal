@@ -4,7 +4,7 @@
 use std::time::{Duration, Instant};
 
 use super::*;
-use crate::server::store;
+use crate::server::{store, telemetry_db};
 use seal_control::client::TelemetryOrder;
 
 /// A batch of `entries` entries, one second apart from `at`.
@@ -340,4 +340,105 @@ async fn telemetry_page_benchmark() {
     let start = Instant::now();
     entry.lock().await.telemetry_page(0, store::TelemetryOrder::Stream { after: None }, 1).unwrap();
     println!("index rebuild in a fresh store: {:?}", start.elapsed());
+}
+
+impl Env {
+    /// Restarts the server with telemetry in `db`.
+    async fn use_telemetry_db(&mut self, db: telemetry_db::TelemetryDb) {
+        let app = app(self.up.clone(), &self.dir, self.offset.clone(), self.registrar);
+        let app = Arc::into_inner(app).unwrap().with_telemetry_db(Arc::new(db));
+        self.addr = spawn(Arc::new(app)).await;
+    }
+}
+
+/// Readers cannot tell the two stores apart: the same bytes, pages and hints.
+#[tokio::test]
+async fn pages_from_the_database_are_what_files_give() {
+    let Some(db) = telemetry_db::test_support::db(None).await else { return };
+    let files = Env::new().await;
+    files.ready().await;
+    let mut pg = Env::new().await;
+    pg.ready().await;
+    pg.use_telemetry_db(db).await;
+    let mut posted = 0;
+    for s in 0..12u32 {
+        for q in 0..u64::from(1 + s * 7 % 11) {
+            let entries = if (s + q as u32).is_multiple_of(9) { 2_000 } else { 1 + (s * 31 + q as u32 * 17) % 60 };
+            let at = if s == 5 { 5_000 - q * 100 } else { 1_000 + u64::from(s) * 13 + q * 20 };
+            let batch = files
+                .telemetry_signer()
+                .sign_into(TELEMETRY_BATCH_LABEL, wide_batch(stream_id(s * 7_919 % 1_000), q, at, entries));
+            assert_eq!(files.post("/v1/tenants/acme/telemetry", &batch).await, 204);
+            assert_eq!(pg.post("/v1/tenants/acme/telemetry", &batch).await, 204);
+            assert_eq!(pg.post("/v1/tenants/acme/telemetry", &batch).await, 204, "a retry");
+            posted += 1;
+        }
+    }
+    assert!(posted > 40);
+    for query in ["limit=7", "order=time&limit=7", "since=1100&limit=5", "since=1100&order=time&limit=5", "limit=1000"]
+    {
+        let (want, got) = (walk(&files, query).await, walk(&pg, query).await);
+        assert_eq!(want.len(), got.len(), "{query}: pages");
+        for ((want_body, want_headers), (got_body, got_headers)) in want.iter().zip(&got) {
+            assert_eq!(want_body, got_body, "{query}");
+            for name in [TELEMETRY_REMAINING_BATCHES, TELEMETRY_NEXT] {
+                assert_eq!(header(want_headers, name), header(got_headers, name), "{query}: {name}");
+            }
+            assert_eq!(header(got_headers, "content-type").as_deref(), Some("application/json"));
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_batch_needs_a_certified_key_and_keeps_its_place_in_the_database() {
+    let Some(db) = telemetry_db::test_support::db(None).await else { return };
+    let mut env = Env::new().await;
+    env.ready().await;
+    env.use_telemetry_db(db).await;
+    let sign = |b: TelemetryBatch| env.telemetry_signer().sign_into(TELEMETRY_BATCH_LABEL, b);
+    let good = sign(wide_batch(stream_id(1), 0, 1_000, 2));
+    assert_eq!(env.post("/v1/tenants/acme/telemetry", &good).await, 204);
+    assert_eq!(env.post("/v1/tenants/acme/telemetry", &sign(wide_batch(stream_id(1), 0, 1_000, 3))).await, 409);
+    let forged: SignedTelemetryBatch =
+        key(STRANGER).sign_into(TELEMETRY_BATCH_LABEL, wide_batch(stream_id(2), 0, 1_000, 2));
+    assert_eq!(env.post("/v1/tenants/acme/telemetry", &forged).await, 403);
+    let (_, headers, _) = env.send("GET", "/v1/tenants/acme/telemetry", Auth::Key(V1_ADMINS[0]), &[], vec![]).await;
+    assert_eq!(header(&headers, TELEMETRY_REMAINING_BATCHES).as_deref(), Some("1"));
+}
+
+#[tokio::test]
+async fn counts_are_for_members_and_need_a_database() {
+    let plain = Env::new().await;
+    plain.ready().await;
+    let usage = "/v1/tenants/acme/telemetry/usage?from=0&to=100000";
+    assert_eq!(plain.get_as(usage, Auth::Key(V1_ADMINS[0])).await.0, 404, "files count nothing");
+    let Some(db) = telemetry_db::test_support::db(None).await else { return };
+    let mut env = Env::new().await;
+    env.ready().await;
+    env.use_telemetry_db(db).await;
+    let batch = env.telemetry_signer().sign_into(TELEMETRY_BATCH_LABEL, wide_batch(stream_id(1), 0, 90_000, 3));
+    assert_eq!(env.post("/v1/tenants/acme/telemetry", &batch).await, 204);
+    for path in [usage, "/v1/tenants/acme/telemetry/metrics?from=0&to=100000", "/v1/tenants/acme/telemetry/gaps"] {
+        let status = env.get_as(path, Auth::None).await.0;
+        assert!(status == 401 || status == 403, "{path}: anonymous got {status}");
+    }
+    // How the console reads them.
+    let member = Auth::Header(control_token(&console_key(), "acme", env.root_id(), "read", env.now()));
+    assert_eq!(env.get_as(usage, member).await.0, 200);
+    let admin = || Auth::Key(V1_ADMINS[0]);
+    let (status, body) = env.get_as(usage, admin()).await;
+    assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
+    let days: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        days,
+        serde_json::json!([{ "day": "1970-01-02", "requests": 0, "sessions": 0, "entries": 3, "sealed_entries": 0, "active_secrets": 0 }])
+    );
+    let (status, body) =
+        env.get_as("/v1/tenants/acme/telemetry/metrics?from=0&to=100000&group_by=event", admin()).await;
+    assert_eq!(status, 200);
+    let points: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(points, serde_json::json!([{ "hour": "1970-01-02T01:00:00Z", "key": "dropped", "count": 3 }]));
+    assert_eq!(env.get_as("/v1/tenants/acme/telemetry/metrics?from=0&to=1&group_by=x", admin()).await.0, 400);
+    let (status, body) = env.get_as("/v1/tenants/acme/telemetry/gaps", admin()).await;
+    assert_eq!((status, body.as_slice()), (200, b"[]".as_slice()));
 }

@@ -42,6 +42,7 @@ pub mod auth;
 pub mod config;
 pub mod cors;
 pub mod store;
+pub mod telemetry_db;
 #[cfg(test)]
 mod tests;
 pub mod tls;
@@ -50,6 +51,7 @@ pub mod upstream;
 
 use auth::{Asked, Chain, Rule};
 use store::{Freshness, Store, TenantDocs, TenantEntry};
+use telemetry_db::TelemetryDb;
 use token::ConsoleKeys;
 use upstream::{Appended, Upstreams};
 
@@ -126,6 +128,13 @@ impl ApiError {
     }
 }
 
+impl From<telemetry_db::Error> for ApiError {
+    fn from(e: telemetry_db::Error) -> Self {
+        tracing::error!(error = %e, "telemetry database");
+        Self::new(StatusCode::INTERNAL_SERVER_ERROR, "storage error")
+    }
+}
+
 impl From<std::io::Error> for ApiError {
     fn from(e: std::io::Error) -> Self {
         tracing::error!(error = %e, "storage");
@@ -164,6 +173,8 @@ type WrapKeyId = (PlatformId, TenantId, TenantRootId, TenantKeyVersion);
 
 pub struct App {
     store: Store,
+    /// Where telemetry lives when set; otherwise in `store`'s files.
+    telemetry_db: Option<Arc<TelemetryDb>>,
     upstreams: Arc<dyn Upstreams>,
     /// SHA-256 of the write token, so the comparison is constant-time over equal lengths.
     write_token: [u8; 32],
@@ -189,6 +200,7 @@ impl App {
         };
         Ok(Self {
             store,
+            telemetry_db: None,
             upstreams,
             write_token: Sha256::digest(settings.write_token.as_bytes()).into(),
             log: settings.log,
@@ -202,6 +214,12 @@ impl App {
             checkpoint: Mutex::new(None),
             wrap_key_misses: Mutex::new(HashMap::new()),
         })
+    }
+
+    /// Keeps telemetry in `db` instead of files.
+    pub fn with_telemetry_db(mut self, db: Arc<TelemetryDb>) -> Self {
+        self.telemetry_db = Some(db);
+        self
     }
 
     fn now(&self) -> UnixTime {
@@ -411,6 +429,9 @@ pub fn router(app: Arc<App>) -> Router {
             get(get_service_key_certificates).post(post_service_key_certificate),
         )
         .route("/v1/tenants/{tenant}/telemetry", get(get_telemetry).post(post_telemetry))
+        .route("/v1/tenants/{tenant}/telemetry/usage", get(get_telemetry_usage))
+        .route("/v1/tenants/{tenant}/telemetry/metrics", get(get_telemetry_metrics))
+        .route("/v1/tenants/{tenant}/telemetry/gaps", get(get_telemetry_gaps))
         .route("/v1/tenants/{tenant}/release-cosigns/{measurement}", get(get_release_cosign).put(put_release_cosign))
         .route("/v1/releases/{platform}", get(get_releases))
         .route("/v1/releases/{platform}/{measurement}", get(get_release).put(put_release))
@@ -1008,6 +1029,14 @@ async fn post_telemetry(
     if !signed_by_any(&telemetry_keys(&e.docs, policy.as_ref()), TELEMETRY_BATCH_LABEL, &batch) {
         return Err(ApiError::forbidden("not signed by a certified telemetry key of this tenant"));
     }
+    if let Some(db) = &app.telemetry_db {
+        // The tenant's other writes need not wait for this one.
+        drop(e);
+        return match db.put(&batch, app.now()).await? {
+            telemetry_db::Put::Stored | telemetry_db::Put::Same => Ok(StatusCode::NO_CONTENT),
+            telemetry_db::Put::Conflict => Err(ApiError::conflict("another batch has this stream and sequence")),
+        };
+    }
     match e.telemetry_batch(&batch.body.stream, batch.body.sequence)? {
         Some(stored) if stored == batch => Ok(StatusCode::NO_CONTENT),
         Some(_) => Err(ApiError::conflict("another batch has this stream and sequence")),
@@ -1081,35 +1110,109 @@ async fn get_telemetry(
     let entry = app.store.tenant(&tenant)?;
     let docs = entry.lock().await.docs.clone();
     app.authorize(&Chain::of(&tenant, &docs), &docs, &asked, &[], Rule::Members).await?;
-    let found = entry.lock().await.telemetry_page(since, order, limit)?;
-    let mut page: Vec<SignedTelemetryBatch> = Vec::new();
-    let mut bytes = 0;
-    for file in &found.files {
-        let Some(batch) = store::read_telemetry_batch(file)? else { continue };
-        bytes += serde_json::to_vec(&batch).map_or(0, |b| b.len() + 1);
-        if !page.is_empty() && bytes > TELEMETRY_PAGE_BYTES {
-            break;
+    let (body, remaining_batches, remaining_bytes, next) = match &app.telemetry_db {
+        Some(db) => {
+            let found = db.page(tenant.as_str(), since, order, limit, TELEMETRY_PAGE_BYTES).await?;
+            let next = match found.bodies.last() {
+                Some(last) => {
+                    Some(serde_json::from_slice::<SignedTelemetryBatch>(last).map_err(telemetry_db::Error::from)?)
+                }
+                None => None,
+            };
+            // Served as stored: the array of the batches' own JSON.
+            let body = [b"[".as_slice(), &found.bodies.join(b",".as_slice()), b"]"].concat();
+            (body, found.remaining_batches, found.remaining_bytes, next)
         }
-        page.push(batch);
-    }
+        None => {
+            let found = entry.lock().await.telemetry_page(since, order, limit)?;
+            let mut page: Vec<SignedTelemetryBatch> = Vec::new();
+            let mut bytes = 0;
+            for file in &found.files {
+                let Some(batch) = store::read_telemetry_batch(file)? else { continue };
+                bytes += serde_json::to_vec(&batch).map_or(0, |b| b.len() + 1);
+                if !page.is_empty() && bytes > TELEMETRY_PAGE_BYTES {
+                    break;
+                }
+                page.push(batch);
+            }
+            let body = serde_json::to_vec(&page).map_err(|e| std::io::Error::other(e.to_string()))?;
+            (body, found.remaining_batches, found.remaining_bytes, page.pop())
+        }
+    };
     let mut headers = vec![
-        (TELEMETRY_REMAINING_BATCHES, found.remaining_batches.to_string()),
-        (TELEMETRY_REMAINING_BYTES, found.remaining_bytes.to_string()),
+        (TELEMETRY_REMAINING_BATCHES, remaining_batches.to_string()),
+        (TELEMETRY_REMAINING_BYTES, remaining_bytes.to_string()),
     ];
-    if let Some(last) = page.last() {
+    if let Some(last) = next {
         let order = match order {
             store::TelemetryOrder::Stream { .. } => TelemetryOrder::Stream,
             store::TelemetryOrder::Time { .. } => TelemetryOrder::Time,
         };
         headers.push((TELEMETRY_NEXT, order.cursor(&last.body)));
     }
-    let mut response = Json(page).into_response();
+    let mut response = ([(axum::http::header::CONTENT_TYPE, "application/json")], body).into_response();
     for (name, value) in headers {
         if let Ok(value) = axum::http::HeaderValue::from_str(&value) {
             response.headers_mut().insert(name, value);
         }
     }
     Ok(response)
+}
+
+/// `from` and `to` of the telemetry count routes: Unix seconds.
+#[derive(Deserialize)]
+struct CountsQuery {
+    from: UnixTime,
+    to: UnixTime,
+    /// `event` (the default), `app` or `requests`; metrics only.
+    group_by: Option<String>,
+}
+
+/// The database, for a member of the tenant's console. Without one, 404: nothing is counted.
+async fn counts_db<'a>(app: &'a App, tenant: &TenantId, asked: &Asked) -> ApiResult<&'a TelemetryDb> {
+    let entry = app.store.tenant(tenant)?;
+    let docs = entry.lock().await.docs.clone();
+    app.authorize(&Chain::of(tenant, &docs), &docs, asked, &[], Rule::Members).await?;
+    app.telemetry_db.as_deref().ok_or_else(|| ApiError::not_found("this control plane counts no telemetry"))
+}
+
+/// Daily counts, unverified: `[{ day, requests, sessions, entries, sealed_entries, active_secrets }]`.
+async fn get_telemetry_usage(
+    State(app): State<Arc<App>>,
+    Path(tenant): Path<TenantId>,
+    Query(query): Query<CountsQuery>,
+    asked: Asked,
+) -> ApiResult<Response> {
+    let db = counts_db(&app, &tenant, &asked).await?;
+    Ok(Json(db.usage(tenant.as_str(), query.from, query.to).await?).into_response())
+}
+
+/// Hourly counts in `from..to`, unverified: `[{ hour, key, count }]`.
+async fn get_telemetry_metrics(
+    State(app): State<Arc<App>>,
+    Path(tenant): Path<TenantId>,
+    Query(query): Query<CountsQuery>,
+    asked: Asked,
+) -> ApiResult<Response> {
+    let by = match query.group_by.as_deref() {
+        None | Some("event") => telemetry_db::GroupBy::Event,
+        Some("app") => telemetry_db::GroupBy::App,
+        Some("requests") => telemetry_db::GroupBy::Requests,
+        Some(_) => return Err(ApiError::bad("group_by is event, app or requests")),
+    };
+    let db = counts_db(&app, &tenant, &asked).await?;
+    Ok(Json(db.metrics(tenant.as_str(), query.from, query.to, by).await?).into_response())
+}
+
+/// Telemetry gaps due now, unverified: holes in a stream, and streams that stopped without
+/// their last batch.
+async fn get_telemetry_gaps(
+    State(app): State<Arc<App>>,
+    Path(tenant): Path<TenantId>,
+    asked: Asked,
+) -> ApiResult<Response> {
+    let db = counts_db(&app, &tenant, &asked).await?;
+    Ok(Json(db.gaps(tenant.as_str(), app.now()).await?).into_response())
 }
 
 /// Public: a co-signature names a public release, and an enclave's key requests carry it

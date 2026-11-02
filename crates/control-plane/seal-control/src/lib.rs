@@ -50,6 +50,9 @@
 //! | POST   | /v1/tenants/{tenant}/service-key-certificates      | `SignedServiceKeyCertificate` (append, dedup; enclaves post theirs at boot; the platform's guardian key) |
 //! | GET    | /v1/tenants/{tenant}/telemetry?since=T&after=C&limit=N&order=O | → one page of `[SignedTelemetryBatch]` with entries at or after `T`, by stream and sequence, after cursor `C` (`<stream hex>-<sequence>` of the previous page's last batch); with `order=time`, by `to`, stream and sequence, after `C` = the previous page's `Seal-Telemetry-Next`; at most `N` (≤ 1000) batches and about 768 KiB. Ask again until a page is empty. Unsigned hints: `Seal-Telemetry-Remaining-Batches`, `Seal-Telemetry-Remaining-Bytes` (matching after `C`, this page included), `Seal-Telemetry-Next` |
 //! | POST   | /v1/tenants/{tenant}/telemetry                     | `SignedTelemetryBatch` (append; gaps in `stream`/`sequence` are visible; telemetry key) |
+//! | GET    | /v1/tenants/{tenant}/telemetry/usage?from=F&to=T   | → `[{ day, requests, sessions, entries, sealed_entries, active_secrets }]`, Unix seconds, unverified; 404 without a telemetry database |
+//! | GET    | /v1/tenants/{tenant}/telemetry/metrics?from=F&to=T&group_by=G | → `[{ hour, key, count }]`, `G` `event`, `app` or `requests`, unverified; 404 without a telemetry database |
+//! | GET    | /v1/tenants/{tenant}/telemetry/gaps                | → `[{ gap: "missing", stream, from, to, count } or { gap: "stopped", stream, sequence, seen }]`, unverified; 404 without a telemetry database |
 //! | GET    | /v1/tenants/{tenant}/release-cosigns/{measurement} | → `Signed<ReleaseCosign>`           |
 //! | PUT    | /v1/tenants/{tenant}/release-cosigns/{measurement} | `Signed<ReleaseCosign>`             |
 //! | GET    | /v1/releases/{platform}                            | → `[ReleaseEvidence]`, every one stored for the platform, in log order |
