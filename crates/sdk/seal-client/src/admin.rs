@@ -26,6 +26,7 @@ use serde::{Deserialize, Serialize};
 use seal_crypto::sign::{admin_key_id, verify, SigningKey};
 use seal_proto::codec::labeled_digest;
 use seal_proto::identity::{GitHubScope, IdentityMatcher};
+use seal_proto::named::{BlobRef, NamedSecret, NamedSecretVersion, NAMED_SECRET_LABEL};
 use seal_proto::release::{
     LogEntry, ReleaseCosign, SignedCheckpoint, TenantStateLeaf, TlogProof, RELEASE_COSIGN_LABEL,
 };
@@ -34,7 +35,9 @@ use seal_proto::state::{
     root_id, AdminKey, LoggedRoot, LoggedState, SignedStateFreshness, SignedTenantState, StateFreshness, TenantBundle,
     TenantKeyVersions, TenantRoot, TenantState, STATE_FRESHNESS_LABEL, TENANT_ROOT_LABEL, TENANT_STATE_LABEL,
 };
-use seal_proto::{ErrorCode, KeyId, Measurement, PlatformId, TenantId, TenantKeyVersion, TenantRootId, TrustedTime};
+use seal_proto::{
+    ErrorCode, KeyId, Measurement, PlatformId, SecretName, TenantId, TenantKeyVersion, TenantRootId, TrustedTime,
+};
 use seal_tlog::LogVerifier;
 use seal_verify::change::{self, Change, Difference};
 use seal_verify::{TenantTrust, TenantVerifier, VerifiedTenant, VerifyError};
@@ -871,6 +874,75 @@ impl Admin {
         let cosign = admin_sign("a release co-signature", current.tenant.root(), RELEASE_COSIGN_LABEL, body, keys)?;
         self.control.put_release_cosign(&self.tenant, &measurement, &cosign).await.map_err(control_error)?;
         Ok(cosign)
+    }
+
+    /// The tenant's named secrets: the newest version of every name not deleted, by name, as the
+    /// control plane serves them. `named_signed` says whether one verifies.
+    pub async fn named_secrets(&self) -> Result<Vec<NamedSecretVersion>, ClientError> {
+        self.control.get_secrets(&self.tenant).await.map_err(control_error)
+    }
+
+    /// Whether `version` is this tenant's and signed by the threshold of the root in force, and
+    /// carries the blob it names: what an enclave checks before it hands the blob out.
+    pub fn named_signed(&self, current: &Current, version: &NamedSecretVersion) -> bool {
+        let entry = &version.entry.body;
+        entry.tenant == self.tenant
+            && &entry.root_id == current.tenant.root_id()
+            && version.check().is_ok()
+            && meets_threshold(current.tenant.root(), NAMED_SECRET_LABEL, &version.entry)
+    }
+
+    /// `name`'s next version, unsigned: pointing at `blob`, which must be a blob of this tenant
+    /// and chain, or deleting the name (`None`). Sign it (`cosign`, or a passkey), then
+    /// `publish_secret`.
+    pub async fn draft_secret(
+        &self,
+        current: &Current,
+        name: &SecretName,
+        blob: Option<&str>,
+        now: seal_proto::UnixTime,
+    ) -> Result<NamedSecretVersion, ClientError> {
+        let root_id = *current.tenant.root_id();
+        let named = match blob {
+            Some(text) => {
+                let parsed: seal_proto::blob::Blob = text.parse()?;
+                if parsed.header.tenant != self.tenant || parsed.header.root_id != root_id {
+                    return Err(ClientError::Invalid(format!(
+                        "the blob is for {}@{}, not {}@{root_id}",
+                        parsed.header.tenant, parsed.header.root_id, self.tenant
+                    )));
+                }
+                Some(BlobRef::of(text)?)
+            }
+            None => None,
+        };
+        let latest = self.control.get_secret(&self.tenant, name).await.map_err(control_error)?;
+        let version = latest.as_ref().map_or(1, |v| v.entry.body.version + 1);
+        if named.is_none() && latest.as_ref().is_none_or(|v| v.blob.is_none()) {
+            return Err(ClientError::Invalid(format!("{name} has nothing to delete")));
+        }
+        let body = NamedSecret {
+            tenant: self.tenant.clone(),
+            root_id,
+            name: name.clone(),
+            version,
+            blob: named,
+            published_at: now,
+        };
+        Ok(NamedSecretVersion { entry: Signed { body, signatures: Vec::new() }, blob: blob.map(Into::into) })
+    }
+
+    /// Stores a drafted version once it carries the threshold of the root in force. A version
+    /// someone else published first is refused (`BadRequest` for the 409): draft again.
+    pub async fn publish_secret(&self, current: &Current, version: &NamedSecretVersion) -> Result<(), ClientError> {
+        let root = current.tenant.root();
+        if !meets_threshold(root, NAMED_SECRET_LABEL, &version.entry) {
+            return Err(ClientError::Invalid(format!(
+                "a named secret needs {} signatures from admin keys of root version {}",
+                root.threshold, root.version
+            )));
+        }
+        self.control.put_secret(&self.tenant, version).await.map_err(control_error)
     }
 
     /// Scans the log for this tenant's documents: root versions not in the verified chain

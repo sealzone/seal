@@ -30,6 +30,12 @@ verifies the enclave before it asks for the secret.
 # Anyone may seal without signing in. Name the tenant as its admins' `seal status` prints it.
 seal secret --tenant acme@<root id> --endpoint https://10.0.1.4:8443 --to https://api.openai.com/v1 --app checkout
 
+# Publish it as a named secret too: apps then use seal.session("openai") and follow new
+# versions. Signed here by the root's threshold of admin keys (--key-file, or --passkey).
+seal secret --name openai --key-file admin.key --to https://api.openai.com/v1 --app checkout
+seal secrets                      # every name, its version, destination and apps
+seal secrets delete openai --key-file admin.key
+
 # Who may do what.
 seal grant app checkout azure --object-id <oid> --entra-tenant <id> --audience api://seal
 seal grant app checkout github --repo acme/api --environment production --repository-id <n> --owner-id <n>

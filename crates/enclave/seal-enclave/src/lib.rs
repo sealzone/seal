@@ -136,6 +136,12 @@ pub trait TenantStore: Send + Sync {
         &self,
         certificate: &SignedServiceKeyCertificate,
     ) -> Result<(), ServiceError>;
+    /// A named secret's newest version as stored, a deletion included; `None` for a name never
+    /// published. Unverified: the runtime checks it against the latest root before use.
+    async fn named_secret(
+        &self,
+        name: &seal_proto::SecretName,
+    ) -> Result<Option<seal_proto::named::NamedSecretVersion>, ServiceError>;
 }
 
 /// Untrusted evidence about approved Seal builds. The runtime verifies signatures,
@@ -410,6 +416,12 @@ impl SealService {
     /// signal published for the other replicas.
     pub async fn signal(&self, request: SignalRequest) -> Result<(), ServiceError> {
         self.runtime.signal(request).await
+    }
+    /// Looks up a named secret for an authenticated caller: the newest version signed by the
+    /// threshold of the root in force, if the caller holds a grant for one of its blob's apps.
+    /// The caller then starts a session on the blob as on any other.
+    pub async fn resolve(&self, request: ResolveRequest) -> Result<ResolveResponse, ServiceError> {
+        self.runtime.resolve_name(request).await
     }
 
     /// Resolves when a Seal-hosted replica (its `deployments` entry has a `HostedMode`) has

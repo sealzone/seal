@@ -185,7 +185,11 @@ export declare class Client {
   /** Seal `secret` so only `apps` can use it, and only with `to`. Anyone may seal. */
   seal(secret: Secret, options: SealOptions & { withReceipt?: false }): Promise<string>;
   seal(secret: Secret, options: SealOptions & { withReceipt: true }): Promise<{ blob: string; receipt: TelemetryReceipt }>;
-  /** Start a session on `blob`. Needs an app grant listed in the blob's policy. */
+  /**
+   * Start a session on `blob`, or on a named secret (`"openai"`) the tenant's admins
+   * published. Needs an app grant listed in the blob's policy. A name is looked up again at
+   * every extend, so a new version reaches the session without a restart.
+   */
   session(blob: string, options: SessionOptions & { kind: "http" }): Promise<HttpSession>;
   session(blob: string, options: SessionOptions & { kind: "database" }): Promise<DatabaseSession>;
   session(blob: string, options?: SessionOptions): Promise<HttpSession | DatabaseSession>;

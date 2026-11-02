@@ -21,6 +21,7 @@ use seal_control::client::{Documents, Proposal, Proposed, Submitted, TelemetryOr
 use seal_crypto::sign::{admin_key_id, key_id, verify, verify_admin, verify_threshold};
 use seal_proto::codec::labeled_digest;
 use seal_proto::integrity::{validate_code, SignalSource, SignedSignal, SIGNAL_LABEL};
+use seal_proto::named::{NamedSecretVersion, MAX_NAMED_BLOB_BYTES, NAMED_SECRET_LABEL};
 use seal_proto::release::{
     LogEntry, ReleaseConstraints, ReleaseCosign, ReleaseEvidence, SignedCheckpoint, SignedServiceKeyCertificate,
     SignedTenantWrapKey, TenantStateLeaf, TlogProof, RELEASE_COSIGN_LABEL, TENANT_WRAP_KEY_LABEL,
@@ -33,7 +34,8 @@ use seal_proto::state::{
 };
 use seal_proto::telemetry::{SignedTelemetryBatch, TelemetryEntries, TELEMETRY_BATCH_LABEL};
 use seal_proto::{
-    ErrorCode, Measurement, PlatformId, PublicKey, TenantId, TenantKeyVersion, TenantRootId, TrustedTime, UnixTime,
+    ErrorCode, Measurement, PlatformId, PublicKey, SecretName, TenantId, TenantKeyVersion, TenantRootId, TrustedTime,
+    UnixTime,
 };
 use seal_tlog::{LogVerifier, TlogTrust};
 use seal_verify::{ReleaseTrust, TenantVerifier};
@@ -41,6 +43,7 @@ use seal_verify::{ReleaseTrust, TenantVerifier};
 pub mod auth;
 pub mod config;
 pub mod cors;
+pub mod named_secrets;
 pub mod store;
 pub mod telemetry_db;
 #[cfg(test)]
@@ -50,6 +53,7 @@ pub mod token;
 pub mod upstream;
 
 use auth::{Asked, Chain, Rule};
+use named_secrets::{NamedSecrets, Refused};
 use store::{Freshness, Store, TenantDocs, TenantEntry};
 use telemetry_db::TelemetryDb;
 use token::ConsoleKeys;
@@ -174,6 +178,7 @@ type WrapKeyId = (PlatformId, TenantId, TenantRootId, TenantKeyVersion);
 pub struct App {
     store: Store,
     telemetry: Arc<TelemetryDb>,
+    secrets: NamedSecrets,
     upstreams: Arc<dyn Upstreams>,
     /// SHA-256 of the write token, so the comparison is constant-time over equal lengths.
     write_token: [u8; 32],
@@ -205,6 +210,7 @@ impl App {
         };
         Ok(Self {
             store,
+            secrets: NamedSecrets::new(telemetry.pool()),
             telemetry,
             upstreams,
             write_token: Sha256::digest(settings.write_token.as_bytes()).into(),
@@ -432,6 +438,9 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/v1/tenants/{tenant}/telemetry/metrics", get(get_telemetry_metrics))
         .route("/v1/tenants/{tenant}/telemetry/gaps", get(get_telemetry_gaps))
         .route("/v1/tenants/{tenant}/release-cosigns/{measurement}", get(get_release_cosign).put(put_release_cosign))
+        .route("/v1/tenants/{tenant}/secrets", get(get_secrets))
+        .route("/v1/tenants/{tenant}/secrets/{name}", get(get_secret).put(put_secret))
+        .route("/v1/tenants/{tenant}/secrets/{name}/versions", get(get_secret_versions))
         .route("/v1/releases/{platform}", get(get_releases))
         .route("/v1/releases/{platform}/{measurement}", get(get_release).put(put_release))
         .route("/v1/releases/{platform}/{measurement}/template", get(get_release_template).put(put_release_template))
@@ -1176,6 +1185,91 @@ async fn get_telemetry_gaps(
 ) -> ApiResult<Response> {
     authorize_counts(&app, &tenant, &asked).await?;
     Ok(Json(app.telemetry.gaps(tenant.as_str(), app.now()).await?).into_response())
+}
+
+/// The tenant's chain, once `rule` admits the request for it.
+async fn secrets_chain(
+    app: &App,
+    tenant: &TenantId,
+    asked: &Asked,
+    body: &[u8],
+    rule: Rule,
+) -> ApiResult<(TenantRootId, TenantRoot)> {
+    let entry = app.store.tenant(tenant)?;
+    let docs = entry.lock().await.docs.clone();
+    app.authorize(&Chain::of(tenant, &docs), &docs, asked, body, rule).await?;
+    match (chain_root_id(&docs), docs.roots.last()) {
+        (Some(root_id), Some(latest)) => Ok((root_id, latest.root.body.clone())),
+        _ => Err(ApiError::not_found("no root chain for this tenant")),
+    }
+}
+
+/// The newest version of every name not deleted, by name. Unverified: each carries its own
+/// signatures, checked by whoever acts on it.
+async fn get_secrets(
+    State(app): State<Arc<App>>,
+    Path(tenant): Path<TenantId>,
+    asked: Asked,
+) -> ApiResult<Json<Vec<NamedSecretVersion>>> {
+    let (root_id, _) = secrets_chain(&app, &tenant, &asked, &[], Rule::Members).await?;
+    Ok(Json(app.secrets.list(&tenant, &root_id).await?))
+}
+
+/// A name's newest version, a deletion included, for members and the tenant's enclaves.
+async fn get_secret(
+    State(app): State<Arc<App>>,
+    Path((tenant, name)): Path<(TenantId, SecretName)>,
+    asked: Asked,
+) -> ApiResult<Json<NamedSecretVersion>> {
+    let (root_id, _) = secrets_chain(&app, &tenant, &asked, &[], Rule::Secret).await?;
+    app.secrets.latest(&tenant, &root_id, &name).await?.map(Json).ok_or_else(|| ApiError::not_found("no such name"))
+}
+
+/// The versions of a name kept, newest first.
+async fn get_secret_versions(
+    State(app): State<Arc<App>>,
+    Path((tenant, name)): Path<(TenantId, SecretName)>,
+    asked: Asked,
+) -> ApiResult<Json<Vec<NamedSecretVersion>>> {
+    let (root_id, _) = secrets_chain(&app, &tenant, &asked, &[], Rule::Members).await?;
+    Ok(Json(app.secrets.versions(&tenant, &root_id, &name).await?))
+}
+
+/// Publishes a name's next version, or deletes the name: a `NamedSecretVersion` for this tenant,
+/// chain and name, carrying the blob it names, signed by the threshold of the latest root.
+async fn put_secret(
+    State(app): State<Arc<App>>,
+    Path((tenant, name)): Path<(TenantId, SecretName)>,
+    asked: Asked,
+    body: Bytes,
+) -> ApiResult<StatusCode> {
+    if body.len() > MAX_NAMED_BLOB_BYTES + (64 << 10) {
+        return Err(ApiError::bad("the version is too large"));
+    }
+    let version: NamedSecretVersion = parse(&body)?;
+    let (root_id, latest) = secrets_chain(&app, &tenant, &asked, &body, Rule::Publish).await?;
+    let entry = &version.entry.body;
+    same_tenant(&tenant, &entry.tenant)?;
+    if entry.name != name {
+        return Err(ApiError::bad("the version is for another name"));
+    }
+    if entry.root_id != root_id {
+        return Err(ApiError::bad("the version is for another root chain"));
+    }
+    if version.text().is_some_and(|t| t.len() > MAX_NAMED_BLOB_BYTES) {
+        return Err(ApiError::bad("the blob is too large"));
+    }
+    version.check().map_err(|e| ApiError::bad(e.to_string()))?;
+    TenantVerifier::verify_admin_signed(&latest, NAMED_SECRET_LABEL, &version.entry)
+        .map_err(|_| ApiError::bad("not signed by the threshold of the latest root"))?;
+    match app.secrets.put(&version, app.now()).await? {
+        Ok(()) => Ok(StatusCode::NO_CONTENT),
+        Err(Refused::NotNext { next }) => Err(ApiError::conflict(format!("the next version is {next}"))),
+        Err(Refused::TooMany) => {
+            Err(ApiError::conflict(format!("a tenant has at most {} names", seal_proto::named::MAX_NAMED_SECRETS)))
+        }
+        Err(Refused::NothingToDelete) => Err(ApiError::conflict("the name has nothing to delete")),
+    }
 }
 
 /// Public: a co-signature names a public release, and an enclave's key requests carry it

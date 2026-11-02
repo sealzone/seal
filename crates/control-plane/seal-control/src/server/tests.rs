@@ -1800,4 +1800,5 @@ async fn enclaves_read_their_bundle_at_boot_by_attesting() {
     assert_eq!(env.get_as(bundle, attested(Measurement([7; 48]), bundle, env.root_id(), false)).await.0, 401);
 }
 
+mod named;
 mod telemetry;

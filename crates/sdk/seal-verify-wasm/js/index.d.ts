@@ -15,6 +15,7 @@ export const LABELS: {
   readonly tenantState: "seal/tenant-state/v1"
   readonly tenantRoot: "seal/tenant-root/v1"
   readonly releaseCosign: "seal/release-cosign/v1"
+  readonly namedSecret: "seal/named-secret/v1"
 }
 
 export interface TlogTrust {
@@ -127,6 +128,51 @@ export function webauthnSignature(
 ): Json
 /** Key ids (hex) of the root's admin keys with a valid signature on `signed`. */
 export function signers(root: Json, label: string, signed: Json): string[]
+/** A named secret's version as the control plane stores it: the signed entry and the blob. */
+export interface NamedSecretVersion {
+  entry: { body: Json; signatures: Json[] }
+  blob: string | null
+}
+/**
+ * A name's version `version`, unsigned: pointing at `blob`, or deleting the name when `blob`
+ * is null. Admins sign `entry.body` under `LABELS.namedSecret`, then the control plane takes it.
+ */
+export function namedSecret(args: {
+  tenant: string
+  rootId: string
+  name: string
+  version: number
+  blob: string | null
+  publishedAt?: number
+}): NamedSecretVersion
+/** What a stored version is: signed by the root's threshold (as enclaves check it), and its blob's policy. */
+export interface DescribedNamedSecret {
+  name: string
+  version: number
+  published_at: number
+  deleted: boolean
+  signers: string[]
+  signed: boolean
+  problem: string | null
+  blob: {
+    blob_id: string
+    created_at: number
+    tenant_key_version: number
+    destination: string
+    protocol: "http" | "postgres" | "redis" | "click_house"
+    apps: string[]
+    header: string | null
+    format: string | null
+    expires_at: number | null
+    hardened_only: boolean
+  } | null
+}
+export function describeNamedSecret(
+  tenant: string,
+  rootId: string,
+  root: Json,
+  version: NamedSecretVersion,
+): DescribedNamedSecret
 export function adminKeyId(adminKey: Json): string
 export function rootId(rootV1: Json): string
 

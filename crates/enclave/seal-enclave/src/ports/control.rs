@@ -108,6 +108,14 @@ impl TenantStore for ControlTenantStore {
             .await
             .map_err(|e| unavailable("post service key certificate", e))
     }
+
+    /// `GET /v1/tenants/{tenant}/secrets/{name}`, with the replica's telemetry key.
+    async fn named_secret(
+        &self,
+        name: &seal_proto::SecretName,
+    ) -> Result<Option<seal_proto::named::NamedSecretVersion>, ServiceError> {
+        self.client.get_secret(&self.tenant, name).await.map_err(|e| unavailable("get named secret", e))
+    }
 }
 
 /// This release's evidence (`GET /v1/releases/{platform}/{measurement}`) with the control

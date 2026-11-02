@@ -11,6 +11,7 @@ use seal_crypto::sign::{admin_key_id, key_id, verify, verify_admin};
 use seal_crypto::telemetry::TelemetryReaderKey;
 use seal_proto::api::{AttestationResponse, IngestContext, SealPayload, SealRequest, SealResponse, TelemetryReceipt};
 use seal_proto::codec::{self, labeled_digest};
+use seal_proto::named::{BlobRef, NamedSecret, NamedSecretVersion, NAMED_SECRET_LABEL};
 use seal_proto::policy::{HttpRules, Injection, SecretPolicy, SpkiPin};
 use seal_proto::release::{
     LogEntry, ReleaseConstraints, ReleaseCosign, ReleaseEvidence, ReleaseManifest, SignedCheckpoint,
@@ -23,7 +24,7 @@ use seal_proto::state::{
     TENANT_ROOT_LABEL, TENANT_STATE_LABEL,
 };
 use seal_proto::telemetry::SignedTelemetryBatch;
-use seal_proto::{PlatformId, PublicKey, TenantId, TenantRootId, TrustedTime, UnixTime};
+use seal_proto::{PlatformId, PublicKey, SecretName, TenantId, TenantRootId, TrustedTime, UnixTime};
 use seal_tlog::LogVerifier;
 use seal_verify::change::{self, Difference};
 use seal_verify::{Pending, Public, TenantTrust, TenantVerifier};
@@ -212,6 +213,7 @@ enum Document {
     State(Box<TenantState>),
     Root(TenantRoot),
     Cosign(ReleaseCosign),
+    Named(NamedSecret),
 }
 
 impl Document {
@@ -220,6 +222,7 @@ impl Document {
             TENANT_STATE_LABEL => Self::State(parse("document", document)?),
             TENANT_ROOT_LABEL => Self::Root(parse("document", document)?),
             RELEASE_COSIGN_LABEL => Self::Cosign(parse("document", document)?),
+            NAMED_SECRET_LABEL => Self::Named(parse("document", document)?),
             _ => return Err(format!("{label}: not a label admin keys sign")),
         })
     }
@@ -228,6 +231,7 @@ impl Document {
             Self::State(d) => labeled_digest(label, d),
             Self::Root(d) => labeled_digest(label, d),
             Self::Cosign(d) => labeled_digest(label, d),
+            Self::Named(d) => labeled_digest(label, d),
         }
     }
     fn signed_by(&self, key: &AdminKey, label: &str, sig: &Signature) -> bool {
@@ -235,13 +239,14 @@ impl Document {
             Self::State(d) => verify_admin(key, label, d, sig).is_ok(),
             Self::Root(d) => verify_admin(key, label, d, sig).is_ok(),
             Self::Cosign(d) => verify_admin(key, label, d, sig).is_ok(),
+            Self::Named(d) => verify_admin(key, label, d, sig).is_ok(),
         }
     }
 }
 
 /// `labeled_digest(label, document)`: the 32 bytes an admin key signs, which a passkey takes
 /// as its WebAuthn challenge. `label` is one of `seal/tenant-state/v1`, `seal/tenant-root/v1`,
-/// `seal/release-cosign/v1`.
+/// `seal/release-cosign/v1`, `seal/named-secret/v1`.
 pub fn labeled_digest_of(label: &str, document: &str) -> Result<[u8; 32]> {
     Ok(Document::parse(label, document)?.digest(label))
 }
@@ -301,6 +306,88 @@ pub fn signers(root: &str, label: &str, signed: &str) -> Result<String> {
         }
     }
     json(&out)
+}
+
+/// A named secret's version `version`, unsigned (a `NamedSecretVersion` with no signatures):
+/// pointing at `blob`, or deleting the name when `blob` is empty. Admins sign its
+/// `entry.body` under `seal/named-secret/v1`. Refuses a blob of another tenant or chain.
+pub fn named_secret(
+    tenant: &str,
+    root_id: &str,
+    name: &str,
+    version: u64,
+    blob: &str,
+    published_at: UnixTime,
+) -> Result<String> {
+    let tenant = tenant_id(tenant)?;
+    let root_id: TenantRootId = root_id.parse().map_err(|e| format!("root id: {e}"))?;
+    let name = SecretName::new(name).map_err(|e| e.to_string())?;
+    if version == 0 {
+        return Err("versions start at 1".into());
+    }
+    let blob = (!blob.is_empty()).then(|| blob.to_string());
+    let named = blob.as_deref().map(BlobRef::of).transpose().map_err(|e| format!("blob: {e}"))?;
+    let body = NamedSecret { tenant, root_id, name, version, blob: named, published_at };
+    let version = NamedSecretVersion { entry: Signed { body, signatures: Vec::new() }, blob };
+    version.check().map_err(|e| e.to_string())?;
+    json(&version)
+}
+
+/// What a stored named-secret version is, for display: whether it is `tenant`'s, carries the
+/// blob it names and is signed by `root`'s threshold (`signed`, as enclaves check it against
+/// the root in force), who signed, and the blob's clear-text policy.
+pub fn describe_named_secret(tenant: &str, root_id: &str, root: &str, version: &str) -> Result<String> {
+    let tenant = tenant_id(tenant)?;
+    let root_id: TenantRootId = root_id.parse().map_err(|e| format!("root id: {e}"))?;
+    let root: TenantRoot = parse("root", root)?;
+    let version: NamedSecretVersion = parse("named secret", version)?;
+    let entry = &version.entry.body;
+    let mut signers: Vec<String> = Vec::new();
+    for sig in &version.entry.signatures {
+        let Some(key) = root.admin_keys.iter().find(|k| admin_key_id(k) == sig.signer) else { continue };
+        let id = sig.signer.to_string();
+        if !signers.contains(&id) && verify_admin(key, NAMED_SECRET_LABEL, entry, sig).is_ok() {
+            signers.push(id);
+        }
+    }
+    let problem = if entry.tenant != tenant || entry.root_id != root_id {
+        Some("published for another tenant or root chain".to_string())
+    } else if let Err(e) = version.check() {
+        Some(e.to_string())
+    } else if signers.len() < usize::from(root.threshold) {
+        Some(format!("signed by {} of the {} admins the root requires", signers.len(), root.threshold))
+    } else {
+        None
+    };
+    let blob = match version.text().map(str::parse::<seal_proto::blob::Blob>) {
+        Some(Ok(blob)) => {
+            let policy = &blob.policy;
+            let injection = policy.injection();
+            serde_json::json!({
+                "blob_id": blob.header.blob_id,
+                "created_at": blob.header.created_at,
+                "tenant_key_version": blob.header.tenant_key_version,
+                "destination": policy.destination().to_string(),
+                "protocol": policy.destination().protocol(),
+                "apps": policy.apps(),
+                "header": injection.map(|i| i.header.clone()),
+                "format": injection.map(|i| i.format.clone()),
+                "expires_at": policy.expires_at(),
+                "hardened_only": policy.min_tier() == Some(seal_proto::session::ConsumerTier::Hardened),
+            })
+        }
+        _ => serde_json::Value::Null,
+    };
+    json(&serde_json::json!({
+        "name": entry.name,
+        "version": entry.version,
+        "published_at": entry.published_at,
+        "deleted": entry.blob.is_none(),
+        "signers": signers,
+        "signed": problem.is_none(),
+        "problem": problem,
+        "blob": blob,
+    }))
 }
 
 /// `admin_key_id`, hex: what `Signature::signer` names.

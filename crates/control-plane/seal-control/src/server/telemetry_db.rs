@@ -42,7 +42,7 @@ pub enum Error {
     Range(&'static str),
     #[error("database token: {0}")]
     Token(String),
-    #[error("a stored batch does not parse: {0}")]
+    #[error("a stored document does not parse: {0}")]
     Stored(#[from] serde_json::Error),
 }
 
@@ -306,6 +306,11 @@ impl TelemetryDb {
     pub async fn with_pool(pool: PgPool, retention_days: Option<u32>) -> Result<Self, Error> {
         sqlx::migrate!("./migrations").run(&pool).await?;
         Ok(Self { pool, retention_secs: retention_days.map(|d| i64::from(d) * DAY), partitions: Mutex::default() })
+    }
+
+    /// The pool, which the control plane's other tables share (`named_secrets`).
+    pub fn pool(&self) -> PgPool {
+        self.pool.clone()
     }
 
     /// Creates the week's partition if it is not known to exist. Instances racing are

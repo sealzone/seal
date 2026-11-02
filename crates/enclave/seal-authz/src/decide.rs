@@ -18,7 +18,7 @@ use std::str::FromStr;
 use crate::{AuthenticatedRequest, AuthzError};
 use seal_proto::telemetry::RefusalContext;
 use seal_proto::{
-    api::{ExtendRequest, SessionRequest, SignalRequest},
+    api::{ExtendRequest, ResolveRequest, SessionRequest, SignalRequest},
     blob::Blob,
     identity::{AuthenticationScope, IdentityMatcher, WorkloadIdentity},
     integrity::{
@@ -210,6 +210,32 @@ impl<'a> TenantAuthorizer<'a> {
             .find(|app| integrity.admits(app, report))
             .cloned()
             .ok_or_else(|| self.artifact_mismatch(identity, blob, time))
+    }
+
+    /// Whether `request`'s caller may have `blob`, a named secret's: the blob itself is valid
+    /// (`check_blob`), and the caller holds a grant for one of its apps and is not suspended.
+    /// Networks, artifact rules and tiers are the session's to check, on the blob it gets.
+    pub fn resolve(
+        &self,
+        request: &AuthenticatedRequest<ResolveRequest>,
+        blob: &Blob,
+        time: &TrustedTime,
+    ) -> Result<(), AuthzError> {
+        self.fresh(time)?;
+        self.own_tenant(&request.request().context.tenant)?;
+        self.check_blob(blob, time)?;
+        let caller = request.caller();
+        let granted = blob
+            .policy
+            .apps()
+            .iter()
+            .any(|app| self.app_grants(app).is_some_and(|g| holds(caller.scope(), caller.identity(), g, time)));
+        if !granted {
+            return Err(AuthzError::not_allowed("the caller holds no grant for the blob's apps").with(
+                RefusalContext::NoGrant { caller: caller.identity().clone(), apps: blob.policy.apps().clone() },
+            ));
+        }
+        self.not_suspended(caller.identity(), time)
     }
 
     /// A fresh snapshot to seal under. Anyone may seal: no grant is checked.

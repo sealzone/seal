@@ -40,6 +40,18 @@ with seal.session(db_blob) as db:
     conn = psycopg.connect(db.dsn)
 ```
 
+Or let your admins keep secrets in one place. A secret they seal in the console (or with
+`seal secret --name openai`) is published under a name, and apps start sessions on the name.
+When they rotate it, running apps move to the new version without a redeploy:
+
+```python
+with seal.session("openai") as s:  # the newest version your admins published
+    client = OpenAI(base_url=s.url, api_key=s.key)
+```
+
+The blob is still sealed, so storing it reveals nothing. Every version is signed by your admin
+keys, and the enclave checks those signatures before it hands the blob to an app.
+
 The Rust SDK uses the same names: `seal.seal(secret, to, apps).header(..).await?`, then
 `seal.session(&blob).http().await?`. Node/TypeScript and Go follow suit.
 
@@ -165,6 +177,8 @@ seal use acme       # pick a tenant; its root chain and state are verified here
 seal status         # admin keys, the state in force, grants, pending changes
 seal grant app checkout azure --object-id OID --entra-tenant TID --audience api://seal-acme
 seal secret --to https://api.openai.com/v1 --app checkout --header authorization < key.txt > openai.blob
+seal secret --name openai --key-file admin.key --to https://api.openai.com/v1 --app checkout < key.txt
+seal secrets        # the named secrets apps use as seal.session("openai")
 seal deploy azure   # an enclave replica in the VNet your apps run in
 ```
 

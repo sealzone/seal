@@ -7,6 +7,7 @@
 mod boot;
 mod hosted;
 mod integrity;
+mod named;
 mod sessions;
 
 use std::convert::Infallible;
@@ -297,6 +298,9 @@ pub(super) struct Stores {
     pub signals: Mutex<Vec<SignedSignal>>,
     pub ends: Mutex<Vec<SignedSessionEnd>>,
     pub certificates: Mutex<Vec<SignedServiceKeyCertificate>>,
+    /// Named secrets by name, as the control plane would serve them.
+    pub named: Mutex<std::collections::HashMap<String, seal_proto::named::NamedSecretVersion>>,
+    pub named_down: std::sync::atomic::AtomicBool,
 }
 
 #[async_trait]
@@ -322,6 +326,16 @@ impl TenantStore for Stores {
         self.calls.push("tenants.publish_service_key_certificate");
         self.certificates.lock().unwrap().push(certificate.clone());
         Ok(())
+    }
+    async fn named_secret(
+        &self,
+        name: &seal_proto::SecretName,
+    ) -> Result<Option<seal_proto::named::NamedSecretVersion>, ServiceError> {
+        self.calls.push("tenants.named_secret");
+        if self.named_down.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(crate::fail(seal_proto::ErrorCode::Unavailable, "control plane down"));
+        }
+        Ok(self.named.lock().unwrap().get(name.as_str()).cloned())
     }
 }
 
@@ -483,6 +497,8 @@ impl Boot {
             signals: Mutex::default(),
             ends: Mutex::default(),
             certificates: Mutex::default(),
+            named: Mutex::default(),
+            named_down: Default::default(),
         });
         let telemetry = Arc::new(Recorder::default());
         let (addr, seen) = upstream().await;

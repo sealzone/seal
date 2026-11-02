@@ -38,6 +38,7 @@ mod console;
 mod deploy;
 mod grants;
 mod identity;
+mod named;
 #[cfg(feature = "passkey")]
 mod passkey;
 mod settings;
@@ -156,8 +157,16 @@ enum Command {
         #[command(flatten)]
         args: status::StatusArgs,
     },
-    /// Seal a secret (read from the terminal, or stdin) for apps; prints the blob
+    /// Seal a secret (read from the terminal, or stdin) for apps; prints the blob, and with
+    /// --name publishes it for apps to use by name
     Secret(SecretArgs),
+    /// The tenant's named secrets: list them, or delete one
+    Secrets {
+        #[command(subcommand)]
+        cmd: Option<named::SecretsCmd>,
+        #[command(flatten)]
+        sign: SignArgs,
+    },
     /// Let an app start sessions, or an enclave serve the tenant
     Grant {
         #[command(flatten)]
@@ -235,6 +244,16 @@ struct SecretArgs {
     /// Append the seal's telemetry receipt to this file (JSON lines, read by `seal telemetry --receipts`)
     #[arg(long, value_name = "FILE")]
     receipt_file: Option<PathBuf>,
+    /// Publish the blob under this name too, as its next version: apps then start sessions on
+    /// the name (`seal.session("openai")`) and follow its newest version. Signed here by the
+    /// root's threshold of admin keys (--key-file, or --passkey)
+    #[arg(long, value_name = "NAME", help_heading = "Publish")]
+    name: Option<seal_proto::SecretName>,
+    /// Sign the published version with an admin passkey on a security key
+    #[arg(long, requires = "name", help_heading = "Publish")]
+    passkey: bool,
+    #[command(flatten)]
+    sign: SignArgs,
     /// `<tenant>@<root id>` as `seal status` prints it, or `<tenant>` for the root chain
     /// `seal use` saved for it (default: the `seal use` tenant)
     #[arg(long, value_name = "TENANT[@ROOT]", env = "SEAL_TENANT", value_parser = parse_tenant_pin, help_heading = "Enclave")]
@@ -612,6 +631,9 @@ async fn seal_secret(env: &Env, args: SecretArgs) -> anyhow::Result<()> {
             builder = builder.trust(trust);
         }
     }
+    if args.name.is_some() {
+        named::check_publishable(env, &tenant, args.passkey)?;
+    }
     // Verify the enclave before asking for the secret, so a wrong endpoint or tenant fails first.
     let client = {
         let _spinner = ui::Spinner::start("verifying the enclave");
@@ -648,6 +670,10 @@ async fn seal_secret(env: &Env, args: SecretArgs) -> anyhow::Result<()> {
         seal::receipts::append(path, &[receipt]).with_context(|| format!("{}", path.display()))?;
     }
     println!("{blob}");
+    if let Some(name) = &args.name {
+        let version = named::publish(env, name, &blob, args.passkey).await?;
+        say!("{}", ui::ok(&format!("published {name} version {version}: apps use it as seal.session(\"{name}\")")));
+    }
     Ok(())
 }
 
@@ -916,7 +942,14 @@ async fn dispatch(cli: Cli) -> anyhow::Result<()> {
             env.sign.keys = keys;
             status::run(&env, args).await?;
         }
-        Command::Secret(args) => seal_secret(&env, args).await?,
+        Command::Secret(args) => {
+            env.sign = args.sign.clone();
+            seal_secret(&env, args).await?
+        }
+        Command::Secrets { cmd, sign } => {
+            env.sign = sign;
+            named::run(&env, cmd).await?;
+        }
         Command::Grant { sign, cmd } => {
             env.sign = sign;
             grants::run_grant(&env, cmd).await?;
@@ -957,7 +990,7 @@ async fn dispatch(cli: Cli) -> anyhow::Result<()> {
 
 /// The command groups of the help and the overview.
 const SECTIONS: [(&str, &[&str]); 3] = [
-    ("Everyday", &["login", "logout", "whoami", "use", "status", "secret"]),
+    ("Everyday", &["login", "logout", "whoami", "use", "status", "secret", "secrets"]),
     ("Who may do what", &["grant", "revoke", "changes"]),
     ("Tenant settings", &["settings", "deploy", "key", "telemetry", "release", "completion"]),
 ];

@@ -20,6 +20,7 @@ pub mod freshness;
 pub mod identity;
 pub mod ids;
 pub mod integrity;
+pub mod named;
 pub mod net;
 pub mod policy;
 pub mod release;
@@ -34,8 +35,8 @@ pub mod tunnel;
 pub use error::{ErrorCode, ProtoError};
 pub use evidence::Evidence;
 pub use ids::{
-    AppName, BlobId, KeyId, Measurement, PlatformId, PublicKey, ServiceKeyVersion, TenantId, TenantKeyVersion,
-    TenantPin, TenantRootId, UnixTime,
+    AppName, BlobId, KeyId, Measurement, PlatformId, PublicKey, SecretName, ServiceKeyVersion, TenantId,
+    TenantKeyVersion, TenantPin, TenantRootId, UnixTime,
 };
 pub use secret::{Bearer, SecretVec};
 pub use time::TrustedTime;

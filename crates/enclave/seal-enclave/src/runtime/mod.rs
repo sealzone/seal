@@ -101,6 +101,9 @@ pub(crate) struct Runtime {
     tenant_keys: keys::TenantKeyCache,
     /// Session ends this replica signed, republished when the session is ended again.
     ended_here: Mutex<HashMap<[u8; 16], SignedSessionEnd>>,
+    /// Named secrets looked up here, each the newest version seen and when it was fetched
+    /// (`ops::named_version`).
+    named: Mutex<HashMap<seal_proto::SecretName, (seal_proto::UnixTime, seal_proto::named::NamedSecretVersion)>>,
     time: time::TimeBase,
     release: Mutex<ReleaseEvidence>,
     attestation: Mutex<Option<AttestationResponse>>,
@@ -308,6 +311,7 @@ impl Runtime {
             wrap_keys: Mutex::new(wrap_keys),
             tenant_keys: keys::TenantKeyCache::default(),
             ended_here: Mutex::new(HashMap::new()),
+            named: Mutex::new(HashMap::new()),
             time: time::TimeBase::new(time),
             release: Mutex::new(release),
             attestation: Mutex::new(None),

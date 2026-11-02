@@ -19,12 +19,13 @@ use sha2::{Digest, Sha256};
 use seal_crypto::sign::SigningKey;
 use seal_proto::control::{ControlRequest, CONTROL_REQUEST_LABEL, SIGNED_SCHEME};
 use seal_proto::integrity::SignedSignal;
+use seal_proto::named::NamedSecretVersion;
 use seal_proto::release::{ReleaseCosign, ReleaseEvidence, SignedCheckpoint, SignedServiceKeyCertificate};
 use seal_proto::session::SignedSessionEnd;
 use seal_proto::signed::Signed;
 use seal_proto::state::{LoggedRoot, LoggedState, SignedStateFreshness, SignedTenantState, TenantBundle, TenantRoot};
 use seal_proto::telemetry::{SignedTelemetryBatch, TelemetryBatch};
-use seal_proto::{codec, ErrorCode, Measurement, PlatformId, TenantId, TenantRootId, UnixTime};
+use seal_proto::{codec, ErrorCode, Measurement, PlatformId, SecretName, TenantId, TenantRootId, UnixTime};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ControlError {
@@ -434,6 +435,36 @@ impl ControlClient {
     /// Enclaves only. Needs no credential.
     pub async fn post_telemetry(&self, tenant: &TenantId, batch: &SignedTelemetryBatch) -> Result<(), ControlError> {
         self.send(Method::Post, &format!("/v1/tenants/{tenant}/telemetry"), batch, As::Anyone).await.map(drop)
+    }
+    /// The newest version of every named secret not deleted, by name. Members and admins.
+    pub async fn get_secrets(&self, tenant: &TenantId) -> Result<Vec<NamedSecretVersion>, ControlError> {
+        self.get_json(&format!("/v1/tenants/{tenant}/secrets"), As::Reader(tenant)).await
+    }
+    /// A name's newest version, a deletion included; `None` for a name never published.
+    /// Members, admins and the tenant's enclaves.
+    pub async fn get_secret(
+        &self,
+        tenant: &TenantId,
+        name: &SecretName,
+    ) -> Result<Option<NamedSecretVersion>, ControlError> {
+        match self.get_json(&format!("/v1/tenants/{tenant}/secrets/{name}"), As::Reader(tenant)).await {
+            Err(ControlError::Rejected { status: 404 }) => Ok(None),
+            other => other.map(Some),
+        }
+    }
+    /// The versions of a name kept, newest first.
+    pub async fn get_secret_versions(
+        &self,
+        tenant: &TenantId,
+        name: &SecretName,
+    ) -> Result<Vec<NamedSecretVersion>, ControlError> {
+        self.get_json(&format!("/v1/tenants/{tenant}/secrets/{name}/versions"), As::Reader(tenant)).await
+    }
+    /// Publishes a name's next version, or deletes the name (a version with no blob). The
+    /// version carries its own admin signatures; 409 when it is not the next.
+    pub async fn put_secret(&self, tenant: &TenantId, version: &NamedSecretVersion) -> Result<(), ControlError> {
+        let path = format!("/v1/tenants/{tenant}/secrets/{}", version.entry.body.name);
+        self.send(Method::Put, &path, version, As::Writer(tenant)).await.map(drop)
     }
     pub async fn get_release_cosign(
         &self,

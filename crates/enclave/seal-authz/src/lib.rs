@@ -3,7 +3,8 @@
 //! - `RequestAuthenticator` checks a request's proof context (tenant, this enclave's TLS key,
 //!   the purpose it computes from the request itself, the ticket) and its identity proof
 //!   together, and returns an `AuthenticatedRequest`.
-//! - `TenantAuthorizer` decides over one verified tenant snapshot, keeping the original
+//! - `TenantAuthorizer` decides over one verified tenant snapshot (a named secret's lookup
+//!   included), keeping the original
 //!   authentication scope, and returns a permit the enclave acts on.
 //! - `DeploymentVerifier` checks the enclave deployment's own identity before any key request.
 //! - `StateCache` keeps the newest verified state of the enclave's one tenant and never goes back.

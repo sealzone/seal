@@ -77,6 +77,12 @@ name_type!(
     AppName,
     "app"
 );
+name_type!(
+    /// A named secret in a tenant (e.g. `openai`): the blob its admins published under that
+    /// name (`named`). It never contains a dot, so it can't be mistaken for a blob's text.
+    SecretName,
+    "name"
+);
 
 macro_rules! bytes_type {
     ($(#[$m:meta])* $name:ident, $n:literal) => {

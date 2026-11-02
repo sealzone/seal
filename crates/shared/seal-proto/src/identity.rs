@@ -221,6 +221,11 @@ pub enum ProofPurpose {
         #[serde(with = "codec::array_b64")]
         request_digest: [u8; 32],
     },
+    /// Binds a lookup of a named secret; computed by ResolveRequest::expected_purpose.
+    Resolve {
+        #[serde(with = "codec::array_b64")]
+        request_digest: [u8; 32],
+    },
 }
 
 pub const PROOF_CONTEXT_LABEL: &str = "seal/proof-context/v1";

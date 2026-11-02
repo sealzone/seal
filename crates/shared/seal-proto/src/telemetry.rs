@@ -282,6 +282,9 @@ pub enum Operation {
     Extend,
     End,
     Signal,
+    /// A lookup of a named secret (`POST /v1/secrets/resolve`); only refusals are recorded,
+    /// since the session it leads to is.
+    Resolve,
 }
 
 /// What a replica signs with its telemetry key and ships to the control plane

@@ -10,6 +10,9 @@
     with seal.session(db_blob) as db:
         conn = psycopg.connect(db.dsn)
 
+    with seal.session("openai") as s:  # a named secret the tenant's admins published
+        client = OpenAI(base_url=s.url, api_key=s.key)
+
     seal.signal("edr-alert", severity="high")
 
 The module-level `seal`, `session` and `signal` use a default `Client` built from the
@@ -17,7 +20,8 @@ environment on first use (`SEAL_ENDPOINT`, `SEAL_TENANT`, the detected workload 
 `seal.Client(endpoints=[...], tenant="acme", identity=...)` configures one explicitly, and
 `seal.AsyncClient` is the asyncio form. `session` returns an `HttpSession` (`url`, `key`) or a
 `DatabaseSession` (`dsn`, `protocol`), whichever the blob is; both have `info`, `receipts()`,
-`extend()` and `close()`.
+`extend()` and `close()`. A session on a name looks it up again at every extend, so a new
+version the admins publish reaches it without a restart.
 
 Anyone may seal; whether this workload may start sessions is decided by the enclave from the
 tenant's grants, never by the SDK. Errors are `SealError`s named after their `ErrorCode`: `Expired`,

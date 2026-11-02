@@ -2,7 +2,8 @@
 //! and its HTTPS listener.
 //!
 //! - Bodies are JSON, read whole up to `MAX_REQUEST_BYTES` (`/v1/blobs`, `/v1/sessions`) or
-//!   `MAX_SMALL_REQUEST_BYTES` (extend, end, signals); `/v1/tickets` reads none. An oversized,
+//!   `MAX_SMALL_REQUEST_BYTES` (extend, end, signals, named-secret lookups); `/v1/tickets`
+//!   reads none. An oversized,
 //!   unreadable or malformed body is `BadRequest`.
 //! - Success: `200` with the JSON response, or `204` for `/v1/sessions/end` and `/v1/signals`.
 //! - Errors: `ErrorCode::http_status()` with an `ApiError` body whose message is fixed per code.
@@ -52,8 +53,8 @@ use axum::routing::{get, post};
 use axum::serve::{IncomingStream, Listener};
 use axum::{Extension, Json, Router};
 use seal_proto::api::{
-    ApiError, AttestationResponse, ChallengedAttestation, EndRequest, ExtendRequest, ExtendResponse, SealRequest,
-    SealResponse, SessionRequest, SessionResponse, SignalRequest,
+    ApiError, AttestationResponse, ChallengedAttestation, EndRequest, ExtendRequest, ExtendResponse, ResolveRequest,
+    ResolveResponse, SealRequest, SealResponse, SessionRequest, SessionResponse, SignalRequest,
 };
 use seal_proto::freshness::ProofTicket;
 use seal_proto::tunnel::ALPN;
@@ -116,6 +117,7 @@ trait Api: Send + Sync + 'static {
     async fn extend(&self, request: ExtendRequest, source: Option<SocketAddr>) -> Result<ExtendResponse, ServiceError>;
     async fn end(&self, request: EndRequest) -> Result<(), ServiceError>;
     async fn signal(&self, request: SignalRequest) -> Result<(), ServiceError>;
+    async fn resolve(&self, request: ResolveRequest) -> Result<ResolveResponse, ServiceError>;
 }
 
 #[async_trait]
@@ -151,6 +153,9 @@ impl Api for SealService {
     }
     async fn signal(&self, request: SignalRequest) -> Result<(), ServiceError> {
         SealService::signal(self, request).await
+    }
+    async fn resolve(&self, request: ResolveRequest) -> Result<ResolveResponse, ServiceError> {
+        SealService::resolve(self, request).await
     }
 }
 
@@ -222,6 +227,7 @@ fn routes_with<S: Api>(service: Arc<S>, limits: Limits) -> Router {
         .route("/v1/sessions/extend", post(extend::<S>).layer(small))
         .route("/v1/sessions/end", post(end::<S>).layer(small))
         .route("/v1/signals", post(signal::<S>).layer(small))
+        .route("/v1/secrets/resolve", post(resolve::<S>).layer(small))
         .fallback(unknown)
         .method_not_allowed_fallback(unknown)
         .with_state(state)
@@ -369,6 +375,13 @@ async fn signal<S: Api>(
 ) -> Result<StatusCode, Failure> {
     state.service.signal(request).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn resolve<S: Api>(
+    State(state): State<AppState<S>>,
+    JsonBody(request): JsonBody<ResolveRequest>,
+) -> Result<Json<ResolveResponse>, Failure> {
+    Ok(Json(state.service.resolve(request).await?))
 }
 
 /// IPv4 addresses (including IPv4-mapped IPv6) as they are, IPv6 by /64: one host usually
@@ -799,6 +812,10 @@ pub(crate) mod tests {
                 self.called(format!("signal+signed {}", request.code));
                 Ok(())
             }
+        }
+        async fn resolve(&self, request: ResolveRequest) -> Result<ResolveResponse, ServiceError> {
+            self.called(format!("resolve {}", request.name));
+            Ok(ResolveResponse { blob: "seal1.test".into(), version: 3 })
         }
     }
 

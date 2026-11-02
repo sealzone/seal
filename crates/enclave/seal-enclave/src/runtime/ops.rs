@@ -13,23 +13,29 @@ use seal_authz::{AuthzError, SealPermit, SessionPermit, TenantAuthorizer};
 use seal_crypto::blob::{BlobSealer, OpenedBlob};
 use seal_proto::api::{
     AttestationChallenge, AttestationResponse, ChallengedAttestation, EndRequest, ExtendRequest, ExtendResponse,
-    IngestContext, SealPayload, SealRequest, SealResponse, SessionRequest, SessionResponse, SignalRequest,
-    ATTESTATION_CHALLENGE_LABEL,
+    IngestContext, ResolveRequest, ResolveResponse, SealPayload, SealRequest, SealResponse, SessionRequest,
+    SessionResponse, SignalRequest, ATTESTATION_CHALLENGE_LABEL,
 };
 use seal_proto::blob::Blob;
 use seal_proto::freshness::{ProofTicket, ATTESTATION_MAX_AGE_SECS};
 use seal_proto::identity::WorkloadIdentity;
+use seal_proto::named::{NamedSecretVersion, NAMED_SECRET_LABEL};
 use seal_proto::release::TenantWrapKey;
 use seal_proto::session::{
     ConsumerTier, SessionClaims, SessionEnd, SessionInfo, SignedSessionEnd, SESSION_END_LABEL, SESSION_TOKEN_SECS,
 };
 use seal_proto::state::TenantState;
 use seal_proto::telemetry::{Operation, TelemetryEvent};
-use seal_proto::{codec, ErrorCode, PlatformId, TrustedTime};
+use seal_proto::{codec, ErrorCode, PlatformId, SecretName, TrustedTime, UnixTime};
+use seal_verify::{TenantVerifier, VerifiedTenant};
 
 use super::state::Local;
 use super::{fail, lock, random, rng, Runtime};
 use crate::ServiceError;
+
+/// How long a named secret fetched from the control plane answers lookups before it is fetched
+/// again: a new version reaches sessions within this plus the SDK's extend interval.
+pub(crate) const NAMED_SECRET_CACHE_SECS: UnixTime = 30;
 
 /// A refused operation: what the caller gets, and who it was once authenticated.
 pub(super) struct Refusal {
@@ -229,6 +235,79 @@ impl Runtime {
         let blob_id = blob.header.blob_id;
         let telemetry = self.record(None, TelemetryEvent::Seal { blob_id, destination, apps });
         Ok(SealResponse { blob: blob.to_string(), blob_id, telemetry })
+    }
+
+    pub(crate) async fn resolve_name(&self, request: ResolveRequest) -> Result<ResolveResponse, ServiceError> {
+        let result = self.resolve_name_refusable(request).await;
+        self.refused(Operation::Resolve, result)
+    }
+
+    /// Authenticates the caller, finds the name's newest version (`named_version`) and hands
+    /// back its blob if the caller may use it. A name never published, deleted, or not signed
+    /// by the root in force is `NotAllowed`, as is a caller with no grant for the blob's apps.
+    async fn resolve_name_refusable(&self, request: ResolveRequest) -> Result<ResolveResponse, Refusal> {
+        let (time, tenant) = self.serving_now().await?;
+        let authenticated = self.authenticator.resolve(request, &tenant, &time).await?;
+        let identity = authenticated.caller().identity().clone();
+        let _busy = self.activity.begin().by(&identity)?;
+        let name = &authenticated.request().name;
+        let version = self.named_version(name, &tenant, time.now).await.by(&identity)?;
+        let text = version.text().ok_or_else(|| fail(ErrorCode::NotAllowed, "the name was deleted")).by(&identity)?;
+        let blob = Blob::from_str(text).map_err(|_| fail(ErrorCode::Internal, "a checked blob")).by(&identity)?;
+        TenantAuthorizer::new(&tenant).resolve(&authenticated, &blob, &time).by(&identity)?;
+        Ok(ResolveResponse { blob: text.to_owned(), version: version.entry.body.version })
+    }
+
+    /// `name`'s newest version that verifies under `tenant`'s root in force: fetched when the
+    /// one held here is `NAMED_SECRET_CACHE_SECS` old. Versions never go back: a fetched one
+    /// older than the one held (a control plane serving an old version) is ignored. While the
+    /// control plane is unreachable, or serves one that does not verify, the one held answers.
+    async fn named_version(
+        &self,
+        name: &SecretName,
+        tenant: &VerifiedTenant,
+        now: UnixTime,
+    ) -> Result<NamedSecretVersion, ServiceError> {
+        let held = lock(&self.named).get(name).cloned();
+        let held = held.filter(|(_, v)| self.check_named(v, name, tenant).is_ok());
+        if let Some((at, version)) = &held {
+            if now < at.saturating_add(NAMED_SECRET_CACHE_SECS) {
+                return Ok(version.clone());
+            }
+        }
+        let fetched = match self.tenants.named_secret(name).await {
+            Ok(Some(fetched)) => self.check_named(&fetched, name, tenant).map(|()| fetched),
+            Ok(None) => Err(fail(ErrorCode::NotAllowed, "no such name")),
+            Err(e) => Err(e),
+        };
+        let newest = match (fetched, held) {
+            (Ok(fetched), Some((_, held))) if held.entry.body.version > fetched.entry.body.version => held,
+            (Ok(fetched), _) => fetched,
+            (Err(e), Some((_, held))) => {
+                tracing::warn!(%name, error = %e, "named secret: answering with the version held");
+                return Ok(held);
+            }
+            (Err(e), None) => return Err(e),
+        };
+        lock(&self.named).insert(name.clone(), (now, newest.clone()));
+        Ok(newest)
+    }
+
+    /// `version` is `name`'s in this tenant's chain, signed by the threshold of the root in
+    /// force, and carries the blob it names.
+    fn check_named(
+        &self,
+        version: &NamedSecretVersion,
+        name: &SecretName,
+        tenant: &VerifiedTenant,
+    ) -> Result<(), ServiceError> {
+        let entry = &version.entry.body;
+        if entry.tenant != self.pin.tenant || &entry.root_id != tenant.root_id() || &entry.name != name {
+            return Err(fail(ErrorCode::NotAllowed, "a named secret for another tenant, chain or name"));
+        }
+        TenantVerifier::verify_admin_signed(tenant.root(), NAMED_SECRET_LABEL, &version.entry)
+            .map_err(|_| fail(ErrorCode::NotAllowed, "a named secret not signed by the root in force"))?;
+        version.check().map_err(|_| fail(ErrorCode::NotAllowed, "a named secret without the blob it names"))
     }
 
     pub(crate) async fn session(

@@ -68,7 +68,8 @@ The graph is acyclic. An arrow means "may depend on".
 
 ```
 seal-proto    ◄── everything. Data only: ids, codec, error, secret, signed, time, policy, blob,
-                  identity, integrity, freshness, session, api, state, release, tunnel, telemetry.
+                  named, identity, integrity, freshness, session, api, state, release, tunnel,
+                  telemetry.
 seal-crypto   ──► proto                                  pure crypto, no IO
 seal-tlog     ──► proto, crypto                          pure log primitives (+ `dev` log/witness server)
 seal-verify   ──► proto, crypto, tlog                    pure release + tenant-bundle verification (ONE impl)
@@ -383,7 +384,8 @@ and two replicas on 127.0.0.1 and 127.0.0.2 with the same ports. `scripts/sim-de
 Redis; the key guardian with M-of-N releases, the log and the time lock (plus an optional
 auditor or tenant co-signature), and succession; signed tenant state with the pending window,
 freshness from the log (tenant-run signers optional) and network rules; telemetry with receipts
-and optional encryption; the CLI, the Rust, Python, Node and Go SDKs and the browser verifier;
+and optional encryption; named secrets (admin-signed versions stored by the control plane,
+looked up through the enclave); the CLI, the Rust, Python, Node and Go SDKs and the browser verifier;
 the Azure platform (customer enclaves, Seal's hosted replicas, Seal's guardian on Key Vault
 Premium), GCP Confidential Space and the sim platform; customer-deployed enclaves pinned to one
 tenant (`seal deploy azure`, `seal deploy upgrade`); blobs wrapped per platform (HPKE to

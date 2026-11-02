@@ -84,8 +84,10 @@ type Session struct {
 	ptr *C.seal_session
 }
 
-// Session starts a session on blob: the enclave opens it and the app gets a stand-in. Needs
-// an app grant listed in the blob's policy.
+// Session starts a session on blob, or on a named secret ("openai") the tenant's admins
+// published: the enclave opens it and the app gets a stand-in. Needs an app grant listed in
+// the blob's policy. A name is looked up again at every extend, so a new version reaches the
+// session without a restart.
 func (c *Client) Session(ctx context.Context, blob string, opts ...SessionOption) (*Session, error) {
 	if err := noNUL("blob", blob); err != nil {
 		return nil, err

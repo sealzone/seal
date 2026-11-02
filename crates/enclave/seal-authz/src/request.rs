@@ -3,7 +3,7 @@ use crate::context::check_context;
 use crate::identity::{IdentityVerifier, ProofVerifier};
 use crate::{AuthenticatedCaller, AuthzError};
 use seal_proto::{
-    api::{ExtendRequest, SessionRequest, SignalRequest},
+    api::{ExtendRequest, ResolveRequest, SessionRequest, SignalRequest},
     identity::{IdentityMatcher, IdentityProof, ProofContext, ProofPurpose},
     ErrorCode, TrustedTime,
 };
@@ -84,6 +84,14 @@ impl RequestAuthenticator {
         tenant: &VerifiedTenant,
         time: &TrustedTime,
     ) -> Result<AuthenticatedRequest<ExtendRequest>, AuthzError> {
+        self.authenticate(request, |r| (&r.context, &r.proof, r.expected_purpose()), tenant, time).await
+    }
+    pub async fn resolve(
+        &self,
+        request: ResolveRequest,
+        tenant: &VerifiedTenant,
+        time: &TrustedTime,
+    ) -> Result<AuthenticatedRequest<ResolveRequest>, AuthzError> {
         self.authenticate(request, |r| (&r.context, &r.proof, r.expected_purpose()), tenant, time).await
     }
     pub async fn signal(

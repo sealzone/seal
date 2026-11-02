@@ -10,6 +10,7 @@
 //! | POST   | /v1/sessions/extend | `ExtendRequest`       | `ExtendResponse`      | identity proof + token |
 //! | POST   | /v1/sessions/end    | `EndRequest`          | (empty)               | token |
 //! | POST   | /v1/signals         | `SignalRequest`       | (empty)               | identity proof |
+//! | POST   | /v1/secrets/resolve | `ResolveRequest`      | `ResolveResponse`     | identity proof |
 //!
 //! `/v1/attestation` serves the enclave's latest periodic attestation
 //! (`freshness::ATTESTATION_REFRESH_SECS`). With `?nonce=` (32 bytes, base64url, the only
@@ -198,6 +199,26 @@ pub struct SignalRequest {
     pub signatures: Vec<crate::signed::Signature>,
 }
 
+/// Look up a named secret (`named`): the enclave fetches the name's newest version from the
+/// control plane, checks it is signed by the threshold of the tenant's latest root and carries
+/// the blob it names, and returns the blob if the caller holds a grant for one of its apps. An
+/// unknown, deleted or ungranted name is `NotAllowed` alike. The SDK then starts a session on
+/// the blob as on any other.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ResolveRequest {
+    pub name: crate::SecretName,
+    pub context: ProofContext,
+    pub proof: IdentityProof,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ResolveResponse {
+    /// The blob's text.
+    pub blob: String,
+    /// The version of the name it is.
+    pub version: u64,
+}
+
 /// Extend a live session with a fresh identity proof. The enclave redeems `token`, requires
 /// the proof to be from the same caller, rechecks grants, suspension, expiry and the endpoint
 /// report, and issues a new token for the same `session_id` with a new `expires_at`.
@@ -289,6 +310,11 @@ impl ExtendRequest {
     /// `SessionRequest::evidence_challenge`).
     pub fn evidence_challenge(&self) -> [u8; 32] {
         codec::labeled_digest("seal/extend-request/v1", &(&self.token, &Option::<EndpointReport>::None))
+    }
+}
+impl ResolveRequest {
+    pub fn expected_purpose(&self) -> ProofPurpose {
+        ProofPurpose::Resolve { request_digest: codec::labeled_digest("seal/resolve-request/v1", &self.name) }
     }
 }
 impl SignalRequest {

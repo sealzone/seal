@@ -20,6 +20,9 @@
 //! | Documents, proposals, telemetry       |   | ✓ | ✓ | ✓ |   |   |   |   |
 //! | Put, sign, withdraw, submit proposals |   |   | ✓ | ✓ |   |   |   |   |
 //! | Put roots, states, release co-signatures (each still needs its own admin signatures) | | | ✓ | ✓ | | | | ✓ |
+//! | A named secret's newest version       |   | ✓ | ✓ | ✓ | ✓ |   |   |   |
+//! | Named secrets listed, a name's versions |   | ✓ | ✓ | ✓ |   |   |   |   |
+//! | Publish or delete a named secret (each version needs its own admin signatures) | | | ✓ | ✓ | | | | |
 //! | Service key certificates, release co-signatures, releases and their templates, the checkpoint | ✓ | | | | | | | |
 //! | Post signals, session ends, telemetry, certificates, freshness statements (verified by their own signatures) | ✓ | | | | | | | |
 //! | Put releases and their templates      |   |   |   |   |   |   |   | ✓ |
@@ -55,6 +58,10 @@
 //! | GET    | /v1/tenants/{tenant}/telemetry/gaps                | → `[{ gap: "missing", stream, from, to, count } or { gap: "stopped", stream, sequence, seen }]`, unverified |
 //! | GET    | /v1/tenants/{tenant}/release-cosigns/{measurement} | → `Signed<ReleaseCosign>`           |
 //! | PUT    | /v1/tenants/{tenant}/release-cosigns/{measurement} | `Signed<ReleaseCosign>`             |
+//! | GET    | /v1/tenants/{tenant}/secrets                       | → `[NamedSecretVersion]`, the newest version of every name not deleted, by name |
+//! | GET    | /v1/tenants/{tenant}/secrets/{name}                | → `NamedSecretVersion`, the name's newest, a deletion included |
+//! | PUT    | /v1/tenants/{tenant}/secrets/{name}                | `NamedSecretVersion`: the name's next version (409 otherwise), signed by the latest root's threshold, carrying the blob it names (none: a deletion) |
+//! | GET    | /v1/tenants/{tenant}/secrets/{name}/versions       | → `[NamedSecretVersion]`, the versions kept (`NAMED_SECRET_VERSIONS_KEPT`), newest first |
 //! | GET    | /v1/releases/{platform}                            | → `[ReleaseEvidence]`, every one stored for the platform, in log order |
 //! | GET    | /v1/releases/{platform}/{measurement}              | → `ReleaseEvidence`                 |
 //! | PUT    | /v1/releases/{platform}/{measurement}              | `ReleaseEvidence`                   |
@@ -68,6 +75,11 @@
 //! no longer above the current one). Every signature a PUT brings must verify for an admin key
 //! of the root the document needs: the latest one, or for a state signed for the next root,
 //! a proposed next root.
+//!
+//! Named secrets (`seal_proto::named`) are rows in Postgres beside telemetry. They are not tenant
+//! state: each version carries the latest root's threshold of signatures, checked here on the
+//! way in and by every enclave on the way out, and the newest per name is served. A root
+//! rotation leaves versions signed by keys it removed unverifiable until admins publish again.
 //!
 //! A release template is opaque here: `seal deploy` checks that its measurement is the
 //! verified release's before using it.

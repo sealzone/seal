@@ -11,7 +11,7 @@ use seal_proto::blob::Blob;
 use seal_proto::policy::{Destination, Protocol};
 use seal_proto::session::{ConsumerTier, SessionInfo, SESSION_EXTEND_SECS};
 use seal_proto::tunnel::LOCAL_KEY_PREFIX;
-use seal_proto::{Bearer, ErrorCode};
+use seal_proto::{Bearer, ErrorCode, SecretName};
 use sha2::{Digest, Sha256};
 
 use crate::client::{now, placeholder};
@@ -21,8 +21,9 @@ use crate::{integrity, tunnel, BoxFuture, Client, ClientError};
 type Reload = Arc<dyn Fn() -> BoxFuture<'static, Result<String, ClientError>> + Send + Sync>;
 type OnReseal = Arc<dyn Fn(String) -> BoxFuture<'static, ()> + Send + Sync>;
 
-/// `Client::session(blob)`: chain options, then end with `.http()` or `.database()` for a
-/// typed session, or `.await` for a `Session` of whichever kind the blob is.
+/// `Client::session(blob)` or `Client::session(name)`: chain options, then end with `.http()`
+/// or `.database()` for a typed session, or `.await` for a `Session` of whichever kind the blob
+/// is.
 #[must_use = "a session does nothing until you .await it"]
 pub struct SessionBuilder<'a> {
     client: &'a Client,
@@ -68,8 +69,7 @@ impl<'a> SessionBuilder<'a> {
     #[allow(clippy::manual_async_fn)]
     pub fn http(self) -> impl Future<Output = Result<HttpSession, ClientError>> + Send + 'a {
         async move {
-            expect_kind(&self.blob, Kind::Http)?;
-            match self.await? {
+            match self.open(Some(Kind::Http)).await? {
                 Session::Http(s) => Ok(s),
                 Session::Database(_) => unreachable!("checked before starting"),
             }
@@ -80,8 +80,7 @@ impl<'a> SessionBuilder<'a> {
     #[allow(clippy::manual_async_fn)]
     pub fn database(self) -> impl Future<Output = Result<DatabaseSession, ClientError>> + Send + 'a {
         async move {
-            expect_kind(&self.blob, Kind::Database)?;
-            match self.await? {
+            match self.open(Some(Kind::Database)).await? {
                 Session::Database(s) => Ok(s),
                 Session::Http(_) => unreachable!("checked before starting"),
             }
@@ -102,26 +101,44 @@ impl<'a> IntoFuture for SessionBuilder<'a> {
     /// `POST /v1/sessions` with a fresh identity proof and endpoint report, then starts the
     /// local tunnel. The kind follows the blob's destination.
     fn into_future(self) -> Self::IntoFuture {
-        Box::pin(async move {
-            Blob::from_str(&self.blob)?;
-            self.client.warn_if_env_app_key_and_blob(&self.blob).await;
-            let live = Arc::new(Live {
-                client: self.client.clone(),
-                min_tier: self.min_tier,
-                reporter: self.endpoint.unwrap_or_else(|| Arc::new(integrity::ExecutableHash)),
-                reload: self.reload,
-                on_reseal: self.on_reseal,
-                blob: Mutex::new(self.blob),
-                token: Arc::new(Mutex::new(Bearer::new(String::new()))),
-                expires_at: AtomicU64::new(0),
-                tunnel: Mutex::new(None),
-                serial: tokio::sync::Mutex::new(()),
-                ended: AtomicBool::new(false),
-                receipts: Mutex::new(Vec::new()),
-            });
-            let (response, _) = live.start().await?;
-            Core::open(live, response).await
-        })
+        Box::pin(self.open(None))
+    }
+}
+
+impl SessionBuilder<'_> {
+    /// Looks a name up (`Client::resolve`), checks the blob is of `kind` when one is asked for,
+    /// starts the session and its tunnel.
+    async fn open(self, kind: Option<Kind>) -> Result<Session, ClientError> {
+        // A blob's text always has dots, which a name never has.
+        let name = SecretName::new(self.blob.as_str()).ok();
+        let blob = match &name {
+            Some(name) => self.client.resolve_version(name.as_str()).await?.0,
+            None => {
+                Blob::from_str(&self.blob)?;
+                self.client.warn_if_env_app_key_and_blob(&self.blob).await;
+                self.blob
+            }
+        };
+        if let Some(kind) = kind {
+            expect_kind(&blob, kind)?;
+        }
+        let live = Arc::new(Live {
+            client: self.client.clone(),
+            min_tier: self.min_tier,
+            reporter: self.endpoint.unwrap_or_else(|| Arc::new(integrity::ExecutableHash)),
+            reload: self.reload,
+            on_reseal: self.on_reseal,
+            name,
+            blob: Mutex::new(blob),
+            token: Arc::new(Mutex::new(Bearer::new(String::new()))),
+            expires_at: AtomicU64::new(0),
+            tunnel: Mutex::new(None),
+            serial: tokio::sync::Mutex::new(()),
+            ended: AtomicBool::new(false),
+            receipts: Mutex::new(Vec::new()),
+        });
+        let (response, _) = live.start().await?;
+        Core::open(live, response).await
     }
 }
 
@@ -278,6 +295,8 @@ struct Live {
     reporter: Arc<dyn integrity::EndpointReporter>,
     reload: Option<Reload>,
     on_reseal: Option<OnReseal>,
+    /// The named secret the session follows, if it was started on a name.
+    name: Option<SecretName>,
     /// The blob the current session runs on.
     blob: Mutex<String>,
     token: Arc<tunnel::TokenCell>,
@@ -314,13 +333,49 @@ impl Live {
         self.tunnel.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
-    /// Starts a session on the current blob; on `Expired` with `reload_with`, once more on
-    /// the blob it returns. Hands a resealed blob to `on_reseal`.
+    /// The blob to restart on after `Expired`: what `reload_with` returns, else the name's
+    /// newest version. `None` when the session has neither.
+    async fn reloaded(&self) -> Option<Result<String, ClientError>> {
+        match (&self.reload, &self.name) {
+            (Some(reload), _) => Some(reload().await),
+            (None, Some(name)) => Some(self.client.resolve(name.as_str()).await),
+            (None, None) => None,
+        }
+    }
+
+    /// A newer blob for a session on a name: the name's newest version, if it is not the
+    /// current blob and keeps its destination (`url` and `dsn` were made from it). A lookup that
+    /// fails leaves the session on its blob.
+    async fn newer_named(&self) -> Option<String> {
+        let name = self.name.as_ref()?;
+        let newest = match self.client.resolve(name.as_str()).await {
+            Ok(blob) => blob,
+            Err(e) => {
+                tracing::debug!(%name, error = %e, "named secret: lookup failed; staying on the current blob");
+                return None;
+            }
+        };
+        let current = self.blob();
+        if newest == current {
+            return None;
+        }
+        let destination = |text: &str| Blob::from_str(text).ok().map(|b| b.policy.destination().clone());
+        if destination(&newest) != destination(&current) {
+            tracing::warn!(
+                %name,
+                "named secret: the new version has another destination; it reaches new sessions only"
+            );
+            return None;
+        }
+        Some(newest)
+    }
+
+    /// Starts a session on the current blob; on `Expired` with `reload_with` or a name, once
+    /// more on the blob that gives (`reloaded`). Hands a resealed blob to `on_reseal`.
     async fn start(&self) -> Result<(SessionResponse, Arc<VerifiedEnclave>), ClientError> {
         let (response, enclave) = match self.start_once(&self.blob()).await {
-            Err(ClientError::Seal { code: ErrorCode::Expired, .. }) if self.reload.is_some() => {
-                let reload = self.reload.as_ref().expect("checked");
-                let blob = reload().await?;
+            Err(e @ ClientError::Seal { code: ErrorCode::Expired, .. }) => {
+                let blob = self.reloaded().await.ok_or(e)??;
                 let started = self.start_once(&blob).await?;
                 *self.blob.lock().unwrap_or_else(|e| e.into_inner()) = blob;
                 started
@@ -362,13 +417,24 @@ impl Live {
         Ok((response, enclave))
     }
 
-    /// Extends with a fresh proof and report, then the tunnel's live connections. A session
-    /// whose blob is `Expired` restarts through `reload_with`; one whose token already expired
+    /// Extends with a fresh proof and report, then the tunnel's live connections. A session on
+    /// a name with a newer version (`newer_named`) restarts on it instead. A session whose blob
+    /// is `Expired` restarts through `reload_with` or its name; one whose token already expired
     /// restarts on the same blob. `SessionEnded` and `IntegrityFailed` stop the tunnel.
     async fn extend(&self) -> Result<Renewal, ClientError> {
         let _one = self.serial.lock().await;
         if self.ended.load(Ordering::Relaxed) {
             return Err(ClientError::Seal { code: ErrorCode::SessionEnded, message: "the session was ended".into() });
+        }
+        if let Some(newer) = self.newer_named().await {
+            let previous = std::mem::replace(&mut *self.blob.lock().unwrap_or_else(|e| e.into_inner()), newer);
+            match self.start().await {
+                Ok((response, _)) => return Ok(Renewal::Restarted(Box::new(response))),
+                Err(e) => {
+                    tracing::warn!(error = %e, "named secret: starting on the new version failed; extending the current one");
+                    *self.blob.lock().unwrap_or_else(|e| e.into_inner()) = previous;
+                }
+            }
         }
         let client = &self.client;
         let enclave = client.enclave().await?;
@@ -389,9 +455,9 @@ impl Live {
                 let (response, _) = self.start().await?;
                 Ok(Renewal::Restarted(Box::new(response)))
             }
-            Err(ClientError::Seal { code: ErrorCode::Expired, .. }) if self.reload.is_some() => {
-                let reload = self.reload.as_ref().expect("checked");
-                *self.blob.lock().unwrap_or_else(|e| e.into_inner()) = reload().await?;
+            Err(e @ ClientError::Seal { code: ErrorCode::Expired, .. }) => {
+                let blob = self.reloaded().await.ok_or(e)??;
+                *self.blob.lock().unwrap_or_else(|e| e.into_inner()) = blob;
                 let (response, _) = self.start().await?;
                 Ok(Renewal::Restarted(Box::new(response)))
             }

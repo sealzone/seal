@@ -82,6 +82,23 @@ mod js {
         js(api::signers(root, label, signed))
     }
 
+    #[wasm_bindgen(js_name = namedSecret)]
+    pub fn named_secret(
+        tenant: &str,
+        root_id: &str,
+        name: &str,
+        version: f64,
+        blob: &str,
+        published_at: f64,
+    ) -> Result<String, JsError> {
+        js(api::named_secret(tenant, root_id, name, version as u64, blob, published_at as u64))
+    }
+
+    #[wasm_bindgen(js_name = describeNamedSecret)]
+    pub fn describe_named_secret(tenant: &str, root_id: &str, root: &str, version: &str) -> Result<String, JsError> {
+        js(api::describe_named_secret(tenant, root_id, root, version))
+    }
+
     #[wasm_bindgen(js_name = adminKeyId)]
     pub fn admin_key_id(admin_key: &str) -> Result<String, JsError> {
         js(api::admin_key_id_of(admin_key))
