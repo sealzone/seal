@@ -43,8 +43,8 @@
 //! address their `SEAL_ENDPOINT` names and pin its attested key, so no name or address of the
 //! replica's own is configured.
 //!
-//! The cloud's environment (`SEAL_TENANT`, `SEAL_SIM_DEPLOYMENT`, `SEAL_SIM_CLOCK_OFFSET` in sim)
-//! is read by `seal_cloud::Cloud::detect`. Logs go to stderr, `info` and above (`SEAL_LOG=debug`
+//! The cloud's environment (`SEAL_TENANT`, `SEAL_SIM_DEPLOYMENT`, `SEAL_SIM_CLOCK_OFFSET` in sim;
+//! on Nitro the parent's first vsock message instead) is read by `seal_cloud::Cloud::detect`. Logs go to stderr, `info` and above (`SEAL_LOG=debug`
 //! for more).
 #![forbid(unsafe_code)]
 
@@ -66,7 +66,6 @@ use seal_enclave::{api, Components, SealService, ServiceConfig};
 use seal_guardian::client::GuardianClient;
 use seal_net::{BakedRootsConnector, HttpsClient};
 use seal_proto::ServiceKeyVersion;
-use tokio::net::TcpListener;
 use tokio::sync::watch;
 
 /// How long open API requests may take to finish after a shutdown signal.
@@ -76,7 +75,8 @@ const API_DRAIN: Duration = Duration::from_secs(10);
 struct Config {
     guardian: file::PerPlatform<url::Url>,
     control_plane: url::Url,
-    /// The one port: the API and the tunnels.
+    /// The one port: the API and the tunnels. On Nitro, the vsock port of the same number
+    /// (`seal_cloud::Cloud::listen`).
     listen: SocketAddr,
     service_key_version: ServiceKeyVersion,
     trust: seal_verify::Trust,
@@ -141,8 +141,9 @@ async fn run() -> Result<(), String> {
     let started = tokio::time::Instant::now();
     let exit_after = exit_after(std::env::var(EXIT_AFTER_VAR).ok().as_deref())?;
     let config = config()?;
-    let cloud = Cloud::detect().map_err(|e| format!("cloud: {e}"))?;
+    let cloud = Cloud::detect().await.map_err(|e| format!("cloud: {e}"))?;
     let pin = cloud.tenant_pin().clone();
+    let listen = cloud.listen(config.listen);
     let platform = cloud.attestor().platform();
     let guardian_url =
         config.guardian.get(platform).ok_or_else(|| format!("the configuration names no guardian for {platform:?}"))?;
@@ -154,7 +155,10 @@ async fn run() -> Result<(), String> {
 
     // The key provider and the control-plane credential attest with their own handle on this
     // TEE: `Cloud` moves into the runtime.
-    let attestor = seal_tee::Attestor::detect().map_err(|e| format!("attestor: {e}"))?;
+    let attestor = tokio::task::spawn_blocking(seal_tee::Attestor::detect)
+        .await
+        .map_err(|e| format!("attestor: {e}"))?
+        .map_err(|e| format!("attestor: {e}"))?;
     if attestor.platform() != platform || attestor.measurement() != cloud.attestor().measurement() {
         return Err("the key provider's attestor is not the cloud's".into());
     }
@@ -190,10 +194,10 @@ async fn run() -> Result<(), String> {
     tracing::info!(tenant = %pin, "booted");
 
     let tls = service.tls_config();
-    let listener = bind(config.listen).await?;
+    let listener = listen.bind().await.map_err(|e| format!("listen on {listen}: {e}"))?;
     let (stop, stopping) = watch::channel(false);
     let mut api_task = tokio::spawn(api::serve(service.clone(), listener, tls, stopped(stopping)));
-    tracing::info!(listen = %config.listen, "serving the API and tunnels");
+    tracing::info!(%listen, "serving the API and tunnels");
 
     // A task that should run until shutdown and ended is a failure: the process exits with an
     // error, after the final telemetry, so the container's restart policy brings it back.
@@ -250,10 +254,6 @@ fn connector(config: &Config, dialer: Arc<dyn seal_net::Dialer>) -> Result<Baked
         return Err("extra roots are for sim builds only".into());
     }
     Ok(BakedRootsConnector::new(dialer).with_time(seal_tee::tls_time()))
-}
-
-async fn bind(addr: SocketAddr) -> Result<TcpListener, String> {
-    TcpListener::bind(addr).await.map_err(|e| format!("listen on {addr}: {e}"))
 }
 
 /// Resolves once `stopping` turns true (or its sender is gone).

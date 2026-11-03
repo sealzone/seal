@@ -37,7 +37,7 @@ async fn sim_cloud_attests_and_tells_time() {
     assert_eq!(cloud.tenant_pin(), &pin());
     match cloud.deployment(&Default::default()).await.unwrap() {
         DeploymentProof::Attested(id) => assert_eq!(id, identity()),
-        DeploymentProof::Proof(_) => panic!("not the given proof"),
+        _ => panic!("not the given proof"),
     }
 }
 
@@ -59,7 +59,7 @@ async fn deployment_proofs_are_returned_intact() {
         for _ in 0..2 {
             match cloud.deployment(&Default::default()).await.unwrap() {
                 DeploymentProof::Proof(p) => assert_eq!(serde_json::to_string(&p).unwrap(), expected),
-                DeploymentProof::Attested(_) => panic!("not the given proof"),
+                _ => panic!("not the given proof"),
             }
         }
     }
@@ -112,10 +112,10 @@ fn sim_from_environment() {
     assert!(Sim::from_vars(measurement(), vars(Some(&pin_text), Some(&deployment), Some("soon"))).is_err());
 }
 
-#[test]
-fn detect_without_a_tee_or_sim_selection() {
+#[tokio::test]
+async fn detect_without_a_tee_or_sim_selection() {
     if std::env::var_os("SEAL_SIM").is_some() {
         return;
     }
-    assert!(matches!(Cloud::detect(), Err(CloudError::Tee(seal_tee::TeeError::NotInTee))));
+    assert!(matches!(Cloud::detect().await, Err(CloudError::Tee(seal_tee::TeeError::NotInTee))));
 }

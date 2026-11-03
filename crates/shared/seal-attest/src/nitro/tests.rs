@@ -11,8 +11,8 @@ use seal_proto::{PlatformId, TrustedTime};
 use sha2::{Digest, Sha256};
 
 use super::{
-    baked_root, instance_of, is_region, measurement, verify_enclave_with_root, verify_tpm_with_root, TpmDocument,
-    ROOT_PEM,
+    baked_root, instance_of, is_region, measurement, peek, verify_enclave_with_root, verify_timestamp_with_root,
+    verify_tpm_with_root, TpmDocument, ROOT_PEM,
 };
 use crate::x509::Cert;
 use crate::AttestError;
@@ -159,6 +159,58 @@ fn synthetic_enclave_document_verifies() {
     assert_eq!(v.report_data, std::array::from_fn(|i| i as u8));
     assert_eq!(v.tcb, Tcb::default());
     assert_eq!(v.deployment, None);
+}
+
+#[test]
+fn peek_reads_an_enclave_document_without_verifying_it() {
+    let p = |i| -> [u8; 48] { pcr(i).try_into().unwrap() };
+    // Signed by a key the chain does not name: peek does not care.
+    let other = p384::ecdsa::SigningKey::from_slice(&[7u8; 48]).unwrap();
+    let doc = peek(&sign_with(fields("pcrs"), iana::Algorithm::ES384, &other)).unwrap();
+    assert_eq!(doc.module_id, MODULE_ID);
+    assert_eq!(doc.timestamp_ms, 1_793_165_986_000);
+    assert_eq!(doc.pcrs.len(), 24);
+    assert_eq!(doc.user_data, Some((0..32).collect()));
+    assert_eq!(doc.nonce, Some(b"seal-nonce".to_vec()));
+    assert_eq!(doc.public_key, None);
+    assert_eq!(doc.measurement().unwrap(), measurement(&p(0), &p(1), &p(2)));
+    // Its shape is still checked, and a debug enclave's PCRs give no measurement.
+    assert_rejected(peek(&with("nitrotpm_pcrs", |_| {})), "no pcrs");
+    assert_rejected(peek(b"not cbor"), "not a COSE_Sign1");
+    let debug = with("pcrs", |f| {
+        let pcrs = (0..3).map(|i| (Value::Integer(i.into()), Value::Bytes(vec![0; 48]))).collect();
+        set(f, "pcrs", Value::Map(pcrs));
+    });
+    assert!(matches!(peek(&debug).unwrap().measurement(), Err(AttestError::DebugMode)));
+}
+
+#[test]
+fn clock_documents_verify_at_their_own_timestamp() {
+    let doc = with("pcrs", |_| {});
+    assert_eq!(verify_timestamp_with_root(&doc, b"seal-nonce", &root()).unwrap(), 1_793_165_986_000);
+    // Another nonce, or none: a replayed document.
+    assert_rejected(verify_timestamp_with_root(&doc, b"other-nonce", &root()), "clock's nonce");
+    assert_rejected(verify_timestamp_with_root(&with("pcrs", |f| remove(f, "nonce")), b"seal-nonce", &root()), "nonce");
+    // A timestamp at which the leaf is not valid.
+    let late = with("pcrs", |f| set(f, "timestamp", Value::Integer(2_200_000_000_000u64.into())));
+    assert_rejected(verify_timestamp_with_root(&late, b"seal-nonce", &root()), "not valid");
+    // A debug enclave, a NitroTPM, another chain, the baked root for a synthetic chain.
+    let debug = with("pcrs", |f| {
+        let pcrs = (0..3).map(|i| (Value::Integer(i.into()), Value::Bytes(vec![0; 48]))).collect();
+        set(f, "pcrs", Value::Map(pcrs));
+    });
+    assert!(matches!(verify_timestamp_with_root(&debug, b"seal-nonce", &root()), Err(AttestError::DebugMode)));
+    assert_rejected(verify_timestamp_with_root(&with("nitrotpm_pcrs", |_| {}), b"seal-nonce", &root()), "no pcrs");
+    assert_rejected(
+        verify_timestamp_with_root(&doc, b"seal-nonce", &pem(data!("other-root.pem"))),
+        "does not start with",
+    );
+    assert_rejected(super::verify_timestamp(&doc, b"seal-nonce"), "does not start with");
+    // Tampered after signing.
+    let at = doc.windows(10).position(|w| w == b"seal-nonce").unwrap();
+    let mut tampered = doc.clone();
+    tampered[at + 9] ^= 1;
+    assert_rejected(verify_timestamp_with_root(&tampered, b"seal-noncd", &root()), "signature does not verify");
 }
 
 #[test]
@@ -333,6 +385,8 @@ fn mutate(bytes: &[u8], at: &[(prop::sample::Index, u8)]) -> Vec<u8> {
 fn both(document: &[u8]) {
     let _ = verify_enclave_with_root(document, &AT, &root());
     let _ = verify_tpm_with_root(document, &AT, &root());
+    let _ = verify_timestamp_with_root(document, b"seal-nonce", &root());
+    let _ = peek(document).map(|d| d.measurement());
 }
 
 const PCRS_KEYS: [&str; 2] = ["pcrs", "nitrotpm_pcrs"];

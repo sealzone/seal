@@ -230,6 +230,25 @@ pub enum ProofPurpose {
 
 pub const PROOF_CONTEXT_LABEL: &str = "seal/proof-context/v1";
 
+/// What a bound deployment proof commits to: a nonce the enclave chose for that one proof, so
+/// the proof cannot be replayed as another deployment's or an earlier boot's. A SigV4 proof
+/// carries `X-Seal-Binding: hex(digest())` among its signed headers, as a request proof
+/// carries its context's (AWS Nitro: `seal_proto::nitro`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeploymentBinding {
+    #[serde(with = "codec::array_b64")]
+    pub nonce: [u8; 32],
+}
+
+pub const DEPLOYMENT_BINDING_LABEL: &str = "seal/deployment-binding/v1";
+
+impl DeploymentBinding {
+    /// `labeled_digest(DEPLOYMENT_BINDING_LABEL, self)`, whose hex is the `X-Seal-Binding` value.
+    pub fn digest(&self) -> [u8; 32] {
+        codec::labeled_digest(DEPLOYMENT_BINDING_LABEL, self)
+    }
+}
+
 /// How a caller proves its identity. Verified only inside the enclave.
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]

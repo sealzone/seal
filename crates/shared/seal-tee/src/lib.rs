@@ -6,7 +6,8 @@
 //! `Attestor::detect` picks the one whose TEE device is present. Each refuses to start
 //! outside its TEE. The set is closed: dispatch is a `match`, not a trait object.
 //!
-//! The SNP guest-device ioctl goes through `sev` (`/dev/sev-guest`), so this crate has no
+//! The SNP guest-device ioctl goes through `sev` (`/dev/sev-guest`), and the Nitro NSM ioctl
+//! (`/dev/nsm`) through `seal-tee-nsm-sys`, a crate of one `unsafe` call. This crate has no
 //! `unsafe` of its own.
 #![forbid(unsafe_code)]
 
@@ -49,7 +50,7 @@ pub enum Attestor {
 impl Attestor {
     /// By device, in this order: `/dev/sev-guest` with the ACI security context
     /// (`UVM_SECURITY_CONTEXT_DIR`, else exactly one `/security-context-*` directory) (Azure),
-    /// `/dev/nsm` (Nitro, which this build refuses with `Unavailable`), the Confidential Space
+    /// `/dev/nsm` (Nitro), the Confidential Space
     /// launcher socket `/run/container_launcher/teeserver.sock` (GCP). `NotInTee` when none is
     /// present.
     ///

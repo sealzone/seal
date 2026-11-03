@@ -27,6 +27,7 @@ seal-proto = { path = "crates/shared/seal-proto", version = "0.2.10", package = 
 seal-crypto = { path = "crates/shared/seal-crypto", version = "0.2.10", package = "sealzone-crypto" }
 seal-attest = { path = "crates/shared/seal-attest", version = "0.2.10", package = "sealzone-attest" }
 seal-tee = { path = "crates/shared/seal-tee", version = "0.2.10" }
+seal-tee-nsm-sys = { path = "crates/shared/seal-tee-nsm-sys", version = "0.2.10" }
 seal-tlog = { path = "crates/shared/seal-tlog", version = "0.2.10", package = "sealzone-tlog" }
 seal-net = { path = "crates/shared/seal-net", version = "0.2.10", package = "sealzone-net" }
 seal-verify = { path = "crates/shared/seal-verify", version = "0.2.10", package = "sealzone-verify" }
@@ -87,8 +88,12 @@ coset = "0.4"
 
 # TEE devices
 sev = { version = "8", default-features = false, features = ["snp"] }
+# The Nitro NSM ioctl (seal-tee-nsm-sys) and vsock errnos (seal-net). Already in every tree (tokio, mio).
+libc = "0.2"
 
 # network
+# vsock sockets (seal-net, Nitro). The version and features tokio already pulls.
+socket2 = { version = "0.6", features = ["all"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 webpki-roots = "1"
@@ -100,7 +105,7 @@ sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio",
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio"] }
 postgres-protocol = "0.6"
 
-# SDK only, behind seal-client's `aws` feature
+# seal-client's `aws` feature, and the Nitro parent's presigner (seal-nitro-host). Never in a TEE.
 aws-sigv4 = { version = "1", default-features = false, features = ["sign-http", "http1"] }
 aws-config = "1"
 

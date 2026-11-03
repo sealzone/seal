@@ -22,7 +22,10 @@
 //!
 //! The port holds at most `MAX_CONNECTIONS` connections at once, API and tunnels together,
 //! and `MAX_CONNECTIONS_PER_SOURCE` from one source (keyed as the rate limits are); a
-//! connection past either is closed before its TLS handshake. A connection holds its slot
+//! connection past either is closed before its TLS handshake. A connection's source is its peer
+//! address, except on a listener whose connections all come from a forwarder that names each
+//! client (`seal_cloud::Listener::names_clients`, the Nitro parent): there it is the address the
+//! PROXY header names, and a connection without one is closed. A connection holds its slot
 //! from the accept until it closes: the PROXY header and handshake within `HANDSHAKE_TIMEOUT`,
 //! then a tunnel until it ends, or an API connection until it goes `API_IDLE_TIMEOUT` with no
 //! byte moving either way.
@@ -52,6 +55,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::serve::{IncomingStream, Listener};
 use axum::{Extension, Json, Router};
+use seal_cloud::Listener as PortListener;
 use seal_proto::api::{
     ApiError, AttestationResponse, ChallengedAttestation, EndRequest, ExtendRequest, ExtendResponse, ResolveRequest,
     ResolveResponse, SealRequest, SealResponse, SessionRequest, SessionResponse, SignalRequest,
@@ -61,7 +65,7 @@ use seal_proto::tunnel::ALPN;
 use seal_proto::ErrorCode;
 use serde::de::DeserializeOwned;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpStream;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::time::{Instant, Sleep};
 use tokio_rustls::server::TlsStream;
@@ -164,7 +168,7 @@ impl Api for SealService {
 /// finish. Tunnels are not waited for.
 pub async fn serve(
     service: Arc<SealService>,
-    listener: TcpListener,
+    listener: PortListener,
     tls: Arc<rustls::ServerConfig>,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> io::Result<()> {
@@ -174,13 +178,13 @@ pub async fn serve(
 
 async fn serve_router(
     router: Router,
-    listener: TcpListener,
+    listener: impl Into<PortListener>,
     tls: Arc<rustls::ServerConfig>,
     tunnels: Arc<dyn Tunnels>,
     limits: PortLimits,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> io::Result<()> {
-    let listener = TlsListener::new(listener, tls, tunnels, limits)?;
+    let listener = TlsListener::new(listener.into(), tls, tunnels, limits)?;
     axum::serve(listener, router.into_make_service_with_connect_info::<Source>()).with_graceful_shutdown(shutdown).await
 }
 
@@ -617,7 +621,7 @@ impl AsyncWrite for ApiStream {
     }
 }
 
-/// Accepts TCP connections within `PortLimits` (past them, a connection is closed at once) and
+/// Accepts connections within `PortLimits` (past them, a connection is closed at once) and
 /// completes their TLS handshakes in the background (each within `HANDSHAKE_TIMEOUT`), so a
 /// slow client never holds up the others; tunnels go to `tunnels`, the rest to the API. Stops
 /// accepting once dropped.
@@ -628,12 +632,13 @@ struct TlsListener {
 
 impl TlsListener {
     fn new(
-        listener: TcpListener,
+        listener: PortListener,
         config: Arc<rustls::ServerConfig>,
         tunnels: Arc<dyn Tunnels>,
         limits: PortLimits,
     ) -> io::Result<Self> {
         let local = listener.local_addr()?;
+        let names_clients = listener.names_clients();
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         let slots = Slots::new(&limits);
         tokio::spawn(async move {
@@ -659,10 +664,18 @@ impl TlsListener {
                 let (config, tunnels, tx, slots) = (config.clone(), tunnels.clone(), tx.clone(), slots.clone());
                 tokio::spawn(async move {
                     // A PROXY header first, if the connection starts with one: its client
-                    // address stands for the socket's only on a replica behind the front door.
+                    // address stands for the socket's only on a replica behind the front door,
+                    // or from a forwarder that names every client (the Nitro parent).
                     let accepting = async {
                         let named = crate::proxy::read(&mut tcp).await?;
-                        let peer = named.filter(|_| tunnels.behind_front_door()).unwrap_or(socket_peer);
+                        let peer = match named {
+                            Some(client) if names_clients => client,
+                            None if names_clients => {
+                                tracing::debug!("connection refused: the forwarder named no client");
+                                return Ok(None);
+                            }
+                            named => named.filter(|_| tunnels.behind_front_door()).unwrap_or(socket_peer),
+                        };
                         let Some(slot) = slots.take(permit, peer.ip()) else {
                             tracing::debug!(%peer, "connection refused: its source holds its share of the port");
                             return Ok(None);
@@ -736,6 +749,7 @@ pub(crate) mod tests {
     use seal_proto::{Bearer, BlobId, KeyId, PlatformId, ServiceKeyVersion, TenantId, TenantRootId};
 
     use super::*;
+    use tokio::net::TcpListener;
 
     pub(crate) const HOST: &str = "enclave.test";
 
@@ -1011,6 +1025,67 @@ pub(crate) mod tests {
         tunnel.read_to_end(&mut got).await.unwrap();
         assert_eq!(got, b"served");
         dial_until_accepted(addr, b, b"http/1.1").await;
+    }
+
+    /// A PROXY v2 header naming `client` (TCP over IPv4).
+    fn proxy_header(client: SocketAddr) -> Vec<u8> {
+        let SocketAddr::V4(client) = client else { panic!("IPv4 only") };
+        let mut h = crate::proxy::SIGNATURE.to_vec();
+        h.extend_from_slice(&[0x21, 0x11, 0, 12]);
+        h.extend_from_slice(&client.ip().octets());
+        h.extend_from_slice(&[10, 0, 0, 1]);
+        h.extend_from_slice(&client.port().to_be_bytes());
+        h.extend_from_slice(&8443u16.to_be_bytes());
+        h
+    }
+
+    #[tokio::test]
+    async fn a_forwarder_that_names_clients_must_name_every_one() {
+        // As on Nitro: every connection comes from the parent, which names the client.
+        let key = tls_key();
+        let tcp = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = tcp.local_addr().unwrap();
+        let tunnels = Arc::new(FakeTunnels { admit: true.into() });
+        let router = routes_with(Arc::new(Fake::default()), Limits::default());
+        let config = tls_config(&key, &[HOST.to_string()]);
+        let limits = PortLimits { connections: 8, per_source: 1, ..PortLimits::default() };
+        let listener = PortListener::Forwarded(tcp);
+        tokio::spawn(serve_router(router, listener, config, tunnels, limits, std::future::pending()));
+
+        let mut roots = rustls::RootCertStore::empty();
+        roots
+            .add(rustls::pki_types::CertificateDer::from(key.ca_certificate_der(&[HOST.to_string()]).unwrap()))
+            .unwrap();
+        let client = Arc::new(
+            rustls::ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+                .with_safe_default_protocol_versions()
+                .unwrap()
+                .with_root_certificates(roots)
+                .with_no_client_auth(),
+        );
+        let connect = |header: Option<Vec<u8>>| {
+            let client = client.clone();
+            async move {
+                use tokio::io::AsyncWriteExt;
+                let mut tcp = TcpStream::connect(addr).await?;
+                if let Some(header) = header {
+                    tcp.write_all(&header).await?;
+                }
+                let name = rustls::pki_types::ServerName::try_from(HOST).unwrap();
+                tokio_rustls::TlsConnector::from(client).connect(name, tcp).await
+            }
+        };
+        // Without a header: closed.
+        assert!(connect(None).await.is_err());
+        // Each named client is its own source, whatever the socket's address.
+        let a = "203.0.113.7:50000".parse().unwrap();
+        let b = "198.51.100.9:50000".parse().unwrap();
+        let _held = connect(Some(proxy_header(a))).await.unwrap();
+        assert!(connect(Some(proxy_header(a))).await.is_err(), "the named source holds its share");
+        let _other = connect(Some(proxy_header(b))).await.unwrap();
+        // A LOCAL header names nobody: closed.
+        let local: Vec<u8> = [&crate::proxy::SIGNATURE[..], &[0x20, 0x00, 0, 0]].concat();
+        assert!(connect(Some(local)).await.is_err());
     }
 
     #[tokio::test]

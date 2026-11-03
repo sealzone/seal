@@ -6,7 +6,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use seal_proto::identity::WorkloadIdentity;
 use seal_proto::identity::{
-    AuthenticationScope, IdentityMatcher, IdentityProof, ProofAssurance, ProofContext, PROOF_CONTEXT_LABEL,
+    AuthenticationScope, DeploymentBinding, IdentityMatcher, IdentityProof, ProofAssurance, ProofContext,
+    PROOF_CONTEXT_LABEL,
 };
 use seal_proto::signed::{SigAlg, Signature};
 use seal_proto::{codec, TenantId, TrustedTime};
@@ -42,8 +43,9 @@ pub(crate) trait IdentityVerifier: Send + Sync {
 ///   GCP: `sub`. Token age: GitHub and Kubernetes tokens are refused when `iat` is more than
 ///   `MAX_OIDC_TOKEN_AGE_SECS` before `time.latest()`, so re-proving every extend means
 ///   something; Azure and GCP serve cached tokens, so theirs are bounded only by `exp`.
-/// - AWS: checks `X-Seal-Binding` is a signed header equal to hex(context digest), host is
-///   exactly `sts.amazonaws.com` (or a regional STS host), then replays the request; identity
+/// - AWS: checks `X-Seal-Binding` is a signed header equal to hex(context digest), or for a
+///   deployment hex(`DeploymentBinding::digest`) of the enclave's nonce, host is exactly
+///   `sts.amazonaws.com` (or a regional STS host), then replays the request; identity
 ///   includes the role's unique id from the `UserId` (`AROA…:session`).
 /// - App key: Ed25519 over `labeled_digest(PROOF_CONTEXT_LABEL, ctx)`, key from `candidates`.
 ///
@@ -61,27 +63,36 @@ impl ProofVerifier {
         Self { https, jwks: oidc::JwksCache::default() }
     }
 
-    /// `binding` is the proof context a request proof must be bound to; `None` for a
-    /// deployment proof, which has nothing to bind (app-key proofs then do not count).
+    /// `binding` is what the proof must be bound to: a request's proof context, or for a
+    /// deployment the enclave's nonce (SigV4) or nothing (OIDC; app-key proofs do not count).
     async fn verify_proof(
         &self,
         proof: &IdentityProof,
-        binding: Option<&ProofContext>,
+        binding: Binding<'_>,
         tenant: &TenantId,
         candidates: &[IdentityMatcher],
         time: &TrustedTime,
     ) -> Result<AuthenticatedCaller, AuthzError> {
         match proof {
             IdentityProof::AppKey { key_id, signature } => {
-                let ctx = binding.ok_or(AuthzError::BadProof("an app key cannot prove a deployment"))?;
+                let Binding::Request(ctx) = binding else {
+                    return Err(AuthzError::BadProof("an app key cannot prove a deployment"));
+                };
                 verify_app_key(key_id, signature, ctx, candidates)
             }
             IdentityProof::Oidc { provider, jwt } => {
                 oidc::verify(&self.https, &self.jwks, *provider, jwt.expose(), tenant, candidates, time).await
             }
             IdentityProof::AwsSigV4 { method, url, headers, body } => {
-                let binding = binding.map(|ctx| codec::labeled_digest(PROOF_CONTEXT_LABEL, ctx));
-                let call = sigv4::check(method, url, headers, body, binding.as_ref())?;
+                let binding = match binding {
+                    Binding::Request(ctx) => codec::labeled_digest(PROOF_CONTEXT_LABEL, ctx),
+                    Binding::Deployment(Some(nonce)) => nonce.digest(),
+                    // Unbound, any presigned GetCallerIdentity of the role would do, replayed.
+                    Binding::Deployment(None) => {
+                        return Err(AuthzError::BadProof("a SigV4 deployment proof must be bound to a fresh nonce"))
+                    }
+                };
+                let call = sigv4::check(method, url, headers, body, Some(&binding))?;
                 let identity = sigv4::replay(&self.https, &call).await?;
                 caller(identity, candidates, None, ProofAssurance::RequestBound, |_| true)
             }
@@ -98,8 +109,15 @@ impl IdentityVerifier for ProofVerifier {
         candidates: &[IdentityMatcher],
         time: &TrustedTime,
     ) -> Result<AuthenticatedCaller, AuthzError> {
-        self.verify_proof(proof, Some(ctx), &ctx.tenant, candidates, time).await
+        self.verify_proof(proof, Binding::Request(ctx), &ctx.tenant, candidates, time).await
     }
+}
+
+/// What a proof must be bound to (`ProofVerifier::verify_proof`).
+#[derive(Clone, Copy)]
+enum Binding<'a> {
+    Request(&'a ProofContext),
+    Deployment(Option<DeploymentBinding>),
 }
 
 /// The caller for a verified `identity`: the candidates it matches (and `also` accepts), or
@@ -154,8 +172,12 @@ pub const MAX_OIDC_TOKEN_AGE_SECS: u64 = 600;
 
 /// How a deployment shows its identity.
 pub enum DeploymentProof {
-    /// A proof checked here, OIDC or SigV4 (`X-Seal-Binding` is not required: nothing to bind).
+    /// An OIDC proof checked here (Azure's managed identity). A SigV4 proof here is refused:
+    /// unbound, any presigned `GetCallerIdentity` of the role could be replayed as one.
     Proof(IdentityProof),
+    /// A SigV4 proof whose signed `X-Seal-Binding` is hex(`DeploymentBinding { nonce }.digest()`),
+    /// with the nonce the enclave chose for this proof (AWS Nitro, `seal_proto::nitro`).
+    Bound { proof: IdentityProof, nonce: [u8; 32] },
     /// An identity the enclave's own verified evidence carries
     /// (`seal_attest::VerifiedEvidence::deployment`). Produced by `seal-cloud` from the
     /// enclave's own attestation only, never from anything received.
@@ -175,9 +197,9 @@ impl DeploymentVerifier {
     pub fn new(https: Arc<seal_net::HttpsClient>) -> Self {
         Self { proofs: ProofVerifier::new(https) }
     }
-    /// `NotAllowed` unless `proof` is an OIDC or SigV4 proof valid at `time`, or an attested
-    /// identity, and matches a `deployments` entry. OIDC audiences are as for requests: an
-    /// Azure entry's `audience`, `seal:<tenant>` otherwise.
+    /// `NotAllowed` unless `proof` is an OIDC proof valid at `time`, a SigV4 proof bound to its
+    /// nonce, or an attested identity, and matches a `deployments` entry. OIDC audiences are as
+    /// for requests: an Azure entry's `audience`, `seal:<tenant>` otherwise.
     pub async fn verify(
         &self,
         proof: &DeploymentProof,
@@ -198,9 +220,16 @@ impl DeploymentVerifier {
                 Err(AuthzError::not_allowed("an app key cannot prove a deployment"))
             }
             DeploymentProof::Proof(proof) => {
-                let caller = self.proofs.verify_proof(proof, None, &state.tenant, &deployments, time).await?;
+                let binding = Binding::Deployment(None);
+                let caller = self.proofs.verify_proof(proof, binding, &state.tenant, &deployments, time).await?;
                 Ok(caller.identity)
             }
+            DeploymentProof::Bound { proof: proof @ IdentityProof::AwsSigV4 { .. }, nonce } => {
+                let binding = Binding::Deployment(Some(DeploymentBinding { nonce: *nonce }));
+                let caller = self.proofs.verify_proof(proof, binding, &state.tenant, &deployments, time).await?;
+                Ok(caller.identity)
+            }
+            DeploymentProof::Bound { .. } => Err(AuthzError::BadProof("only a SigV4 deployment proof is bound")),
         }
     }
 }
