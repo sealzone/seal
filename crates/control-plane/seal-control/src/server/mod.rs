@@ -30,7 +30,8 @@ use seal_proto::session::{SignedSessionEnd, SESSION_END_LABEL};
 use seal_proto::signed::Signed;
 use seal_proto::state::{
     root_id, LoggedRoot, LoggedState, SignedStateFreshness, SignedTenantAnchor, SignedTenantState, TenantBundle,
-    TenantRoot, TenantState, STATE_FRESHNESS_LABEL, TENANT_ANCHOR_LABEL, TENANT_ROOT_LABEL, TENANT_STATE_LABEL,
+    TenantRoot, TenantState, FRESHNESS_KEYS_RESERVED, STATE_FRESHNESS_LABEL, TENANT_ANCHOR_LABEL, TENANT_ROOT_LABEL,
+    TENANT_STATE_LABEL,
 };
 use seal_proto::telemetry::{SignedTelemetryBatch, TelemetryEntries, TELEMETRY_BATCH_LABEL};
 use seal_proto::{
@@ -78,8 +79,6 @@ pub const CHECKPOINT_CACHE_SECS: u64 = 60;
 pub const WRAP_KEY_RETRY_SECS: u64 = 60;
 /// Statements dated further ahead of the server's clock than this are refused.
 pub const MAX_CLOCK_SKEW_SECS: u64 = 300;
-/// Tenant-run freshness statements kept for the latest state (the newest).
-pub const TENANT_STATEMENTS_KEPT: usize = 8;
 /// Open proposals a tenant may have at once.
 pub const MAX_PROPOSALS: usize = 32;
 /// Signatures one proposal may collect.
@@ -426,7 +425,6 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/v1/tenants/{tenant}/proposals", get(get_proposals))
         .route("/v1/tenants/{tenant}/proposals/{id}", put(put_proposal).delete(delete_proposal))
         .route("/v1/tenants/{tenant}/proposals/{id}/submit", post(post_proposal_submit))
-        .route("/v1/tenants/{tenant}/freshness", post(post_freshness))
         .route("/v1/tenants/{tenant}/signals", post(post_signal))
         .route("/v1/tenants/{tenant}/session-ends", post(post_session_end))
         .route(
@@ -470,9 +468,10 @@ fn for_state(statement: &SignedStateFreshness, state: &TenantState) -> bool {
     s.tenant == state.tenant && s.version == state.version && s.digest == labeled_digest(TENANT_STATE_LABEL, state)
 }
 
-/// The `freshness_keys` of `stored` states.
-fn stored_signers(stored: &[LoggedState]) -> impl Iterator<Item = PublicKey> + '_ {
-    stored.iter().flat_map(|s| s.state.body.freshness_keys.iter().copied())
+/// `state`'s reserved `freshness_keys` is empty (`seal_verify::check_reserved`): refused before
+/// it is logged, since no verifier accepts it.
+fn check_reserved(state: &TenantState) -> ApiResult<()> {
+    seal_verify::check_reserved(state).map_err(|_| ApiError::bad(FRESHNESS_KEYS_RESERVED))
 }
 
 fn chain_root_id(docs: &TenantDocs) -> Option<TenantRootId> {
@@ -512,14 +511,13 @@ async fn get_bundle(
 ) -> ApiResult<Json<TenantBundle>> {
     let entry = app.store.tenant(&tenant).await?;
     let docs = entry.lock().await.docs.clone();
-    // The states the bundle can carry: their freshness signers read it too.
-    let keys = docs.state.as_ref().map(|s| app.anchor_keys(&s.body.platforms)).unwrap_or_default();
-    let stored = entry.lock().await.logged_states(oldest_anchored(&keys, &docs.anchors)).await?;
-    let chain = Chain::of(&tenant, &docs).with_freshness_signers(stored_signers(&stored));
-    app.authorize(&chain, &docs, &asked, &[], Rule::Bundle).await?;
+    app.authorize(&Chain::of(&tenant, &docs), &docs, &asked, &[], Rule::Bundle).await?;
     let (Some(state), Some(root_id)) = (docs.state.clone(), chain_root_id(&docs)) else {
         return Err(ApiError::not_found("no root chain and state for this tenant"));
     };
+    // The states the bundle can carry.
+    let keys = app.anchor_keys(&state.body.platforms);
+    let stored = entry.lock().await.logged_states(oldest_anchored(&keys, &docs.anchors)).await?;
     let now = app.now();
 
     // The log's statement: refetched when missing or due by the shortest freshness window of
@@ -536,8 +534,7 @@ async fn get_bundle(
                 if newer {
                     let mut e = entry.lock().await;
                     if e.docs.state.as_ref() == Some(&state) {
-                        let freshness = Freshness { log: Some(fresh.clone()), tenant: e.docs.freshness.tenant.clone() };
-                        if let Err(err) = e.set_freshness(freshness).await {
+                        if let Err(err) = e.set_freshness(Freshness::of_log(fresh.clone())).await {
                             tracing::error!(error = %err, "storing the log's freshness statement");
                         }
                     }
@@ -580,24 +577,7 @@ async fn get_bundle(
     }
 
     let time = TrustedTime::exact(now);
-    let mut freshness: Vec<SignedStateFreshness> = log_statement.into_iter().collect();
-    // For each set of signers a verifier may require (the latest state's, and the one in
-    // force's, which is among the stored states), the newest tenant-run statement already in
-    // force (one dated ahead never counts).
-    let signer_sets = stored.iter().map(|s| &s.state.body.freshness_keys).chain([&state.body.freshness_keys]);
-    for signers in signer_sets.filter(|keys| !keys.is_empty()) {
-        let signers: Vec<PublicKey> = signers.iter().copied().collect();
-        let newest = docs
-            .freshness
-            .tenant
-            .iter()
-            .filter(|s| for_state(s, &state.body) && s.body.signed_at <= now)
-            .filter(|s| signed_by_any(&signers, STATE_FRESHNESS_LABEL, s))
-            .max_by_key(|s| s.body.signed_at);
-        if let Some(statement) = newest.filter(|s| !freshness.contains(s)) {
-            freshness.push(statement.clone());
-        }
-    }
+    let freshness: Vec<SignedStateFreshness> = log_statement.into_iter().collect();
     let checkpoint = match app.latest_checkpoint().await {
         Ok(checkpoint) => Some(checkpoint),
         Err(e) => {
@@ -690,6 +670,7 @@ impl App {
     /// Whether `state` may follow the stored one: for the latest root version, signed by its
     /// threshold, with a higher version. `true` when it is exactly the current one.
     fn check_state(&self, e: &TenantEntry, state: &SignedTenantState) -> ApiResult<bool> {
+        check_reserved(&state.body)?;
         let latest = &e.docs.roots.last().ok_or_else(|| ApiError::conflict("the tenant has no root chain"))?.root.body;
         if state.body.root_version != latest.version {
             return Err(ApiError::conflict(format!(
@@ -786,7 +767,7 @@ impl App {
         let logged = LoggedState { state, proof };
         e.put_logged_state(&logged).await?;
         e.set_state(logged.state.clone()).await?;
-        e.set_freshness(Freshness { log: Some(statement), tenant: Vec::new() }).await?;
+        e.set_freshness(Freshness::of_log(statement)).await?;
         Ok(Some(logged))
     }
 }
@@ -808,12 +789,7 @@ async fn put_root(
     let docs = e.docs.clone();
     // Root version 1 names its own chain and first admins.
     let chain = if docs.roots.is_empty() && link.root.body.version == 1 {
-        Chain {
-            tenant: &tenant,
-            root_id: Some(root_id(&link.root.body)),
-            admins: Some(&link.root.body),
-            freshness_signers: Vec::new(),
-        }
+        Chain { tenant: &tenant, root_id: Some(root_id(&link.root.body)), admins: Some(&link.root.body) }
     } else {
         Chain::of(&tenant, &docs)
     };
@@ -855,41 +831,6 @@ async fn put_state(
     let docs = e.docs.clone();
     app.authorize(&Chain::of(&tenant, &docs), &docs, &asked, &body, Rule::Submit).await?;
     app.submit_state(&tenant, &mut e, state, proof).await?;
-    Ok(StatusCode::NO_CONTENT)
-}
-
-async fn post_freshness(
-    State(app): State<Arc<App>>,
-    Path(tenant): Path<TenantId>,
-    body: Bytes,
-) -> ApiResult<StatusCode> {
-    let statement: SignedStateFreshness = parse(&body)?;
-    same_tenant(&tenant, &statement.body.tenant)?;
-    let entry = app.store.tenant(&tenant).await?;
-    let mut e = entry.lock().await;
-    let state = &e.docs.state.as_ref().ok_or_else(|| ApiError::conflict("the tenant has no state"))?.body;
-    // A signer of the latest state, or of an earlier one a bundle can carry: the state in force
-    // is among them, and its signers vouch for the latest until it applies.
-    let stored = e.logged_states(oldest_anchored(&app.anchor_keys(&state.platforms), &e.docs.anchors)).await?;
-    let keys: Vec<PublicKey> = state.freshness_keys.iter().copied().chain(stored_signers(&stored)).collect();
-    if !signed_by_any(&keys, STATE_FRESHNESS_LABEL, &statement) {
-        return Err(ApiError::forbidden("not signed by a freshness key of the latest state or one a bundle carries"));
-    }
-    if !for_state(&statement, state) {
-        return Err(ApiError::conflict("not a statement for the latest state"));
-    }
-    if statement.body.signed_at > app.now().saturating_add(MAX_CLOCK_SKEW_SECS) {
-        return Err(ApiError::bad("dated in the future"));
-    }
-    if e.docs.freshness.tenant.contains(&statement) {
-        return Ok(StatusCode::NO_CONTENT);
-    }
-    let mut freshness = e.docs.freshness.clone();
-    freshness.tenant.push(statement);
-    freshness.tenant.sort_by_key(|s| s.body.signed_at);
-    let excess = freshness.tenant.len().saturating_sub(TENANT_STATEMENTS_KEPT);
-    freshness.tenant.drain(..excess);
-    e.set_freshness(freshness).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1487,6 +1428,7 @@ fn signing_roots(
         }
         Proposed::State(state) => {
             same_tenant(tenant, &state.body.tenant)?;
+            check_reserved(&state.body)?;
             if let Some(current) = &docs.state {
                 if state.body.version <= current.body.version {
                     return Err(ApiError::conflict(format!(

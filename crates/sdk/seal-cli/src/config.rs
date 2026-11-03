@@ -22,7 +22,7 @@
 //! (`TrustFile`: `releases` and `guardians` may be left out).
 //!
 //! Key files are the user's: the CLI reads the ones named on the command line and writes one
-//! only where asked (`seal key create --out`, `--generate --out`). Admin and freshness key
+//! only where asked (`seal key create --out`, `--generate --out`). Admin key
 //! files hold one Ed25519 seed as 64 hex digits, telemetry reader key files one X25519 seed
 //! the same way, app keys the `SEAL_APP_KEY` format, `sealak_<base64url(seed)>`; each is
 //! created with mode 0600 and never overwritten.

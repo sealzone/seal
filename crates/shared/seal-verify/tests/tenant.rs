@@ -11,7 +11,7 @@ use seal_proto::release::{LogEntry, ServiceKeyCertificate, SERVICE_KEY_CERTIFICA
 use seal_proto::session::{SessionEnd, SignedSessionEnd, SESSION_END_LABEL};
 use seal_proto::signed::Signed;
 use seal_proto::state::{
-    root_id, AdminKey, LoggedRoot, LoggedState, SignedStateFreshness, SignedTenantState, StateFreshness, TenantBundle,
+    root_id, AdminKey, LoggedRoot, LoggedState, SignedStateFreshness, SignedTenantState, TenantBundle,
     TenantKeyVersions, TenantRoot, TenantState, STATE_FRESHNESS_LABEL, STATE_FRESHNESS_SECS, TENANT_ROOT_LABEL,
     TENANT_STATE_LABEL,
 };
@@ -26,7 +26,6 @@ const V1_ADMINS: [u8; 3] = [31, 32, 33];
 const V2_ADMINS: [u8; 2] = [34, 35];
 const TELEMETRY: u8 = 50;
 const EDR: u8 = 51;
-const TENANT_FRESHNESS: u8 = 52;
 const SECS: u64 = STATE_FRESHNESS_SECS;
 /// When the fixtures' documents were logged: past every pending window, so the latest state is
 /// known to be in force without older ones.
@@ -374,78 +373,70 @@ fn the_log_freshness_statement_must_be_current_and_for_exactly_this_state() {
     assert_eq!(v.verify(&acme(), &mixed, &at(T)).unwrap().fresh_until(), T + SECS);
 }
 
-fn tenant_statement(t: &Tenant, signer: u8, signed_at: UnixTime) -> SignedStateFreshness {
-    let body = StateFreshness {
-        tenant: acme(),
-        version: t.s3.body.version,
-        digest: labeled_digest(TENANT_STATE_LABEL, &t.s3.body),
-        signed_at,
-    };
-    signed(STATE_FRESHNESS_LABEL, body, &[signer])
+/// State 3 of `Tenant::new()` as control serves it today, admin signature included: the JSON
+/// every state carries, with the reserved `"freshness_keys": []` always present.
+const STATE_3_JSON: &str = concat!(
+    r#"{"body":{"tenant":"acme","version":3,"root_version":2,"apps":{},"#,
+    r#""tenant_key_versions":{"current":1,"oldest_accepted":1},"platforms":["sim"],"#,
+    r#""integrity":{"artifacts":{},"sources":{"edr":"17cb79fb2b4120f2b1ec65e4198d6e08b28e813feb01e4a400839b85e18080ce"},"#,
+    r#""actions":{},"cleared":[]},"deployments":[],"freshness_keys":[],"telemetry_readers":[],"#,
+    r#""issued_at":1900000000},"signatures":[{"signer":"#,
+    r#""1325b850c2871916eae203f0efc3c8987f64e5e3cdb27679e6d1fa97808357e6","alg":{"alg":"ed25519","#,
+    r#""sig":"todILORJyPvjGwIoZ_O9MY0RNOHiPFq5tqRE1I6RyuIyZ9km4c1jL0Dgghdw-gFgEXs1qckIJBtrnb79JSIEAQ"}}]}"#,
+);
+
+#[test]
+fn a_state_as_written_today_decodes_verifies_and_reencodes_identically() {
+    let mut t = Tenant::new();
+    let decoded: SignedTenantState = serde_json::from_str(STATE_3_JSON).unwrap();
+    assert!(decoded.body.freshness_keys.is_empty());
+    assert_eq!(serde_json::to_string(&decoded).unwrap(), STATE_3_JSON, "re-encodes byte for byte");
+    assert_eq!(decoded, t.s3);
+    // The admin signature covers the canonical encoding, field included.
+    let bundle = t.bundle_of(decoded, t.s3_index);
+    let v = t.verifier().verify(&acme(), &bundle, &at(T + 10)).unwrap();
+    assert_eq!(serde_json::to_string(v.latest_state()).unwrap(), serde_json::to_string(&t.s3.body).unwrap());
+}
+
+fn reserved_error(e: &VerifyError) -> bool {
+    matches!(e, VerifyError::State(m) if m.contains(seal_proto::state::FRESHNESS_KEYS_RESERVED))
 }
 
 #[test]
-fn a_state_with_freshness_keys_also_needs_a_tenant_statement() {
+fn a_state_naming_a_freshness_key_is_refused() {
     let mut t = Tenant::with(4, |s| {
-        s.freshness_keys.insert(key(TENANT_FRESHNESS).public_key());
+        s.freshness_keys.insert(key(77).public_key());
     });
-    let log_only = t.bundle();
+    let bundle = t.bundle();
     let v = t.verifier();
     let now = at(T + 10);
-    assert_eq!(v.verify(&acme(), &log_only, &now).unwrap_err(), VerifyError::StateNotFresh);
-
-    let with_tenant = |s: SignedStateFreshness| {
-        let mut b = log_only.clone();
-        b.freshness.push(s);
-        b
-    };
-    let ok = v.verify(&acme(), &with_tenant(tenant_statement(&t, TENANT_FRESHNESS, T - 100)), &now).unwrap();
-    assert_eq!(ok.fresh_until(), T - 100 + SECS, "the earlier expiry of the two");
-    let ok = v.verify(&acme(), &with_tenant(tenant_statement(&t, TENANT_FRESHNESS, T + 5)), &now).unwrap();
-    assert_eq!(ok.fresh_until(), T + SECS);
-    assert_eq!(
-        v.verify(&acme(), &with_tenant(tenant_statement(&t, TENANT_FRESHNESS, T + 10 - SECS)), &now).unwrap_err(),
-        VerifyError::StateNotFresh,
-        "a stale tenant statement"
-    );
-    assert_eq!(
-        v.verify(&acme(), &with_tenant(tenant_statement(&t, 77, T)), &now).unwrap_err(),
-        VerifyError::StateNotFresh,
-        "a key the state does not name"
-    );
-    // The tenant's statement does not replace the log's.
-    let mut tenant_only = with_tenant(tenant_statement(&t, TENANT_FRESHNESS, T));
-    tenant_only.freshness.remove(0);
-    assert_eq!(v.verify(&acme(), &tenant_only, &now).unwrap_err(), VerifyError::StateNotFresh);
-    // One statement may carry both signatures.
-    let mut cosigned = log_only.freshness[0].clone();
-    key(TENANT_FRESHNESS).cosign(STATE_FRESHNESS_LABEL, &mut cosigned);
-    let both = TenantBundle { freshness: vec![cosigned], ..log_only.clone() };
-    assert_eq!(v.verify(&acme(), &both, &now).unwrap().fresh_until(), T + SECS);
+    // Admin-signed, logged and fresh by the log, yet refused: the field is reserved.
+    let e = v.verify(&acme(), &bundle, &now).unwrap_err();
+    assert!(reserved_error(&e), "{e}");
+    assert!(e.to_string().contains("removed in 0.2.10"), "{e}");
+    // Also with a statement from the key it names, and as an anchor or in a history.
+    let mut cosigned = bundle.clone();
+    key(77).cosign(STATE_FRESHNESS_LABEL, &mut cosigned.freshness[0]);
+    assert!(reserved_error(&v.verify(&acme(), &cosigned, &now).unwrap_err()));
+    assert!(reserved_error(&v.anchor(PlatformId::Sim, &acme(), &bundle, &now).unwrap_err()));
+    let documents = v.verify_documents(&acme(), &bundle.root_chain, &bundle.states, None).unwrap_err();
+    assert!(reserved_error(&documents));
 }
 
 #[test]
-fn a_tenants_freshness_window_applies_to_the_log_and_tenant_statements() {
+fn a_tenants_freshness_window_applies_to_the_log_statement() {
     const WINDOW: u64 = 600;
-    let mut t = Tenant::with(5, |s| {
-        s.freshness_secs = Some(WINDOW);
-        s.freshness_keys.insert(key(TENANT_FRESHNESS).public_key());
-    });
-    let mut bundle = t.bundle();
-    bundle.freshness.push(tenant_statement(&t, TENANT_FRESHNESS, T));
+    let mut t = Tenant::with(5, |s| s.freshness_secs = Some(WINDOW));
+    let bundle = t.bundle();
     let v = t.verifier();
     assert_eq!(v.verify(&acme(), &bundle, &at(T + WINDOW - 1)).unwrap().fresh_until(), T + WINDOW);
-    // Statements older than the window, though well within 24 h, keep nothing alive.
+    // A statement older than the window, though well within 24 h, keeps nothing alive.
     assert_eq!(v.verify(&acme(), &bundle, &at(T + WINDOW)).unwrap_err(), VerifyError::StateNotFresh);
-
-    // A fresh log statement, as the log signs on demand, with a tenant one past the window.
-    let log_now = t.log.freshness_at(&acme(), T + 3 * WINDOW);
-    let stale_tenant = TenantBundle { freshness: vec![log_now.clone(), bundle.freshness[1].clone()], ..bundle.clone() };
-    assert_eq!(v.verify(&acme(), &stale_tenant, &at(T + 3 * WINDOW)).unwrap_err(), VerifyError::StateNotFresh);
-    let tenant_now = tenant_statement(&t, TENANT_FRESHNESS, T + 3 * WINDOW - 100);
-    let fresh = TenantBundle { freshness: vec![log_now, tenant_now], ..bundle };
+    // A fresh one, as the log signs on demand.
+    let log_now = t.log.freshness_at(&acme(), T + 3 * WINDOW - 100);
+    let fresh = TenantBundle { freshness: vec![log_now], ..bundle };
     let ok = v.verify(&acme(), &fresh, &at(T + 3 * WINDOW)).unwrap();
-    assert_eq!(ok.fresh_until(), T + 4 * WINDOW - 100, "the earlier of the two, by the tenant's window");
+    assert_eq!(ok.fresh_until(), T + 4 * WINDOW - 100);
 }
 
 fn signal(tenant: TenantId, source: SignalSource, code: &str, n: u8) -> IntegritySignal {

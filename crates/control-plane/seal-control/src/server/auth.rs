@@ -5,9 +5,8 @@
 //! - `Bearer sealct_…`: a console control token (`token`), for its tenant and root chain;
 //! - `Bearer <write token>`: the deployment's operator;
 //! - `SealSigned <base64url(JSON SignedControlRequest)>`: signed by an admin key of the latest
-//!   root (admin tools), by a telemetry key of a guardian-certified `ServiceKeyCertificate`
-//!   posted for the chain (the tenant's enclaves), or by a freshness signer (`Chain::
-//!   freshness_signers`: a tenant-run signer, which reads the state it signs for);
+//!   root (admin tools), or by a telemetry key of a guardian-certified `ServiceKeyCertificate`
+//!   posted for the chain (the tenant's enclaves);
 //! - `SealAttested <base64url(JSON AttestedControlRequest)>`: an enclave at boot, before the
 //!   guardian released its keys. Its evidence must verify (`seal_attest::verify`), commit to the
 //!   request, and come from a release stored here that passes `ReleaseVerifier` under the
@@ -51,8 +50,6 @@ pub enum Caller {
     Admin(KeyId),
     /// A request signed by a telemetry key certified for the tenant's chain.
     Enclave,
-    /// A request signed by a freshness key of the latest state.
-    FreshnessSigner,
     /// A released enclave build pinned to the tenant, holding no keys yet.
     BootingEnclave,
     /// The deployment's write token.
@@ -62,8 +59,7 @@ pub enum Caller {
 /// What a route admits. Admins are admitted everywhere.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Rule {
-    /// The bundle: console members, the tenant's enclaves (also while booting), its
-    /// freshness signers.
+    /// The bundle: console members, the tenant's enclaves (also while booting).
     Bundle,
     /// Documents, proposals and telemetry: console members.
     Members,
@@ -87,7 +83,7 @@ impl Rule {
             (_, Caller::Admin(_))
                 | (Rule::Bundle | Rule::Members | Rule::Blob, Caller::Console { .. })
                 | (Rule::Propose | Rule::Submit | Rule::Publish, Caller::Console { scope: Scope::Submit, .. })
-                | (Rule::Bundle, Caller::Enclave | Caller::BootingEnclave | Caller::FreshnessSigner)
+                | (Rule::Bundle, Caller::Enclave | Caller::BootingEnclave)
                 | (Rule::Blob, Caller::Enclave)
                 | (Rule::Submit, Caller::Operator)
         )
@@ -120,31 +116,17 @@ impl<S: Send + Sync> FromRequestParts<S> for Asked {
     }
 }
 
-/// The tenant a credential must be for: its chain's root id, the root whose admin keys
-/// count (the latest; root version 1 itself while it is being stored), and the freshness
-/// signers (the latest state's `freshness_keys`, and for the bundle those of the earlier states
-/// it can carry, whose signers vouch for the latest until it is in force).
+/// The tenant a credential must be for: its chain's root id, and the root whose admin keys
+/// count (the latest; root version 1 itself while it is being stored).
 pub struct Chain<'a> {
     pub tenant: &'a TenantId,
     pub root_id: Option<TenantRootId>,
     pub admins: Option<&'a TenantRoot>,
-    pub freshness_signers: Vec<seal_proto::PublicKey>,
 }
 
 impl<'a> Chain<'a> {
     pub fn of(tenant: &'a TenantId, docs: &'a TenantDocs) -> Self {
-        Self {
-            tenant,
-            root_id: super::chain_root_id(docs),
-            admins: docs.roots.last().map(|link| &link.root.body),
-            freshness_signers: docs.state.iter().flat_map(|s| s.body.freshness_keys.iter().copied()).collect(),
-        }
-    }
-
-    /// Also admits `signers` as freshness signers.
-    pub fn with_freshness_signers(mut self, signers: impl IntoIterator<Item = seal_proto::PublicKey>) -> Self {
-        self.freshness_signers.extend(signers);
-        self
+        Self { tenant, root_id: super::chain_root_id(docs), admins: docs.roots.last().map(|link| &link.root.body) }
     }
 }
 
@@ -223,10 +205,9 @@ impl App {
                 let caller = match admin {
                     Some(sig) => Caller::Admin(sig.signer),
                     None if signed_by(&telemetry_keys(docs, self.release_policy().await.as_ref())) => Caller::Enclave,
-                    None if signed_by(&chain.freshness_signers) => Caller::FreshnessSigner,
                     None => {
                         return Err(ApiError::unauthenticated(
-                            "not signed by an admin, certified telemetry or freshness key of this tenant",
+                            "not signed by an admin or certified telemetry key of this tenant",
                         ))
                     }
                 };
@@ -308,22 +289,14 @@ mod tests {
         let read = Caller::Console { user: "u".into(), scope: Scope::Read };
         let submit = Caller::Console { user: "u".into(), scope: Scope::Submit };
         let admin = Caller::Admin(KeyId([1; 32]));
-        let callers = [
-            &read,
-            &submit,
-            &admin,
-            &Caller::Enclave,
-            &Caller::BootingEnclave,
-            &Caller::FreshnessSigner,
-            &Caller::Operator,
-        ];
+        let callers = [&read, &submit, &admin, &Caller::Enclave, &Caller::BootingEnclave, &Caller::Operator];
         let admitted = |rule: Rule| callers.iter().map(|c| rule.admits(c)).collect::<Vec<_>>();
-        //                                         read   submit admin  enclave booting fresh  operator
-        assert_eq!(admitted(Rule::Bundle), [true, true, true, true, true, true, false]);
-        assert_eq!(admitted(Rule::Members), [true, true, true, false, false, false, false]);
-        assert_eq!(admitted(Rule::Propose), [false, true, true, false, false, false, false]);
-        assert_eq!(admitted(Rule::Submit), [false, true, true, false, false, false, true]);
-        assert_eq!(admitted(Rule::Blob), [true, true, true, true, false, false, false]);
-        assert_eq!(admitted(Rule::Publish), [false, true, true, false, false, false, false]);
+        //                                         read   submit admin  enclave booting operator
+        assert_eq!(admitted(Rule::Bundle), [true, true, true, true, true, false]);
+        assert_eq!(admitted(Rule::Members), [true, true, true, false, false, false]);
+        assert_eq!(admitted(Rule::Propose), [false, true, true, false, false, false]);
+        assert_eq!(admitted(Rule::Submit), [false, true, true, false, false, true]);
+        assert_eq!(admitted(Rule::Blob), [true, true, true, true, false, false]);
+        assert_eq!(admitted(Rule::Publish), [false, true, true, false, false, false]);
     }
 }

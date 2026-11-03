@@ -115,9 +115,6 @@ struct KeyFiles {
 struct SignArgs {
     #[command(flatten)]
     keys: KeyFiles,
-    /// Freshness key file to sign new states with
-    #[arg(long, env = "SEAL_FRESHNESS_KEY", value_name = "FILE", global = true, help_heading = "Signing")]
-    freshness_key: Option<PathBuf>,
     /// Sign or propose without asking
     #[arg(long, short = 'y', global = true, help_heading = "Signing")]
     yes: bool,
@@ -188,7 +185,7 @@ enum Command {
         #[command(flatten)]
         sign: SignArgs,
     },
-    /// Admin keys, the pending window, platforms, integrity, telemetry readers, freshness
+    /// Admin keys, the pending window, platforms, integrity, telemetry readers, freshness window
     Settings {
         #[command(flatten)]
         sign: SignArgs,
@@ -1189,12 +1186,10 @@ mod tests {
         let key = "11".repeat(32);
         for args in [
             &["key", "create", "--out", "admin.key"][..],
-            &["key", "create", "--out", "freshness.key"],
             &["key", "public", "admin.key"],
             &["grant", "app", "checkout", "key", "--generate", "--out", "checkout.key"],
             &["secret", "--to", "https://api.openai.com/v1", "--app", "checkout", "--header", "authorization"],
             &["settings", "telemetry-readers", "add", "--generate", "reader.key"],
-            &["settings", "freshness", "sign"],
             &["changes", "sign", "abcdef", "--key-file", "admin.key"],
             &["changes", "--watch"],
             &["telemetry"],
@@ -1296,8 +1291,9 @@ mod tests {
             &["settings", "integrity", "clear", "{}"],
             &["settings", "telemetry-readers", "add", &key],
             &["settings", "telemetry-readers", "rm", &key],
-            &["settings", "freshness", "key", "add", "--file", "f.key"],
-            &["settings", "freshness", "key", "rm", &key],
+            &["settings", "freshness"],
+            &["settings", "freshness", "window", "10m"],
+            &["settings", "freshness", "window", "default"],
             &["settings", "tenant-key", "bump", "--retire-older"],
             &["release", "approve", &"cd".repeat(48)],
             &["changes", "--watch", "--once", "--json"],
@@ -1327,7 +1323,11 @@ mod tests {
             &["settings", "integrity", "on", "high", "explode"],
             &["settings", "telemetry-readers", "add"],
             &["settings", "telemetry-readers", "add", &key, "--generate", "r.key"],
-            &["settings", "freshness", "key", "add"],
+            // Tenant-run freshness signers were removed in 0.2.10.
+            &["settings", "freshness", "key", "add", "--file", "f.key"],
+            &["settings", "freshness", "key", "rm", &key],
+            &["settings", "freshness", "sign"],
+            &["settings", "window", "1h", "--freshness-key", "f.key"],
             &["release", "approve", "cd"],
             &["changes", "--once"],
             &["dev", "init", "--tenant", "Not Valid", "--key-file", "a", "--registrar-key", "r"],

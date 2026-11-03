@@ -89,9 +89,10 @@ pub struct TenantState {
     /// Empty = no deployment may serve. `seal deploy azure|aws|gcp` adds what it creates; the
     /// entry for Seal's hosted replicas carries the Seal-hosted mark (`HostedMode`).
     pub deployments: BTreeSet<IdentityMatcher>,
-    /// Tenant-run freshness signers (Ed25519). Empty = the log's statement alone keeps this
-    /// state fresh. Otherwise a statement from one of these keys is required as well, so
-    /// not even the log operator can keep an older state alive on its own.
+    /// Reserved: must be empty; tenant-run freshness signers were removed in 0.2.10. Kept, and
+    /// always written (as `[]`), so states keep the canonical encoding their admins signed and
+    /// that 0.2.9 and older verifiers decode. Verifiers refuse a state where it is non-empty
+    /// (`FRESHNESS_KEYS_RESERVED`); the log's statement alone keeps a state fresh.
     pub freshness_keys: BTreeSet<PublicKey>,
     /// X25519 keys telemetry is encrypted to. Empty = telemetry batches travel in clear (still
     /// signed). Otherwise only these keys' holders can read entries; the control plane sees
@@ -116,12 +117,11 @@ pub struct TenantState {
     /// address, so there a rule cannot tell callers apart. Omitted when empty.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub app_networks: BTreeMap<AppName, BTreeSet<crate::net::Cidr>>,
-    /// How long a freshness statement keeps this state usable, in seconds, for the log's
-    /// statement and the tenant signers' alike: `MIN_STATE_FRESHNESS_SECS` up to (not
-    /// including) `STATE_FRESHNESS_SECS`. Omitted = `STATE_FRESHNESS_SECS`. A shorter window
-    /// bounds how long a replayed older state (one from before a revocation) keeps working,
-    /// at the cost of surviving an unreachable log, or a missed tenant signature, only that
-    /// long. Shortening it narrows access and lengthening it widens (`seal_verify::change`);
+    /// How long the log's freshness statement keeps this state usable, in seconds:
+    /// `MIN_STATE_FRESHNESS_SECS` up to (not including) `STATE_FRESHNESS_SECS`. Omitted =
+    /// `STATE_FRESHNESS_SECS`. A shorter window bounds how long a replayed older state (one
+    /// from before a revocation) keeps working, at the cost of surviving an unreachable log
+    /// only that long. Shortening it narrows access and lengthening it widens (`seal_verify::change`);
     /// verifiers apply the shorter of the latest state's and the state in force's window. A
     /// value outside the bounds, or a written `STATE_FRESHNESS_SECS`, does not decode, so each
     /// window has one signed encoding.
@@ -129,6 +129,10 @@ pub struct TenantState {
     pub freshness_secs: Option<u64>,
 }
 pub const TENANT_STATE_LABEL: &str = "seal/tenant-state/v1";
+
+/// Why verifiers refuse a `TenantState` whose reserved `freshness_keys` is non-empty.
+pub const FRESHNESS_KEYS_RESERVED: &str =
+    "freshness_keys must be empty: tenant-run freshness signers were removed in 0.2.10";
 
 /// The longest pending window that counts: a longer `pending_window_secs` waits this long. It
 /// bounds how far back a verifier needs a tenant's states (`TenantBundle::states`).
@@ -149,8 +153,8 @@ fn pending_window<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u64, D::Erro
     Ok(secs)
 }
 
-/// The shortest `TenantState::freshness_secs`: below it, a log or tenant signer that is a
-/// few minutes late would stop the tenant.
+/// The shortest `TenantState::freshness_secs`: below it, a log that is a few minutes late
+/// would stop the tenant.
 pub const MIN_STATE_FRESHNESS_SECS: u64 = 300;
 
 /// `freshness_secs` as written: `MIN_STATE_FRESHNESS_SECS` to `STATE_FRESHNESS_SECS - 1`
@@ -208,11 +212,10 @@ pub type SignedTenantAnchor = Signed<TenantAnchor>;
 
 /// "The latest `TenantState` of `tenant` is `version`, with this digest, as of `signed_at`."
 /// Signed by the transparency log (`TlogTrust::log_key`), which holds every state as a
-/// `LogEntry::TenantState` leaf, and by a tenant-run signer when the state names
-/// `freshness_keys`. Verifiers accept a state only with statements for exactly it that are
-/// younger than its window (`TenantState::freshness_window`, at most `STATE_FRESHNESS_SECS`),
-/// so a replayed older state stops working within that window. A log statement for an older version than one it had already logged is a
-/// signed, provable lie.
+/// `LogEntry::TenantState` leaf. Verifiers accept a state only with a statement for exactly it
+/// that is younger than its window (`TenantState::freshness_window`, at most
+/// `STATE_FRESHNESS_SECS`), so a replayed older state stops working within that window. A log
+/// statement for an older version than one it had already logged is a signed, provable lie.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StateFreshness {
     pub tenant: TenantId,
@@ -253,8 +256,8 @@ pub struct TenantBundle {
     /// Sessions ended early. Verifiers drop invalid ones; the control plane drops those no
     /// longer live (`SessionEnd::is_live`).
     pub ended_sessions: Vec<crate::session::SignedSessionEnd>,
-    /// The newest freshness statements for `state`: the log's, plus a tenant-run signer's
-    /// when `state.freshness_keys` is non-empty.
+    /// The newest freshness statements for `state`: the log's. Verifiers ignore statements
+    /// that are not the log's.
     pub freshness: Vec<SignedStateFreshness>,
     /// Guardian-certified wrap keys of `state.platforms` for the tenant key versions in
     /// `state.tenant_key_versions`, fetched by the control plane from each platform's guardian.

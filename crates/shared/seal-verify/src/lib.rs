@@ -21,7 +21,8 @@ use seal_proto::session::{SessionEnd, SignedSessionEnd, SESSION_END_LABEL};
 use seal_proto::signed::Signed;
 use seal_proto::state::{
     LoggedRoot, LoggedState, SignedStateFreshness, SignedTenantAnchor, TenantAnchor, TenantBundle, TenantRoot,
-    TenantState, STATE_FRESHNESS_LABEL, TENANT_ANCHOR_LABEL, TENANT_ROOT_LABEL, TENANT_STATE_LABEL,
+    TenantState, FRESHNESS_KEYS_RESERVED, STATE_FRESHNESS_LABEL, TENANT_ANCHOR_LABEL, TENANT_ROOT_LABEL,
+    TENANT_STATE_LABEL,
 };
 use seal_proto::{PlatformId, PublicKey, ServiceKeyVersion, TenantId, TenantRootId, TrustedTime, UnixTime};
 use seal_tlog::{policy_not_loosened, LogVerifier, TlogError};
@@ -444,12 +445,11 @@ impl VerifiedTenant {
 /// Root chain from version 1 (registrar-signed) with every link logged and signed by
 /// `threshold` keys of the previous link; latest state for `tenant`, signed by the latest root,
 /// `state.root_version == latest.version`; freshness: a `StateFreshness` for exactly the latest
-/// state (version and digest) signed by the log key, and, for each of the latest state and the
-/// state in force whose `freshness_keys` is non-empty, one signed by one of its keys (so a
-/// change of signers waits, like any widening, until the state making it is in force), each
-/// with `signed_at <= time.latest() < signed_at + window`, the window being the shorter
-/// `TenantState::freshness_window` of the latest state and the state in force (`StateNotFresh` otherwise, which also stops a truncated root chain,
-/// since the latest state names the latest root); the bundle's `states`: consecutive versions
+/// state (version and digest) signed by the log key, with `signed_at <= time.latest() <
+/// signed_at + window`, the window being the shorter `TenantState::freshness_window` of the
+/// latest state and the state in force (`StateNotFresh` otherwise, which also stops a truncated
+/// root chain, since the latest state names the latest root); every state with its reserved
+/// `freshness_keys` empty (`check_reserved`); the bundle's `states`: consecutive versions
 /// ending with the latest, each for `tenant`, signed by the root it names (no older than the
 /// previous state's), logged in version order under this chain's root id; then the state in
 /// force (`window`), from the newest anchor to `lock_time(time, witnessed)`, where `witnessed`
@@ -464,8 +464,8 @@ impl VerifiedTenant {
 /// (`telemetry_keys_in_force`), so a retired service key version's key signs neither.
 ///
 /// Signals are deduplicated by content, session ends by `session_id` (the first valid one
-/// counts); both keep bundle order. For each required freshness signer the latest valid
-/// statement counts, and `fresh_until` is the earliest of their expiries.
+/// counts); both keep bundle order. The log's latest valid statement counts, and `fresh_until`
+/// is its expiry.
 pub struct TenantVerifier {
     trust: TenantTrust,
     telemetry_keys: Vec<PublicKey>,
@@ -504,9 +504,8 @@ impl TenantVerifier {
         time: &TrustedTime,
     ) -> Result<TenantAnchor, VerifyError> {
         let state = &bundle.state.body;
-        let signers = [&state.freshness_keys];
-        let complete =
-            fresh_since(&self.trust.tlog.log_key, state, &signers, &bundle.freshness, state.freshness_window(), time)?;
+        check_reserved(state)?;
+        let complete = fresh_since(&self.trust.tlog.log_key, state, &bundle.freshness, state.freshness_window(), time)?;
         let v = self.verify_until(tenant, bundle, time, complete)?;
         Ok(TenantAnchor {
             platform,
@@ -544,10 +543,11 @@ impl TenantVerifier {
                 state.root_version, latest_root.version
             )));
         }
+        check_reserved(state)?;
         Self::verify_admin_signed(latest_root, TENANT_STATE_LABEL, signed_state)?;
-        // The latest state's own signers and window first; the state in force adds its own below.
+        // The latest state's own window first; the state in force's may shorten it below.
         let log_key = &self.trust.tlog.log_key;
-        fresh_since(log_key, state, &[&state.freshness_keys], &bundle.freshness, state.freshness_window(), time)?;
+        fresh_since(log_key, state, &bundle.freshness, state.freshness_window(), time)?;
 
         let states = match bundle.states.last() {
             // Without log proofs only a first state, which applies at once, can be in force.
@@ -578,13 +578,11 @@ impl TenantVerifier {
                 )
             })?;
         let (in_force, in_force_since) = window::advance(&roots, &states, anchor, since, checked_at);
-        // A longer window or another signer widens access, so it waits like any widening
-        // change: until the state that makes it is in force, the shorter window and the
-        // signers of the one in force apply too.
+        // A longer window widens access, so it waits like any widening change: until the state
+        // that makes it is in force, the shorter window of the one in force applies too.
         let current = states[in_force].body();
         let window = state.freshness_window().min(current.freshness_window());
-        let signers = [&state.freshness_keys, &current.freshness_keys];
-        let fresh_since = fresh_since(log_key, state, &signers, &bundle.freshness, window, time)?;
+        let fresh_since = fresh_since(log_key, state, &bundle.freshness, window, time)?;
         let fresh_until = fresh_since.saturating_add(window);
         if time.latest() >= fresh_until {
             return Err(VerifyError::StateNotFresh);
@@ -718,6 +716,7 @@ impl TenantVerifier {
             if &state.tenant != tenant {
                 return Err(VerifyError::WrongTenant);
             }
+            check_reserved(state)?;
             if let Some(prev) = out.last() {
                 let prev = prev.body();
                 if prev.version.checked_add(1) != Some(state.version) {
@@ -869,37 +868,39 @@ fn signed_by_any<T: serde::Serialize>(keys: &[PublicKey], label: &str, signed: &
     })
 }
 
-/// When the required statements for `state` last vouched for it, the earliest of: the log's
-/// latest, and for each non-empty set of `signers`, the latest by one of its keys. Each must be
-/// younger than `window` (`StateNotFresh` otherwise); the state is fresh until this plus
-/// `window`.
+/// When the log last vouched for `state`: the `signed_at` of its latest statement for exactly
+/// it, which must be younger than `window` (`StateNotFresh` otherwise); the state is fresh
+/// until this plus `window`.
 fn fresh_since(
     log_key: &PublicKey,
     state: &TenantState,
-    signers: &[&BTreeSet<PublicKey>],
     statements: &[SignedStateFreshness],
     window: u64,
     time: &TrustedTime,
 ) -> Result<UnixTime, VerifyError> {
     let digest = labeled_digest(TENANT_STATE_LABEL, state);
-    let latest = |keys: &[PublicKey]| -> Option<UnixTime> {
-        statements
-            .iter()
-            .filter(|f| f.body.tenant == state.tenant && f.body.version == state.version && f.body.digest == digest)
-            .filter(|f| signed_by_any(keys, STATE_FRESHNESS_LABEL, f))
-            // A statement dated after now could only have been signed in advance, to keep a
-            // state alive past its replacement: it never counts.
-            .filter(|f| f.body.signed_at <= time.latest())
-            .map(|f| f.body.signed_at)
-            .filter(|&at| time.latest() < at.saturating_add(window))
-            .max()
-    };
-    let mut since = latest(std::slice::from_ref(log_key)).ok_or(VerifyError::StateNotFresh)?;
-    for keys in signers.iter().filter(|keys| !keys.is_empty()) {
-        let keys: Vec<PublicKey> = keys.iter().copied().collect();
-        since = since.min(latest(&keys).ok_or(VerifyError::StateNotFresh)?);
+    statements
+        .iter()
+        .filter(|f| f.body.tenant == state.tenant && f.body.version == state.version && f.body.digest == digest)
+        .filter(|f| signed_by_any(std::slice::from_ref(log_key), STATE_FRESHNESS_LABEL, f))
+        // A statement dated after now could only have been signed in advance, to keep a state
+        // alive past its replacement: it never counts.
+        .filter(|f| f.body.signed_at <= time.latest())
+        .map(|f| f.body.signed_at)
+        .filter(|&at| time.latest() < at.saturating_add(window))
+        .max()
+        .ok_or(VerifyError::StateNotFresh)
+}
+
+/// `state`'s reserved `freshness_keys` is empty. Tenant-run freshness signers were removed in
+/// 0.2.10; the field stays in the signed encoding, always `[]`, and a state that names a key
+/// there is refused (`State`, `FRESHNESS_KEYS_RESERVED`) rather than verified without it.
+pub fn check_reserved(state: &TenantState) -> Result<(), VerifyError> {
+    if state.freshness_keys.is_empty() {
+        Ok(())
+    } else {
+        Err(VerifyError::State(format!("version {}: {FRESHNESS_KEYS_RESERVED}", state.version)))
     }
-    Ok(since)
 }
 
 /// The release constraints of `checkpoint`, once it verifies under `tlog` (the log's signature

@@ -40,7 +40,7 @@ guardian freezes.
 | `TenantKeyVersion`, `TenantKeyVersions { current, oldest_accepted }` | The version of a tenant wrapping key, and the tenant's window of accepted versions |
 | `ServiceKeyVersion`, `ServiceKeyScope` | The version of one tenant's service key set (token, ingest, telemetry, TLS, ticket). No service key is shared across tenants |
 | `ServiceKeyCertificate` | The guardian's signed statement that it released a tenant's service keys. SDKs require it |
-| `StateFreshness` | "This `TenantState` is the tenant's latest as of T", signed by the log, and by a tenant-run signer if the state names one. A state without a current statement is not used |
+| `StateFreshness` | "This `TenantState` is the tenant's latest as of T", signed by the log. A state without a current statement is not used |
 | pending window | How long a state or root that widens access waits in public before it takes effect. Narrowing changes apply at once (`seal_verify::change`). See below the table |
 | network rule | The networks an app may start, extend and connect sessions from (`TenantState::app_networks`). See below the table |
 | state in force | The state, and the root that signed it, that verifiers apply (`VerifiedTenant::state`, `root`). A newer state that widens it stays pending until its window passes (`latest_state`, `pending`) |
@@ -70,15 +70,22 @@ not decode, so each window has one signed encoding.
 
 **Freshness window.** `TenantState::freshness_secs` sets how long a `StateFreshness` keeps
 the state usable, from `MIN_STATE_FRESHNESS_SECS` (5 min) up to `STATE_FRESHNESS_SECS`
-(24 h), for the log's statement and the tenant signers' alike. It is omitted for 24 h. A
+(24 h). It is omitted for 24 h. A
 written 24 h or a value outside the bounds does not decode. Verifiers apply the shorter of
 the latest state's window and the state in force's, so shortening it narrows access and
 applies at once, while lengthening or clearing it widens and waits the pending window
 (`seal_verify::change`). A shorter window bounds how long a replayed older state works. The
-tenant then also survives an unreachable log, or a missed tenant signature, only that long.
+tenant then also survives an unreachable log only that long.
 The control plane refetches the log's statement once it is a quarter of the window old, at
 most hourly (`LOG_FRESHNESS_REFRESH_SECS`), and replicas pick it up at their next reload. Set
 it with `seal settings freshness window`.
+
+**Reserved: `freshness_keys`.** `TenantState::freshness_keys` must be empty; tenant-run
+freshness signers were removed in 0.2.10. The field stays in the signed encoding, always
+written as `"freshness_keys": []`, so existing states keep the bytes their admins signed and
+0.2.9 and older enclaves and guardians decode new ones. Verifiers refuse a state, latest or
+earlier in a bundle, that names a key there (`FRESHNESS_KEYS_RESERVED`), and the control
+plane refuses to log or propose one. The log's statement alone keeps a state fresh.
 
 **Network rules.** `TenantState::app_networks` lists CIDRs in one canonical spelling
 (`seal_proto::net::Cidr`). The enclave checks the connection's source address against them
@@ -250,8 +257,8 @@ with seal.session(blob) as s:                          # HttpSession or Database
 - **Admin surface.** `admin` (`Admin`, `ControlClient`, re-exported from
   `seal_control::client`, and `LogClient`) is a separate surface for the CLI. It verifies
   everything it fetches before showing or re-signing it. Its control-plane requests carry a
-  console control token, or are signed with an admin key (`SigningKeyCredential`) or, for
-  `seal settings freshness sign`, a freshness key. The write token only publishes releases
+  console control token, or are signed with an admin key (`SigningKeyCredential`). The write
+  token only publishes releases
   and stores a development registrar's root version 1.
 
   Changes go through proposals: `Admin::draft` builds the next state on the state in force
@@ -808,7 +815,7 @@ Who may read and write a tenant's documents (the crate docs hold the full route 
 
 | What | Who |
 | --- | --- |
-| Bundle | Console members (control token, `read` or `submit`), admins, the tenant's enclaves (telemetry key; attested at boot), freshness signers |
+| Bundle | Console members (control token, `read` or `submit`), admins, the tenant's enclaves (telemetry key; attested at boot) |
 | Documents (`/documents`), proposals, telemetry | Console members, admins |
 | Put, sign, withdraw, submit proposals | Console members with `submit`, admins |
 | Put roots, states, release co-signatures (each still carries its own admin signatures) | Console members with `submit`, admins, the write token |
@@ -816,16 +823,14 @@ Who may read and write a tenant's documents (the crate docs hold the full route 
 | Named blobs listed, a name's versions | Console members, admins |
 | Publish or delete a named blob (each version carries its own admin signatures) | Console members with `submit`, admins |
 | Service key certificates, releases, release listings and templates, release co-signatures, the checkpoint | Anyone |
-| Post signals, session ends, telemetry, certificates, freshness statements (each verified by its own signature) | Anyone |
+| Post signals, session ends, telemetry, certificates (each verified by its own signature) | Anyone |
 | Put releases and release templates | The write token |
 
 - **Credentials** (`Authorization`) take one of four forms:
   - `Bearer sealct_…`, a console control token, served only for its tenant and root chain.
   - `SealSigned <base64url(JSON Signed<ControlRequest>)>`, signed by an admin key of the
     latest root, else by a telemetry key still in force of a certified
-    `ServiceKeyCertificate` posted for the chain, else by a freshness key of the latest state (or, for the bundle and posting
-    statements, of an earlier state stored since the guardians' oldest anchor, so the state
-    in force's signers keep vouching while a change of signers is pending).
+    `ServiceKeyCertificate` posted for the chain.
   - `SealAttested <base64url(JSON AttestedControlRequest)>`, for the bundle only. Its
     evidence must verify and commit to the request as report data. It must come from an
     enclave release stored on the control plane that passes `ReleaseVerifier` under the
@@ -860,7 +865,7 @@ Who may read and write a tenant's documents (the crate docs hold the full route 
   (`ANCHOR_REFRESH_SECS`).
 - **Storage** is one Postgres database (`SEAL_CONTROL_DATABASE_URL`, optionally
   `SEAL_CONTROL_DATABASE_AUTH=entra`) and nothing on disk: roots, states and their proofs,
-  freshness statements, signals, session ends, certificates, wrap keys, anchors, proposals,
+  the log's freshness statement, signals, session ends, certificates, wrap keys, anchors, proposals,
   release evidence, named blobs and telemetry. Each is stored as the document it is served
   as, and none is believed for being there. One control process serves a database: it keeps
   each tenant's small documents in memory.
@@ -919,11 +924,7 @@ Who may read and write a tenant's documents (the crate docs hold the full route 
   bundle carries it. The enclave and the guardian use a state only with a statement for
   exactly that state, younger than its freshness window: the shorter `freshness_secs` of
   the latest state and the state in force, `STATE_FRESHNESS_SECS` (24 h) when neither sets
-  one. When the state names `freshness_keys`, they also need one from a tenant-run signer,
-  within the same window, and likewise one from a signer of the state in force when that
-  names any. Any one listed signer suffices, so adding a signer to a non-empty set widens and
-  removing the last widens (both wait the pending window, during which the signers in force
-  still vouch); the first signer, or removing one while others remain, narrows. So replaying an older state, or a truncated root chain, works for
+  one. So replaying an older state, or a truncated root chain, works for
   at most that window. Withholding a newer state makes the tenant unavailable after it
   instead of quietly stale. A log statement for an older
   version than one the log already logged is a signed, provable lie (`seal status --log`
@@ -1024,10 +1025,9 @@ Who may read and write a tenant's documents (the crate docs hold the full route 
   with `root_id` set refuse enclaves serving it. A sealer without a pinned root could still
   be steered to an enclave serving it and seal there. `seal status --log` detects it.
 - **Freshness window.** A replayed older state works for at most its freshness window,
-  `STATE_FRESHNESS_SECS` (24 h) unless the tenant sets a shorter one (down to 5 min). With
-  the log as the only freshness signer, the log operator (Seal) could sign for
-  an older state. That is provable but not prevented. A tenant-run signer
-  (`freshness_keys`) prevents it for every state signed after the signer was added.
+  `STATE_FRESHNESS_SECS` (24 h) unless the tenant sets a shorter one (down to 5 min). The
+  log is the only freshness signer, so the log operator (Seal) could sign for an older
+  state. That is provable (`seal status --log` looks for it) but not prevented.
 - **OIDC binding.** OIDC JWTs (Azure managed identity) cannot embed the proof context. Only
   the attested channel and the JWT lifetime bind them. Azure and GCP providers cache their
   tokens, so disabling such an identity takes effect only when its current token expires.

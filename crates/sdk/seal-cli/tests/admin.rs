@@ -253,26 +253,25 @@ async fn rotating_the_root_re_signs_the_state_under_it() {
     assert_eq!(servers.verified().state().version, 3);
 }
 
+/// `freshness_keys` is reserved: an edit naming a key is refused before anything is signed.
 #[tokio::test]
-async fn freshness_keys_need_their_statement() {
+async fn a_state_naming_a_freshness_key_is_not_drafted_or_signed() {
     let servers = Servers::start("freshness").await;
     let key = SigningKey::from_seed(&[1; 32]);
     let signer = SigningKey::from_seed(&[5; 32]);
     let admin = tenant(&servers, &key).await;
     let current = admin.fetch(&now()).await.unwrap();
-    let proposal = Admin::draft(&current, &now(), |s| {
+    let err = Admin::draft(&current, &now(), |s| {
         s.freshness_keys.insert(signer.public_key());
         Ok(())
     })
+    .err()
     .unwrap();
-    let signed = Admin::sign_state(current.tenant.root(), proposal.new, &[key]).unwrap();
-    admin.publish(&signed).await.unwrap();
-    let err = admin.fetch(&now()).await.err().unwrap();
-    assert!(err.to_string().contains("seal settings freshness sign"), "{err}");
-    assert!(admin.fetch_as_freshness_signer(&SigningKey::from_seed(&[6; 32]), &now()).await.is_err());
-    let current = admin.fetch_as_freshness_signer(&signer, &now()).await.unwrap();
-    admin.post_freshness(&signer, current.tenant.state(), &now()).await.unwrap();
-    assert_eq!(admin.fetch(&now()).await.unwrap().tenant.state().version, 2);
+    assert!(err.to_string().contains("removed in 0.2.10"), "{err}");
+    let mut state = current.tenant.state().clone();
+    state.version += 1;
+    state.freshness_keys.insert(signer.public_key());
+    assert!(Admin::sign_state(current.tenant.root(), state, &[key]).is_err());
 }
 
 #[tokio::test]

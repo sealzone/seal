@@ -1,12 +1,12 @@
 //! `seal settings`: the tenant's rarer settings. Each one shows its current value without a
 //! subcommand (`--json` for scripts), and changes it through the usual signed change
 //! (`sign`): admin keys and threshold (a new root), the pending window, platforms, the
-//! integrity policy, telemetry readers, freshness signers and the tenant key version. Also
+//! integrity policy, telemetry readers, the freshness window and the tenant key version. Also
 //! `seal release approve` and the development `seal dev init`.
 
 use std::path::PathBuf;
 
-use anyhow::{anyhow, bail, Context as _};
+use anyhow::{bail, Context as _};
 use clap::{Args, Subcommand};
 use serde_json::json;
 
@@ -19,7 +19,7 @@ use seal_proto::state::{
 };
 use seal_proto::{AppName, KeyId, Measurement, PlatformId, PublicKey, TenantId, TenantKeyVersion};
 
-use crate::sign::{confirm, edit_state, follow, root_changes, sign_freshness_if_held};
+use crate::sign::{confirm, edit_state, follow, root_changes};
 use crate::{config, invalid, parse_duration, say, time, ui, watch, Env, Scope};
 
 #[derive(Subcommand, Debug)]
@@ -42,8 +42,7 @@ pub enum SettingsCmd {
     Integrity(IntegrityArgs),
     /// The X25519 keys telemetry is encrypted to (none: telemetry is kept in the clear)
     TelemetryReaders(ReadersArgs),
-    /// Tenant-run freshness signers (none: the log alone vouches for the latest state), and
-    /// how long a freshness statement keeps the state usable
+    /// How long the log's freshness statement keeps the latest state usable
     Freshness(FreshnessArgs),
     /// The tenant key version new blobs are sealed under
     TenantKey(TenantKeyArgs),
@@ -223,12 +222,6 @@ pub struct FreshnessArgs {
 
 #[derive(Subcommand, Debug)]
 pub enum FreshnessCmd {
-    /// Freshness signer keys
-    #[command(subcommand)]
-    Key(FreshnessKeyCmd),
-    /// Sign one statement that the latest state is current, with --freshness-key; run it from
-    /// cron, well within the freshness window (daily by default)
-    Sign,
     /// How long a freshness statement keeps the latest state usable, which bounds how long a
     /// replayed older state works and how long an unreachable log is survived
     Window {
@@ -265,25 +258,6 @@ fn parse_freshness_window(s: &str) -> Result<FreshnessWindow, String> {
         ));
     }
     Ok(if secs == STATE_FRESHNESS_SECS { FreshnessWindow::Default } else { FreshnessWindow::Secs(secs) })
-}
-
-#[derive(Subcommand, Debug)]
-pub enum FreshnessKeyCmd {
-    /// Add a freshness signer: by public key, or the key in a key file (`seal key create`)
-    Add {
-        /// The signer's Ed25519 public key (hex)
-        #[arg(required_unless_present = "file", conflicts_with = "file", value_name = "PUBLIC KEY")]
-        key: Option<PublicKey>,
-        /// The key file whose public key to add
-        #[arg(long, value_name = "FILE")]
-        file: Option<PathBuf>,
-    },
-    /// Remove a freshness signer
-    Rm {
-        /// The signer's Ed25519 public key (hex)
-        #[arg(value_name = "PUBLIC KEY")]
-        key: PublicKey,
-    },
 }
 
 #[derive(Args, Debug)]
@@ -555,16 +529,7 @@ pub async fn run(env: &Env, cmd: SettingsCmd) -> anyhow::Result<()> {
             .map(|_| ())
         }
         SettingsCmd::Freshness(FreshnessArgs { cmd: None, json }) => {
-            let (_, current) = current(env).await?;
-            let state = current.tenant.state();
-            let keys: Vec<String> = state.freshness_keys.iter().map(ToString::to_string).collect();
-            if json {
-                println!("{}", json!({ "freshness_keys": keys, "freshness_secs": state.freshness_window() }));
-            } else {
-                list("Freshness signers (none: the log alone vouches for the latest state)", keys);
-                say!("freshness window {}", watch::span(state.freshness_window()));
-            }
-            Ok(())
+            freshness(env, FreshnessCmd::Window { window: None, json }).await
         }
         SettingsCmd::Freshness(FreshnessArgs { cmd: Some(cmd), .. }) => freshness(env, cmd).await,
         SettingsCmd::TenantKey(TenantKeyArgs { cmd: None, json }) => {
@@ -700,7 +665,7 @@ async fn rotate_root(env: &Env, add: Vec<PublicKey>, remove: Vec<KeyId>, thresho
                 link.root.body.version, state.body.version
             ))
         );
-        return sign_freshness_if_held(env, &admin, &state.body, &time).await;
+        return Ok(());
     }
     let root_proposal = admin.propose_document(&Proposed::Root(signed_root)).await?;
     let state_proposal = admin.propose_document(&Proposed::State(signed_state)).await?;
@@ -758,17 +723,6 @@ async fn integrity(env: &Env, cmd: IntegrityCmd) -> anyhow::Result<()> {
 
 async fn freshness(env: &Env, cmd: FreshnessCmd) -> anyhow::Result<()> {
     match cmd {
-        FreshnessCmd::Key(FreshnessKeyCmd::Add { key, file }) => {
-            let key = match (key, &file) {
-                (Some(k), _) => k,
-                (None, Some(path)) => config::read_key(path)?.public_key(),
-                (None, None) => bail!("name a key, or --file FILE"),
-            };
-            edit_state(env, |s| changed(s.freshness_keys.insert(key))).await.map(|_| ())
-        }
-        FreshnessCmd::Key(FreshnessKeyCmd::Rm { key }) => {
-            edit_state(env, |s| changed(s.freshness_keys.remove(&key))).await.map(|_| ())
-        }
         FreshnessCmd::Window { window: None, json } => {
             let (_, current) = current(env).await?;
             let window = current.tenant.state().freshness_window();
@@ -789,25 +743,6 @@ async fn freshness(env: &Env, cmd: FreshnessCmd) -> anyhow::Result<()> {
                 FreshnessWindow::Secs(secs) => Some(secs),
             };
             edit_state(env, |s| changed(std::mem::replace(&mut s.freshness_secs, secs) != secs)).await.map(|_| ())
-        }
-        FreshnessCmd::Sign => {
-            let path = env
-                .sign
-                .freshness_key
-                .as_ref()
-                .ok_or_else(|| anyhow!("name the freshness key: --freshness-key FILE (or SEAL_FRESHNESS_KEY)"))?;
-            let key = config::read_key(path)?;
-            // A freshness signer reads the state it signs for with its own key.
-            let admin = env.admin_signed_by(seal_crypto::sign::SigningKey::from_seed(&key.to_seed()))?;
-            let time = time();
-            let current = admin.fetch_as_freshness_signer(&key, &time).await?;
-            let state = current.tenant.latest_state();
-            admin.post_freshness(&key, state, &time).await?;
-            say!(
-                "{}",
-                ui::ok(&format!("signed freshness for state version {} at {}", state.version, watch::at(time.now)))
-            );
-            Ok(())
         }
     }
 }

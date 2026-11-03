@@ -23,7 +23,7 @@ use seal_proto::named::NamedBlobVersion;
 use seal_proto::release::{ReleaseCosign, ReleaseEvidence, SignedCheckpoint, SignedServiceKeyCertificate};
 use seal_proto::session::SignedSessionEnd;
 use seal_proto::signed::Signed;
-use seal_proto::state::{LoggedRoot, LoggedState, SignedStateFreshness, SignedTenantState, TenantBundle, TenantRoot};
+use seal_proto::state::{LoggedRoot, LoggedState, SignedTenantState, TenantBundle, TenantRoot};
 use seal_proto::telemetry::{SignedTelemetryBatch, TelemetryBatch};
 use seal_proto::{codec, BlobName, ErrorCode, Measurement, PlatformId, TenantId, TenantRootId, UnixTime};
 
@@ -364,14 +364,6 @@ impl ControlClient {
     /// source's registered key). Needs no credential.
     pub async fn post_signal(&self, tenant: &TenantId, signal: &SignedSignal) -> Result<(), ControlError> {
         self.send(Method::Post, &format!("/v1/tenants/{tenant}/signals"), signal, As::Anyone).await.map(drop)
-    }
-    /// A tenant-run freshness signer's statement (`seal settings freshness sign`). Needs no credential.
-    pub async fn post_freshness(
-        &self,
-        tenant: &TenantId,
-        statement: &SignedStateFreshness,
-    ) -> Result<(), ControlError> {
-        self.send(Method::Post, &format!("/v1/tenants/{tenant}/freshness"), statement, As::Anyone).await.map(drop)
     }
     /// Enclaves only. Needs no credential.
     pub async fn post_session_end(&self, tenant: &TenantId, end: &SignedSessionEnd) -> Result<(), ControlError> {

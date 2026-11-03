@@ -186,7 +186,6 @@ pub struct Stored {
     pub states: Vec<LoggedState>,
     /// The log's statement fetched when the state was PUT, as the real control plane keeps it.
     pub log_freshness: Option<SignedStateFreshness>,
-    pub tenant_freshness: Vec<SignedStateFreshness>,
     pub cosigns: BTreeMap<String, Signed<ReleaseCosign>>,
     pub telemetry: Vec<SignedTelemetryBatch>,
     pub certificates: Vec<SignedServiceKeyCertificate>,
@@ -320,8 +319,7 @@ fn control_router(control: Control) -> Router {
     async fn bundle(State(c): State<Control>, UrlPath(_tenant): UrlPath<TenantId>) -> Response {
         let s = lock(&c.stored);
         let Some(state) = s.state.clone() else { return refuse(StatusCode::NOT_FOUND, "no such tenant") };
-        let mut freshness: Vec<_> = s.log_freshness.iter().cloned().collect();
-        freshness.extend(s.tenant_freshness.iter().filter(|f| f.body.version == state.body.version).cloned());
+        let freshness: Vec<_> = s.log_freshness.iter().cloned().collect();
         Json(TenantBundle {
             root_chain: s.roots.clone(),
             state,
@@ -383,15 +381,6 @@ fn control_router(control: Control) -> Router {
         s.state = Some(state);
         s.log_freshness = Some(statement);
         StatusCode::NO_CONTENT.into_response()
-    }
-    async fn freshness(State(c): State<Control>, body: Bytes) -> Response {
-        match serde_json::from_slice::<SignedStateFreshness>(&body) {
-            Ok(statement) => {
-                lock(&c.stored).tenant_freshness.push(statement);
-                StatusCode::NO_CONTENT.into_response()
-            }
-            Err(e) => refuse(StatusCode::BAD_REQUEST, e.to_string()),
-        }
     }
     async fn cosign(
         State(c): State<Control>,
@@ -526,7 +515,6 @@ fn control_router(control: Control) -> Router {
         .route("/v1/tenants/{tenant}/bundle", get(bundle))
         .route("/v1/tenants/{tenant}/root", put(root))
         .route("/v1/tenants/{tenant}/state", put(state))
-        .route("/v1/tenants/{tenant}/freshness", post(freshness))
         .route("/v1/tenants/{tenant}/release-cosigns/{measurement}", get(get_cosign).put(cosign))
         .route("/v1/tenants/{tenant}/telemetry", get(telemetry))
         .route("/v1/tenants/{tenant}/proposals", get(proposals))
@@ -664,8 +652,7 @@ impl Servers {
         let bundle = {
             let s = lock(&self.stored);
             let state = s.state.clone().unwrap();
-            let mut freshness: Vec<_> = s.log_freshness.iter().cloned().collect();
-            freshness.extend(s.tenant_freshness.iter().cloned());
+            let freshness: Vec<_> = s.log_freshness.iter().cloned().collect();
             TenantBundle {
                 root_chain: s.roots.clone(),
                 state,

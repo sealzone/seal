@@ -53,7 +53,6 @@ const REGISTRAR: u8 = 1;
 const V1_ADMINS: [u8; 2] = [11, 12];
 const V2_ADMIN: u8 = 13;
 const EDR: u8 = 20;
-const TENANT_FRESHNESS: u8 = 21;
 const STRANGER: u8 = 99;
 const CONSOLE: u8 = 30;
 const CONSOLE_ORIGIN: &str = "https://console.seal.zone";
@@ -725,107 +724,36 @@ async fn a_short_freshness_window_refreshes_the_log_statement_sooner() {
     assert_eq!(verified.fresh_until(), bundle.freshness[0].body.signed_at + 400);
 }
 
+/// `freshness_keys` is reserved: a state naming a key is refused before it is logged, as
+/// a proposal too, and tenant-run statements have no route and no reader any more.
 #[tokio::test]
-async fn tenant_freshness_statements_need_a_freshness_key_and_the_latest_state() {
+async fn a_state_naming_a_freshness_key_is_refused_and_tenant_statements_are_gone() {
     let env = Env::new().await;
     env.ready().await;
-    let statement = |body: &TenantState, signed_at: UnixTime, signer: u8| -> SignedStateFreshness {
-        let s = StateFreshness {
-            tenant: body.tenant.clone(),
-            version: body.version,
-            digest: codec::labeled_digest(TENANT_STATE_LABEL, body),
-            signed_at,
-        };
-        key(signer).sign_into(STATE_FRESHNESS_LABEL, s)
-    };
-    let now = env.now();
-    assert_eq!(
-        env.post("/v1/tenants/acme/freshness", &statement(&env.s1.body, now, TENANT_FRESHNESS)).await,
-        403,
-        "state 1 names no freshness keys"
-    );
-
     let mut body = state(2, 1);
-    body.freshness_keys.insert(key(TENANT_FRESHNESS).public_key());
-    assert_eq!(
-        env.get_as("/v1/tenants/acme/bundle", Auth::Key(TENANT_FRESHNESS)).await.0,
-        401,
-        "not yet a freshness key"
-    );
-    let s2 = env.log_state(body);
-    assert_eq!(env.put("/v1/tenants/acme/state", &s2).await, 204);
-    // A freshness signer reads the state it signs for, and nothing else.
-    assert_eq!(env.get_as("/v1/tenants/acme/bundle", Auth::Key(TENANT_FRESHNESS)).await.0, 200);
-    assert_eq!(env.get_as("/v1/tenants/acme/telemetry", Auth::Key(TENANT_FRESHNESS)).await.0, 403);
-    assert_eq!(env.post("/v1/tenants/acme/freshness", &statement(&s2.body, now, STRANGER)).await, 403);
-    assert_eq!(
-        env.post("/v1/tenants/acme/freshness", &statement(&env.s1.body, now, TENANT_FRESHNESS)).await,
-        409,
-        "for an older state"
-    );
-    assert_eq!(
-        env.post("/v1/tenants/acme/freshness", &statement(&s2.body, now + 3_600, TENANT_FRESHNESS)).await,
-        400,
-        "dated in the future"
-    );
-    let mut other_tenant = statement(&s2.body, now, TENANT_FRESHNESS);
-    other_tenant.body.tenant = other();
-    assert_eq!(env.post("/v1/tenants/acme/freshness", &other_tenant).await, 400);
+    body.freshness_keys.insert(key(STRANGER).public_key());
+    let s2 = signed(TENANT_STATE_LABEL, body, &V1_ADMINS);
+    let logged_before = env.up.log().freshness(&acme()).unwrap();
+    let (status, error) =
+        env.request("PUT", "/v1/tenants/acme/state", Some(TOKEN), Some(serde_json::to_vec(&s2).unwrap())).await;
+    assert_eq!(status, 400);
+    assert!(String::from_utf8_lossy(&error).contains("removed in 0.2.10"), "{}", String::from_utf8_lossy(&error));
+    assert_eq!(env.up.log().freshness(&acme()).unwrap().body, logged_before.body, "not logged");
+    let path = format!("/v1/tenants/acme/proposals/{}", Proposed::State(s2.clone()).id());
+    assert_eq!(env.call("PUT", &path, Auth::Key(V1_ADMINS[0]), Some(&s2)).await.0, 400);
+    assert_eq!(env.bundle().await.state, env.s1);
 
-    let older = statement(&s2.body, now - 100, TENANT_FRESHNESS);
-    let newer = statement(&s2.body, now, TENANT_FRESHNESS);
-    assert_eq!(env.post("/v1/tenants/acme/freshness", &newer).await, 204);
-    assert_eq!(env.post("/v1/tenants/acme/freshness", &older).await, 204);
-    let bundle = env.bundle().await;
-    assert_eq!(bundle.freshness.len(), 2);
-    assert_eq!(bundle.freshness[1], newer, "the newest tenant-run statement");
-    env.verifier().verify(&acme(), &bundle, &TrustedTime::exact(env.now())).unwrap();
-}
-
-/// While a change of signers is pending, the signers of the state in force still read the
-/// bundle and vouch for the latest state, and the bundle carries a statement of each.
-#[tokio::test]
-async fn the_signers_in_force_keep_vouching_while_a_change_of_signers_is_pending() {
-    const NEXT: u8 = 22;
-    let env = Env::new().await;
-    env.ready().await;
-    let statement = |body: &TenantState, signed_at: UnixTime, signer: u8| -> SignedStateFreshness {
-        let s = StateFreshness {
-            tenant: body.tenant.clone(),
-            version: body.version,
-            digest: codec::labeled_digest(TENANT_STATE_LABEL, body),
-            signed_at,
-        };
-        key(signer).sign_into(STATE_FRESHNESS_LABEL, s)
-    };
-    let mut body = state(2, 1);
-    body.pending_window_secs = 3_600;
-    body.freshness_keys.insert(key(TENANT_FRESHNESS).public_key());
-    let s2 = env.log_state(body.clone());
-    assert_eq!(env.put("/v1/tenants/acme/state", &s2).await, 204);
-    body.version = 3;
-    body.freshness_keys = [key(NEXT).public_key()].into();
-    let s3 = env.log_state(body);
-    assert_eq!(env.put("/v1/tenants/acme/state", &s3).await, 204);
-
-    let now = env.now();
-    assert_eq!(env.get_as("/v1/tenants/acme/bundle", Auth::Key(TENANT_FRESHNESS)).await.0, 200);
-    let in_force = statement(&s3.body, now, TENANT_FRESHNESS);
-    let next = statement(&s3.body, now, NEXT);
-    assert_eq!(env.post("/v1/tenants/acme/freshness", &in_force).await, 204);
-    assert_eq!(env.post("/v1/tenants/acme/freshness", &next).await, 204);
-    assert_eq!(env.post("/v1/tenants/acme/freshness", &statement(&s3.body, now, STRANGER)).await, 403);
-    let bundle = env.bundle().await;
-    assert_eq!(&bundle.freshness[1..], [in_force.clone(), next], "one per set of signers");
-    let v = env.verifier().verify(&acme(), &bundle, &TrustedTime::exact(env.now())).unwrap();
-    assert_eq!((v.state().version, v.latest_state().version), (2, 3));
-    // The new signer alone does not keep the latest state usable before it is in force.
-    let mut without = bundle.clone();
-    without.freshness.retain(|s| s != &in_force);
-    assert_eq!(
-        env.verifier().verify(&acme(), &without, &TrustedTime::exact(env.now())).unwrap_err(),
-        seal_verify::VerifyError::StateNotFresh
+    let statement: SignedStateFreshness = key(STRANGER).sign_into(
+        STATE_FRESHNESS_LABEL,
+        StateFreshness {
+            tenant: acme(),
+            version: 1,
+            digest: codec::labeled_digest(TENANT_STATE_LABEL, &env.s1.body),
+            signed_at: env.now(),
+        },
     );
+    assert_eq!(env.post("/v1/tenants/acme/freshness", &statement).await, 404);
+    assert_eq!(env.bundle().await.freshness.len(), 1, "the log's statement only");
 }
 
 #[tokio::test]
@@ -1222,17 +1150,6 @@ async fn the_client_round_trips_every_endpoint_over_tls() {
         ErrorCode::NotAllowed,
         "enclaves never read it"
     );
-
-    let tenant_statement = key(TENANT_FRESHNESS).sign_into(
-        STATE_FRESHNESS_LABEL,
-        StateFreshness {
-            tenant: acme(),
-            version: 1,
-            digest: codec::labeled_digest(TENANT_STATE_LABEL, &env.s1.body),
-            signed_at: now,
-        },
-    );
-    assert_eq!(anyone.post_freshness(&tenant, &tenant_statement).await.unwrap_err().code(), ErrorCode::NotAllowed);
 
     let bundle = enclave.get_bundle(&tenant).await.unwrap();
     assert_eq!(

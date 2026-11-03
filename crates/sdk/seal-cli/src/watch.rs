@@ -118,8 +118,6 @@ pub fn line(d: &Difference) -> String {
                 clearance.before
             )
         }
-        Item::FreshnessKeyAdded { key } => format!("+ freshness key: {key}"),
-        Item::FreshnessKeyRemoved { key } => format!("- freshness key: {key}"),
         Item::TelemetryReaderAdded { key } => format!("+ telemetry reader: {key}"),
         Item::TelemetryReaderRemoved { key } => format!("- telemetry reader: {key}"),
         Item::PendingWindow { old, new } => format!("~ pending window: {} -> {}", span(*old), span(*new)),

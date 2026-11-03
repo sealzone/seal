@@ -248,6 +248,8 @@ fn build() -> Vec<Vector> {
             hosted: None,
         }]
         .into(),
+        // Reserved and always empty since 0.2.10 (verifiers refuse a key here); the vector keeps
+        // one so the field's encoding stays pinned.
         freshness_keys: [PublicKey([0x6d; 32])].into(),
         telemetry_readers: [PublicKey([0x6e; 32])].into(),
         issued_at: 1_900_000_000,

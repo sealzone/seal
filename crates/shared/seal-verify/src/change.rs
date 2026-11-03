@@ -17,7 +17,6 @@
 //! | `integrity.sources` | | adding, removing or rekeying a source (removing one lifts its suspensions) |
 //! | `integrity.actions` | a harder action for some severity | a softer one |
 //! | `integrity.cleared` | removing a clearance | adding a clearance (it lifts suspensions) |
-//! | `freshness_keys` (any one listed signer's statement suffices) | adding the first; removing one while others remain | adding another; removing the last |
 //! | `telemetry_readers` | removing one while others remain | adding one; removing the last |
 //! | `pending_window_secs` | lengthening | shortening |
 //! | `freshness_secs` | shortening (setting it shortens) | lengthening (clearing it lengthens) |
@@ -26,7 +25,8 @@
 //! | root `cosign_releases` | turning it on | turning it off |
 //!
 //! `version`, `root_version` and `issued_at` are not changes of access. A document for
-//! another tenant is widening.
+//! another tenant is widening. `freshness_keys` is reserved and always empty in a state that
+//! verifies (`check_reserved`), so it never differs between two of them.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -161,12 +161,6 @@ pub enum Item {
     },
     ClearanceRemoved {
         clearance: Clearance,
-    },
-    FreshnessKeyAdded {
-        key: PublicKey,
-    },
-    FreshnessKeyRemoved {
-        key: PublicKey,
     },
     TelemetryReaderAdded {
         key: PublicKey,
@@ -345,16 +339,6 @@ pub fn diff_states(old: &TenantState, new: &TenantState) -> Vec<Difference> {
         |clearance| Item::ClearanceAdded { clearance },
         |clearance| Item::ClearanceRemoved { clearance },
     );
-    // Freshness signers, like networks: any one listed signer's statement keeps the state
-    // usable, so a first signer narrows (a statement is needed at all) and a further one
-    // widens (another key can vouch); removing one narrows unless it was the last.
-    for key in new.freshness_keys.difference(&old.freshness_keys) {
-        d.when(!old.freshness_keys.is_empty(), Item::FreshnessKeyAdded { key: *key });
-    }
-    for key in old.freshness_keys.difference(&new.freshness_keys) {
-        d.when(new.freshness_keys.is_empty(), Item::FreshnessKeyRemoved { key: *key });
-    }
-
     for key in new.telemetry_readers.difference(&old.telemetry_readers) {
         d.push(Change::Widening, Item::TelemetryReaderAdded { key: *key });
     }
@@ -509,7 +493,7 @@ mod tests {
                 cleared: [clearance(1), clearance(2)].into(),
             },
             deployments: [id(5), id(6)].into(),
-            freshness_keys: [PublicKey([7; 32])].into(),
+            freshness_keys: Default::default(),
             telemetry_readers: [PublicKey([8; 32]), PublicKey([10; 32])].into(),
             issued_at: 1,
             pending_window_secs: 3600,
@@ -777,39 +761,6 @@ mod tests {
             s.integrity.cleared.remove(&clearance(1));
         });
         assert_eq!(item, Item::ClearanceRemoved { clearance: clearance(1) });
-    }
-
-    #[test]
-    fn freshness_keys() {
-        // Another signer can vouch alone: widening.
-        let item = widens(|s| {
-            s.freshness_keys.insert(PublicKey([11; 32]));
-        });
-        assert_eq!(item, Item::FreshnessKeyAdded { key: PublicKey([11; 32]) });
-        assert_eq!(widens(|s| s.freshness_keys.clear()), Item::FreshnessKeyRemoved { key: PublicKey([7; 32]) });
-        // The first signer: a statement is needed at all.
-        let mut none = base();
-        none.freshness_keys.clear();
-        let first = base();
-        let d = diff_states(&none, &first);
-        assert_eq!(d.len(), 1);
-        assert_eq!(
-            (d[0].change, &d[0].item),
-            (Change::Narrowing, &Item::FreshnessKeyAdded { key: PublicKey([7; 32]) })
-        );
-        // Removing one of two leaves fewer keys that can vouch.
-        let mut two = base();
-        two.freshness_keys.insert(PublicKey([11; 32]));
-        let d = diff_states(&two, &first);
-        assert_eq!(d.len(), 1);
-        assert_eq!(
-            (d[0].change, &d[0].item),
-            (Change::Narrowing, &Item::FreshnessKeyRemoved { key: PublicKey([11; 32]) })
-        );
-        // Replacing the one signer widens: the new key alone could vouch.
-        let mut replaced = base();
-        replaced.freshness_keys = [PublicKey([11; 32])].into();
-        assert_eq!(classify_state(&first, &replaced), Change::Widening);
     }
 
     #[test]

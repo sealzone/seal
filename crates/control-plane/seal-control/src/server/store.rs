@@ -35,13 +35,28 @@ use seal_proto::signed::Signed;
 use seal_proto::state::{LoggedRoot, LoggedState, SignedStateFreshness, SignedTenantAnchor, SignedTenantState};
 use seal_proto::{Measurement, PlatformId, TenantId};
 
-/// The freshness statements kept for the latest state.
+/// The freshness statement kept for the latest state, stored as `{"log": ..., "tenant": []}`.
+///
+/// `tenant` held tenant-run signers' statements until 0.2.10 removed them. A stored one is
+/// ignored on load (it is no longer read), and `[]` is still written, because control images
+/// before 0.2.10 require the field: a rollback to one keeps loading what this one wrote.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Freshness {
     /// The log's newest statement for the latest state.
     pub log: Option<SignedStateFreshness>,
-    /// Tenant-run statements for the latest state, newest last.
-    pub tenant: Vec<SignedStateFreshness>,
+    /// Always written `[]`, never read.
+    #[serde(skip_deserializing, serialize_with = "no_statements")]
+    tenant: (),
+}
+
+impl Freshness {
+    pub fn of_log(statement: SignedStateFreshness) -> Self {
+        Self { log: Some(statement), tenant: () }
+    }
+}
+
+fn no_statements<S: serde::Serializer>(_: &(), s: S) -> Result<S::Ok, S::Error> {
+    s.collect_seq(std::iter::empty::<SignedStateFreshness>())
 }
 
 /// One tenant's small documents, as stored.
@@ -453,6 +468,50 @@ mod tests {
             .unwrap();
         reopened.tenant(&proposing).await.unwrap();
         assert_eq!(reopened.tenants.lock().unwrap().len(), 2);
+    }
+
+    /// A freshness row as control stored it before 0.2.10, with a tenant-run statement, still
+    /// loads; what this one writes keeps `"tenant": []`, which the earlier image requires.
+    #[tokio::test]
+    async fn freshness_rows_load_and_stay_readable_by_the_previous_image() {
+        use seal_proto::state::StateFreshness;
+        let pool = test_support::db(None).await.pool();
+        let acme = TenantId::new("acme").unwrap();
+        let statement = |signed_at| Signed {
+            body: StateFreshness { tenant: acme.clone(), version: 3, digest: [7; 32], signed_at },
+            signatures: Vec::new(),
+        };
+        let old_row = serde_json::json!({ "log": statement(100), "tenant": [statement(90)] });
+        sqlx::query("insert into tenant_documents (tenant, kind, body) values ('acme', 'freshness', $1)")
+            .bind(serde_json::to_vec(&old_row).unwrap())
+            .execute(&pool)
+            .await
+            .unwrap();
+        let store = Store::new(pool.clone());
+        let entry = store.tenant(&acme).await.unwrap();
+        let mut e = entry.lock().await;
+        assert_eq!(e.docs.freshness.log, Some(statement(100)), "the log's statement is kept");
+
+        e.set_freshness(Freshness::of_log(statement(200))).await.unwrap();
+        drop(e);
+        let (body,): (Vec<u8>,) =
+            sqlx::query_as("select body from tenant_documents where tenant = 'acme' and kind = 'freshness'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let written: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(written, serde_json::json!({ "log": statement(200), "tenant": [] }));
+        // The shape control images before 0.2.10 decode, `tenant` required.
+        #[derive(Deserialize)]
+        #[allow(dead_code)]
+        struct Previous {
+            log: Option<SignedStateFreshness>,
+            tenant: Vec<SignedStateFreshness>,
+        }
+        let previous: Previous = serde_json::from_slice(&body).unwrap();
+        assert!(previous.tenant.is_empty());
+        let reloaded = Store::new(pool).tenant(&acme).await.unwrap();
+        assert_eq!(reloaded.lock().await.docs.freshness.log, Some(statement(200)));
     }
 
     #[tokio::test]

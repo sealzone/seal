@@ -22,7 +22,6 @@ use serde::Serialize;
 use seal::admin::{cosign, meets_threshold, Admin, Current, Proposal, Proposed, Submitted};
 use seal_proto::signed::Signed;
 use seal_proto::state::{TenantRoot, TenantState, TENANT_ROOT_LABEL, TENANT_STATE_LABEL};
-use seal_proto::TrustedTime;
 use seal_verify::change::Change;
 
 use crate::{say, time, ui, watch, Env, Exit, Scope};
@@ -142,7 +141,6 @@ pub async fn change_state(
         let index = admin.publish(&signed).await?;
         stored()?;
         published(&signed.body, index, change, window);
-        sign_freshness_if_held(env, &admin, &signed.body, &time).await?;
         return Ok(Delivered::Logged);
     }
     if !keys.is_empty() {
@@ -262,7 +260,6 @@ pub async fn follow(
                         watch::span(window)
                     );
                 }
-                sign_freshness_if_held(env, admin, &state, &time()).await?;
                 return Ok(Delivered::Logged);
             }
             Ok(None) => last = None,
@@ -352,36 +349,6 @@ async fn step(admin: &Admin, waiting: &mut Vec<Proposed>) -> Result<Option<Tenan
         waiting.remove(i);
     }
     Ok(if waiting.is_empty() { last_state.or_else(|| Some(current.tenant.latest_state().clone())) } else { None })
-}
-
-/// Signs a freshness statement for `state` when it names freshness keys and `--freshness-key`
-/// holds one of them; otherwise says it waits for one.
-pub async fn sign_freshness_if_held(
-    env: &Env,
-    admin: &Admin,
-    state: &TenantState,
-    time: &TrustedTime,
-) -> anyhow::Result<()> {
-    if state.freshness_keys.is_empty() {
-        return Ok(());
-    }
-    if let Some(path) = &env.sign.freshness_key {
-        let key = crate::config::read_key(path)?;
-        if state.freshness_keys.contains(&key.public_key()) {
-            admin.post_freshness(&key, state, time).await?;
-            say!(
-                "{}",
-                ui::ok(&format!("signed freshness for state version {} with {}", state.version, path.display()))
-            );
-            return Ok(());
-        }
-    }
-    say!(
-        "note: state version {} names freshness keys; it is not used until one of them signs for it \
-         (`seal settings freshness sign --freshness-key FILE`)",
-        state.version
-    );
-    Ok(())
 }
 
 // ---- seal changes ----------------------------------------------------------------------------
@@ -701,7 +668,6 @@ async fn sign(env: &Env, id: &str, passkey: bool) -> anyhow::Result<()> {
         Proposed::State(s) if s.body.root_version == root.version && meets_threshold(&root, TENANT_STATE_LABEL, s) => {
             let index = admin.publish(s).await?;
             published(&s.body, index, change, window);
-            sign_freshness_if_held(env, &admin, &s.body, &time).await?;
         }
         Proposed::Root(r) if meets_threshold(&root, TENANT_ROOT_LABEL, r) => {
             say!(
@@ -774,5 +740,5 @@ async fn submit(env: &Env, id: &str) -> anyhow::Result<()> {
             logged.state.body.version, logged.proof.leaf_index
         ))
     );
-    sign_freshness_if_held(env, &admin, &logged.state.body, &time).await
+    Ok(())
 }

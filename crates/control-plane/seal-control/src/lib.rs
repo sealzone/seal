@@ -14,23 +14,20 @@
 //! Who may read and write a tenant's documents (`seal_proto::control` names the credentials;
 //! admins are admitted wherever members are):
 //!
-//! | What | Anyone | Console token `read` | Console token `submit` | Admin-signed | Enclave (telemetry key) | Enclave at boot (attested) | Freshness signer | Write token |
-//! |------|---|---|---|---|---|---|---|---|
-//! | Bundle (grants)                       |   | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |   |
-//! | Documents, proposals, telemetry       |   | ✓ | ✓ | ✓ |   |   |   |   |
-//! | Put, sign, withdraw, submit proposals |   |   | ✓ | ✓ |   |   |   |   |
-//! | Put roots, states, release co-signatures (each still needs its own admin signatures) | | | ✓ | ✓ | | | | ✓ |
-//! | A named blob's newest version       |   | ✓ | ✓ | ✓ | ✓ |   |   |   |
-//! | Named blobs listed, a name's versions |   | ✓ | ✓ | ✓ |   |   |   |   |
-//! | Publish or delete a named blob (each version needs its own admin signatures) | | | ✓ | ✓ | | | | |
-//! | Service key certificates, release co-signatures, releases and their templates, the checkpoint | ✓ | | | | | | | |
-//! | Post signals, session ends, telemetry, certificates, freshness statements (verified by their own signatures) | ✓ | | | | | | | |
-//! | Put releases and their templates      |   |   |   |   |   |   |   | ✓ |
+//! | What | Anyone | Console token `read` | Console token `submit` | Admin-signed | Enclave (telemetry key) | Enclave at boot (attested) | Write token |
+//! |------|---|---|---|---|---|---|---|
+//! | Bundle (grants)                       |   | ✓ | ✓ | ✓ | ✓ | ✓ |   |
+//! | Documents, proposals, telemetry       |   | ✓ | ✓ | ✓ |   |   |   |
+//! | Put, sign, withdraw, submit proposals |   |   | ✓ | ✓ |   |   |   |
+//! | Put roots, states, release co-signatures (each still needs its own admin signatures) | | | ✓ | ✓ | | | ✓ |
+//! | A named blob's newest version       |   | ✓ | ✓ | ✓ | ✓ |   |   |
+//! | Named blobs listed, a name's versions |   | ✓ | ✓ | ✓ |   |   |   |
+//! | Publish or delete a named blob (each version needs its own admin signatures) | | | ✓ | ✓ | | | |
+//! | Service key certificates, release co-signatures, releases and their templates, the checkpoint | ✓ | | | | | | |
+//! | Post signals, session ends, telemetry, certificates (verified by their own signatures) | ✓ | | | | | | |
+//! | Put releases and their templates      |   |   |   |   |   |   | ✓ |
 //!
-//! A freshness signer is a key the latest state names in `freshness_keys`, or an earlier state
-//! stored since the guardians' oldest anchor (the state in force is among them, and its signers
-//! vouch for the latest until it applies); it reads the state it signs for. Public is what
-//! sealing and booting need and an attacker learns nothing secret from:
+//! Public is what sealing and booting need and an attacker learns nothing secret from:
 //! public keys under guardian certificates, releases, co-signatures of public releases, the
 //! log's checkpoint. Sealing reads nothing here (it goes through an enclave, whose bundle
 //! holds the wrap keys). An enclave reads its bundle at boot, before the guardian released the
@@ -41,12 +38,11 @@
 //! | GET    | /v1/tenants/{tenant}/bundle                        | → `TenantBundle`                    |
 //! | GET    | /v1/tenants/{tenant}/documents?since_version=V     | → `Documents`: the whole root chain, the logged states of a version above V (all without V) oldest first, each with the proof fetched when it was logged, and the log's latest checkpoint |
 //! | PUT    | /v1/tenants/{tenant}/root                          | `LoggedRoot` (appends to the chain) |
-//! | PUT    | /v1/tenants/{tenant}/state                         | `LoggedState`, or a `SignedTenantState` the control plane logs (version must increase) |
+//! | PUT    | /v1/tenants/{tenant}/state                         | `LoggedState`, or a `SignedTenantState` the control plane logs (version must increase; its reserved `freshness_keys` empty) |
 //! | GET    | /v1/tenants/{tenant}/proposals                     | → `[Proposal]`, the open ones, oldest first |
 //! | PUT    | /v1/tenants/{tenant}/proposals/{id}                | `Signed<TenantState>` or `Signed<TenantRoot>` whose digest is `id`, with any signatures → `Proposal`; signatures from repeated PUTs are merged |
 //! | DELETE | /v1/tenants/{tenant}/proposals/{id}                | → 204                               |
 //! | POST   | /v1/tenants/{tenant}/proposals/{id}/submit         | → `Submitted`: the document logged and stored as the next root or state, once it has the latest root's threshold of signatures |
-//! | POST   | /v1/tenants/{tenant}/freshness                     | `SignedStateFreshness` for the latest state from a tenant-run freshness signer |
 //! | POST   | /v1/tenants/{tenant}/signals                       | `SignedSignal` (append, dedup; telemetry key or source key) |
 //! | POST   | /v1/tenants/{tenant}/session-ends                  | `SignedSessionEnd` (append, dedup; telemetry key) |
 //! | GET    | /v1/tenants/{tenant}/service-key-certificates      | → `[SignedServiceKeyCertificate]`, every one posted |
@@ -87,8 +83,8 @@
 //!
 //! The bundle omits signals and session ends that are no longer live under the tenant's
 //! latest state (`IntegrityPolicy::is_live`, `SessionEnd::is_live`). Its `freshness` holds
-//! the log's newest statement for the latest state (refetched from the log at least hourly)
-//! and the newest tenant-run statement, if any. Its `wrap_keys` are fetched from the guardian
+//! the log's newest statement for the latest state (refetched from the log at least hourly).
+//! Its `wrap_keys` are fetched from the guardian
 //! of each of the tenant's `platforms` (`GET /v1/wrap-keys/...`) for every accepted tenant
 //! key version; they are certified, so the control plane cannot substitute its own. Its
 //! `anchors` are the newest `TenantAnchor` of each of those guardians (`POST /v1/anchors/...`,

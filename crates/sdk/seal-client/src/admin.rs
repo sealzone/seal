@@ -32,7 +32,7 @@ use seal_proto::release::{
 };
 use seal_proto::signed::Signed;
 use seal_proto::state::{
-    root_id, AdminKey, LoggedRoot, LoggedState, SignedStateFreshness, SignedTenantState, StateFreshness, TenantBundle,
+    root_id, AdminKey, LoggedRoot, LoggedState, SignedStateFreshness, SignedTenantState, TenantBundle,
     TenantKeyVersions, TenantRoot, TenantState, STATE_FRESHNESS_LABEL, TENANT_ROOT_LABEL, TENANT_STATE_LABEL,
 };
 use seal_proto::{
@@ -626,34 +626,6 @@ impl Admin {
         Ok(verified)
     }
 
-    /// As `fetch`, for a tenant-run freshness signer about to sign: the bundle is verified as
-    /// if it carried `signer`'s statement for its state, so a state whose last tenant statement
-    /// ran out can still be signed for. `signer` must be one of the state's `freshness_keys`.
-    pub async fn fetch_as_freshness_signer(
-        &self,
-        signer: &SigningKey,
-        time: &TrustedTime,
-    ) -> Result<Current, ClientError> {
-        let mut bundle = self.control.get_bundle(&self.tenant).await.map_err(control_error)?;
-        let state = &bundle.state.body;
-        // During a pending window the state in force's signers vouch for the latest state too.
-        let listed = std::iter::once(state)
-            .chain(bundle.states.iter().map(|s| &s.state.body))
-            .any(|s| s.freshness_keys.contains(&signer.public_key()));
-        if !listed {
-            return Err(ClientError::Invalid(format!(
-                "{} is not a freshness key of state version {} or of the state in force",
-                signer.public_key(),
-                state.version
-            )));
-        }
-        let candidate = freshness_statement(signer, state, time);
-        bundle.freshness.push(candidate);
-        let mut current = self.verify_bundle(bundle, time).await?;
-        current.bundle.freshness.pop();
-        Ok(current)
-    }
-
     async fn verify_bundle(&self, mut bundle: TenantBundle, time: &TrustedTime) -> Result<Current, ClientError> {
         let verifier = TenantVerifier::new(self.trust.clone(), Vec::new()).with_anchor_keys(self.anchor_keys.clone());
         let mut verified = verifier.verify(&self.tenant, &bundle, time);
@@ -672,14 +644,7 @@ impl Admin {
                 verified = verifier.verify(&self.tenant, &bundle, time);
             }
         }
-        let tenant = verified.map_err(|e| match e {
-            VerifyError::StateNotFresh if !bundle.state.body.freshness_keys.is_empty() => ClientError::Verification(
-                "no current freshness statement for the tenant's state; it names freshness keys, so one of them \
-                 must sign for it (`seal settings freshness sign`)"
-                    .into(),
-            ),
-            e => verification("tenant bundle", e),
-        })?;
+        let tenant = verified.map_err(|e| verification("tenant bundle", e))?;
         if let Some(expected) = &self.root_id {
             if tenant.root_id() != expected {
                 return Err(ClientError::Verification(format!(
@@ -706,6 +671,7 @@ impl Admin {
         let old = tenant.state().clone();
         let mut new = old.clone();
         edit(&mut new)?;
+        seal_verify::check_reserved(&new).map_err(|e| ClientError::Invalid(e.to_string()))?;
         let mut unchanged = new.clone();
         unchanged.issued_at = old.issued_at;
         if unchanged == old {
@@ -736,6 +702,7 @@ impl Admin {
         state: TenantState,
         keys: &[SigningKey],
     ) -> Result<SignedTenantState, ClientError> {
+        seal_verify::check_reserved(&state).map_err(|e| ClientError::Invalid(e.to_string()))?;
         let what = format!("state version {}", state.version);
         admin_sign(&what, root, TENANT_STATE_LABEL, state, keys)
     }
@@ -804,18 +771,6 @@ impl Admin {
             _ => return Err(ClientError::Verification("the control plane submitted another document".into())),
         }
         Ok(submitted)
-    }
-
-    /// Signs a tenant-run freshness statement for `state` now and posts it to the control plane.
-    pub async fn post_freshness(
-        &self,
-        signer: &SigningKey,
-        state: &TenantState,
-        time: &TrustedTime,
-    ) -> Result<SignedStateFreshness, ClientError> {
-        let statement = freshness_statement(signer, state, time);
-        self.control.post_freshness(&self.tenant, &statement).await.map_err(control_error)?;
-        Ok(statement)
     }
 
     /// Rotates the root: `next` (the next version) signed by the latest root's threshold of
@@ -1020,16 +975,6 @@ impl Admin {
     }
 }
 
-fn freshness_statement(signer: &SigningKey, state: &TenantState, time: &TrustedTime) -> SignedStateFreshness {
-    let statement = StateFreshness {
-        tenant: state.tenant.clone(),
-        version: state.version,
-        digest: labeled_digest(TENANT_STATE_LABEL, state),
-        signed_at: time.now,
-    };
-    signer.sign_into(STATE_FRESHNESS_LABEL, statement)
-}
-
 /// The next root after `root`: `add` admin keys added, keys whose `admin_key_id` is in
 /// `remove` dropped, `threshold` when given (else unchanged). Refused when a removed key is
 /// not there or the threshold does not fit the keys.
@@ -1168,7 +1113,6 @@ pub fn diff(old: &TenantState, new: &TenantState) -> Vec<String> {
     if o.oldest_accepted != n.oldest_accepted {
         out.push(format!("~ oldest accepted tenant key version: {} -> {}", o.oldest_accepted, n.oldest_accepted));
     }
-    set_changes(&mut out, "freshness key", &old.freshness_keys, &new.freshness_keys, |k| k.to_string());
     set_changes(&mut out, "telemetry reader", &old.telemetry_readers, &new.telemetry_readers, |k| k.to_string());
     if old.pending_window_secs != new.pending_window_secs {
         out.push(format!("~ pending window: {}s -> {}s", old.pending_window_secs, new.pending_window_secs));
