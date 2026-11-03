@@ -11,7 +11,7 @@ use seal_crypto::sign::{admin_key_id, key_id, verify, verify_admin};
 use seal_crypto::telemetry::TelemetryReaderKey;
 use seal_proto::api::{AttestationResponse, IngestContext, SealPayload, SealRequest, SealResponse, TelemetryReceipt};
 use seal_proto::codec::{self, labeled_digest};
-use seal_proto::named::{BlobRef, NamedSecret, NamedSecretVersion, NAMED_SECRET_LABEL};
+use seal_proto::named::{BlobRef, NamedBlob, NamedBlobVersion, NAMED_BLOB_LABEL};
 use seal_proto::policy::{HttpRules, Injection, SecretPolicy, SpkiPin};
 use seal_proto::release::{
     LogEntry, ReleaseConstraints, ReleaseCosign, ReleaseEvidence, ReleaseManifest, SignedCheckpoint,
@@ -24,7 +24,7 @@ use seal_proto::state::{
     TENANT_ROOT_LABEL, TENANT_STATE_LABEL,
 };
 use seal_proto::telemetry::SignedTelemetryBatch;
-use seal_proto::{PlatformId, PublicKey, SecretName, TenantId, TenantRootId, TrustedTime, UnixTime};
+use seal_proto::{BlobName, PlatformId, PublicKey, TenantId, TenantRootId, TrustedTime, UnixTime};
 use seal_tlog::LogVerifier;
 use seal_verify::change::{self, Difference};
 use seal_verify::{Pending, Public, TenantTrust, TenantVerifier};
@@ -213,7 +213,7 @@ enum Document {
     State(Box<TenantState>),
     Root(TenantRoot),
     Cosign(ReleaseCosign),
-    Named(NamedSecret),
+    Named(NamedBlob),
 }
 
 impl Document {
@@ -222,7 +222,7 @@ impl Document {
             TENANT_STATE_LABEL => Self::State(parse("document", document)?),
             TENANT_ROOT_LABEL => Self::Root(parse("document", document)?),
             RELEASE_COSIGN_LABEL => Self::Cosign(parse("document", document)?),
-            NAMED_SECRET_LABEL => Self::Named(parse("document", document)?),
+            NAMED_BLOB_LABEL => Self::Named(parse("document", document)?),
             _ => return Err(format!("{label}: not a label admin keys sign")),
         })
     }
@@ -246,7 +246,7 @@ impl Document {
 
 /// `labeled_digest(label, document)`: the 32 bytes an admin key signs, which a passkey takes
 /// as its WebAuthn challenge. `label` is one of `seal/tenant-state/v1`, `seal/tenant-root/v1`,
-/// `seal/release-cosign/v1`, `seal/named-secret/v1`.
+/// `seal/release-cosign/v1`, `seal/named-blob/v1`.
 pub fn labeled_digest_of(label: &str, document: &str) -> Result<[u8; 32]> {
     Ok(Document::parse(label, document)?.digest(label))
 }
@@ -308,10 +308,10 @@ pub fn signers(root: &str, label: &str, signed: &str) -> Result<String> {
     json(&out)
 }
 
-/// A named secret's version `version`, unsigned (a `NamedSecretVersion` with no signatures):
+/// A named blob's version `version`, unsigned (a `NamedBlobVersion` with no signatures):
 /// pointing at `blob`, or deleting the name when `blob` is empty. Admins sign its
-/// `entry.body` under `seal/named-secret/v1`. Refuses a blob of another tenant or chain.
-pub fn named_secret(
+/// `entry.body` under `seal/named-blob/v1`. Refuses a blob of another tenant or chain.
+pub fn named_blob(
     tenant: &str,
     root_id: &str,
     name: &str,
@@ -321,32 +321,32 @@ pub fn named_secret(
 ) -> Result<String> {
     let tenant = tenant_id(tenant)?;
     let root_id: TenantRootId = root_id.parse().map_err(|e| format!("root id: {e}"))?;
-    let name = SecretName::new(name).map_err(|e| e.to_string())?;
+    let name = BlobName::new(name).map_err(|e| e.to_string())?;
     if version == 0 {
         return Err("versions start at 1".into());
     }
     let blob = (!blob.is_empty()).then(|| blob.to_string());
     let named = blob.as_deref().map(BlobRef::of).transpose().map_err(|e| format!("blob: {e}"))?;
-    let body = NamedSecret { tenant, root_id, name, version, blob: named, published_at };
-    let version = NamedSecretVersion { entry: Signed { body, signatures: Vec::new() }, blob };
+    let body = NamedBlob { tenant, root_id, name, version, blob: named, published_at };
+    let version = NamedBlobVersion { entry: Signed { body, signatures: Vec::new() }, blob };
     version.check().map_err(|e| e.to_string())?;
     json(&version)
 }
 
-/// What a stored named-secret version is, for display: whether it is `tenant`'s, carries the
+/// What a stored named-blob version is, for display: whether it is `tenant`'s, carries the
 /// blob it names and is signed by `root`'s threshold (`signed`, as enclaves check it against
 /// the root in force), who signed, and the blob's clear-text policy.
-pub fn describe_named_secret(tenant: &str, root_id: &str, root: &str, version: &str) -> Result<String> {
+pub fn describe_named_blob(tenant: &str, root_id: &str, root: &str, version: &str) -> Result<String> {
     let tenant = tenant_id(tenant)?;
     let root_id: TenantRootId = root_id.parse().map_err(|e| format!("root id: {e}"))?;
     let root: TenantRoot = parse("root", root)?;
-    let version: NamedSecretVersion = parse("named secret", version)?;
+    let version: NamedBlobVersion = parse("named blob", version)?;
     let entry = &version.entry.body;
     let mut signers: Vec<String> = Vec::new();
     for sig in &version.entry.signatures {
         let Some(key) = root.admin_keys.iter().find(|k| admin_key_id(k) == sig.signer) else { continue };
         let id = sig.signer.to_string();
-        if !signers.contains(&id) && verify_admin(key, NAMED_SECRET_LABEL, entry, sig).is_ok() {
+        if !signers.contains(&id) && verify_admin(key, NAMED_BLOB_LABEL, entry, sig).is_ok() {
             signers.push(id);
         }
     }

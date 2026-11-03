@@ -35,7 +35,7 @@ pub mod tunnel;
 pub use error::{ErrorCode, ProtoError};
 pub use evidence::Evidence;
 pub use ids::{
-    AppName, BlobId, KeyId, Measurement, PlatformId, PublicKey, SecretName, ServiceKeyVersion, TenantId,
+    AppName, BlobId, BlobName, KeyId, Measurement, PlatformId, PublicKey, ServiceKeyVersion, TenantId,
     TenantKeyVersion, TenantPin, TenantRootId, UnixTime,
 };
 pub use secret::{Bearer, SecretVec};

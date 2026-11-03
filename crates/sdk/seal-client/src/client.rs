@@ -13,7 +13,7 @@ use seal_proto::freshness::{ProofTicket, ATTESTATION_MAX_AGE_SECS, ATTESTATION_R
 use seal_proto::identity::{IdentityProof, ProofContext, ProofPurpose};
 use seal_proto::integrity::Severity;
 use seal_proto::session::PlatformTier;
-use seal_proto::{ErrorCode, KeyId, PlatformId, SecretName, SecretVec, TenantPin};
+use seal_proto::{BlobName, ErrorCode, KeyId, PlatformId, SecretVec, TenantPin};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
@@ -124,7 +124,7 @@ impl Client {
         }
     }
 
-    /// Start a session on `blob`, or on a named secret (`openai`): the enclave opens it and
+    /// Start a session on `blob`, or on a named blob (`openai`): the enclave opens it and
     /// the app gets a stand-in. Needs an app grant listed in the blob's policy. Options chain
     /// first (`min_tier`, `reload_with`, `on_reseal`, `endpoint_reporter`); end with `.http()`
     /// (`url`, `key`), `.database()` (`dsn`), or `.await` for a `Session` of whichever kind the
@@ -135,9 +135,9 @@ impl Client {
         SessionBuilder::new(self, blob.to_owned())
     }
 
-    /// The blob a named secret points at now: the newest version its tenant's admins
+    /// The blob a named blob points at now: the newest version its tenant's admins
     /// published, if this workload holds a grant for one of the blob's apps
-    /// (`POST /v1/secrets/resolve`). An unknown or deleted name is `NotAllowed`, like an
+    /// (`POST /v1/blobs/resolve`). An unknown or deleted name is `NotAllowed`, like an
     /// ungranted one. `session(name)` calls it itself.
     pub async fn resolve(&self, name: &str) -> Result<String, ClientError> {
         self.resolve_version(name).await.map(|(blob, _)| blob)
@@ -145,16 +145,16 @@ impl Client {
 
     /// `resolve`, with the version of the name the blob is.
     pub(crate) async fn resolve_version(&self, name: &str) -> Result<(String, u64), ClientError> {
-        let name = SecretName::new(name)?;
+        let name = BlobName::new(name)?;
         let enclave = self.enclave().await?;
         let (context, proof) = placeholder(self.tenant());
         let mut request = ResolveRequest { name, context, proof };
         (request.context, request.proof) = self.prove(&enclave, request.expected_purpose()).await?;
-        let response: ResolveResponse = self.call(&enclave, "/v1/secrets/resolve", &request).await?;
+        let response: ResolveResponse = self.call(&enclave, "/v1/blobs/resolve", &request).await?;
         let blob = seal_proto::blob::Blob::from_str(&response.blob)?;
         if &blob.header.tenant != enclave.tenant() || &blob.header.root_id != enclave.root_id() {
             return Err(ClientError::Verification(format!(
-                "the named secret is a blob for {}@{}, the enclave serves {}@{}",
+                "the named blob is for {}@{}, the enclave serves {}@{}",
                 blob.header.tenant,
                 blob.header.root_id,
                 enclave.tenant(),

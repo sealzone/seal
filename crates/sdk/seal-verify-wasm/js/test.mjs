@@ -111,15 +111,15 @@ test("the log: checkpoints, inclusion and releases", () => {
   assert.throws(() => seal.verifyRelease(v.trust, r.evidence, { fresh: r.early_checkpoint, now: r.now }), /time lock/)
 })
 
-test("named secrets: drafts, and what the label signs", () => {
+test("named blobs: drafts, and what the label signs", () => {
   const rootId = "11".repeat(32)
-  const deletion = seal.namedSecret({ tenant: v.tenant, rootId, name: "openai", version: 2, blob: null, publishedAt: 5 })
+  const deletion = seal.namedBlob({ tenant: v.tenant, rootId, name: "openai", version: 2, blob: null, publishedAt: 5 })
   assert.equal(deletion.blob, null)
   assert.equal(deletion.entry.body.blob, null)
   assert.deepEqual(deletion.entry.signatures, [])
-  assert.equal(seal.labeledDigest(seal.LABELS.namedSecret, deletion.entry.body).length, 32)
-  assert.throws(() => seal.namedSecret({ tenant: v.tenant, rootId, name: "open.ai", version: 1, blob: null }), /name/)
-  assert.throws(() => seal.namedSecret({ tenant: v.tenant, rootId, name: "openai", version: 1, blob: "seal1.x" }), /blob/)
+  assert.equal(seal.labeledDigest(seal.LABELS.namedBlob, deletion.entry.body).length, 32)
+  assert.throws(() => seal.namedBlob({ tenant: v.tenant, rootId, name: "open.ai", version: 1, blob: null }), /name/)
+  assert.throws(() => seal.namedBlob({ tenant: v.tenant, rootId, name: "openai", version: 1, blob: "seal1.x" }), /blob/)
 })
 
 // The sealing module. A real seal needs a live attested enclave (the console's e2e covers it);

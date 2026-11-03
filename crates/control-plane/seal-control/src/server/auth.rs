@@ -72,10 +72,10 @@ pub enum Rule {
     /// Roots, states and release co-signatures, which carry their own admin signatures:
     /// console members with `submit`, and the write token.
     Submit,
-    /// A named secret's newest version: console members and the tenant's enclaves, which look
+    /// A named blob's newest version: console members and the tenant's enclaves, which look
     /// names up for their apps.
-    Secret,
-    /// Publishing a named secret, which carries its own admin signatures: console members with
+    Blob,
+    /// Publishing a named blob, which carries its own admin signatures: console members with
     /// `submit`.
     Publish,
 }
@@ -85,10 +85,10 @@ impl Rule {
         matches!(
             (self, caller),
             (_, Caller::Admin(_))
-                | (Rule::Bundle | Rule::Members | Rule::Secret, Caller::Console { .. })
+                | (Rule::Bundle | Rule::Members | Rule::Blob, Caller::Console { .. })
                 | (Rule::Propose | Rule::Submit | Rule::Publish, Caller::Console { scope: Scope::Submit, .. })
                 | (Rule::Bundle, Caller::Enclave | Caller::BootingEnclave | Caller::FreshnessSigner)
-                | (Rule::Secret, Caller::Enclave)
+                | (Rule::Blob, Caller::Enclave)
                 | (Rule::Submit, Caller::Operator)
         )
     }
@@ -323,7 +323,7 @@ mod tests {
         assert_eq!(admitted(Rule::Members), [true, true, true, false, false, false, false]);
         assert_eq!(admitted(Rule::Propose), [false, true, true, false, false, false, false]);
         assert_eq!(admitted(Rule::Submit), [false, true, true, false, false, false, true]);
-        assert_eq!(admitted(Rule::Secret), [true, true, true, true, false, false, false]);
+        assert_eq!(admitted(Rule::Blob), [true, true, true, true, false, false, false]);
         assert_eq!(admitted(Rule::Publish), [false, true, true, false, false, false, false]);
     }
 }

@@ -2,7 +2,7 @@
 //! and its HTTPS listener.
 //!
 //! - Bodies are JSON, read whole up to `MAX_REQUEST_BYTES` (`/v1/blobs`, `/v1/sessions`) or
-//!   `MAX_SMALL_REQUEST_BYTES` (extend, end, signals, named-secret lookups); `/v1/tickets`
+//!   `MAX_SMALL_REQUEST_BYTES` (extend, end, signals, named-blob lookups); `/v1/tickets`
 //!   reads none. An oversized,
 //!   unreadable or malformed body is `BadRequest`.
 //! - Success: `200` with the JSON response, or `204` for `/v1/sessions/end` and `/v1/signals`.
@@ -227,7 +227,7 @@ fn routes_with<S: Api>(service: Arc<S>, limits: Limits) -> Router {
         .route("/v1/sessions/extend", post(extend::<S>).layer(small))
         .route("/v1/sessions/end", post(end::<S>).layer(small))
         .route("/v1/signals", post(signal::<S>).layer(small))
-        .route("/v1/secrets/resolve", post(resolve::<S>).layer(small))
+        .route("/v1/blobs/resolve", post(resolve::<S>).layer(small))
         .fallback(unknown)
         .method_not_allowed_fallback(unknown)
         .with_state(state)

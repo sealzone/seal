@@ -1,20 +1,20 @@
-//! Named secrets: what a lookup returns, to whom, and from which version.
+//! Named blobs: what a lookup returns, to whom, and from which version.
 
 use super::*;
 use seal_proto::api::ResolveRequest;
-use seal_proto::named::{BlobRef, NamedSecret, NamedSecretVersion, NAMED_SECRET_LABEL};
+use seal_proto::named::{BlobRef, NamedBlob, NamedBlobVersion, NAMED_BLOB_LABEL};
 use seal_proto::telemetry::Operation;
-use seal_proto::SecretName;
+use seal_proto::BlobName;
 
-fn openai() -> SecretName {
-    SecretName::new("openai").unwrap()
+fn openai() -> BlobName {
+    BlobName::new("openai").unwrap()
 }
 
 impl Harness {
     /// Stores `version` of `name` as the control plane would serve it, pointing at `blob` (none:
     /// a deletion), signed by `signers`.
-    fn publish_named(&self, name: &SecretName, version: u64, blob: Option<&str>, signers: &[u8]) {
-        let body = NamedSecret {
+    fn publish_named(&self, name: &BlobName, version: u64, blob: Option<&str>, signers: &[u8]) {
+        let body = NamedBlob {
             tenant: acme(),
             root_id: self.world.root_id,
             name: name.clone(),
@@ -22,15 +22,14 @@ impl Harness {
             blob: blob.map(|b| BlobRef::of(b).unwrap()),
             published_at: wall(),
         };
-        let stored =
-            NamedSecretVersion { entry: signed(NAMED_SECRET_LABEL, body, signers), blob: blob.map(Into::into) };
+        let stored = NamedBlobVersion { entry: signed(NAMED_BLOB_LABEL, body, signers), blob: blob.map(Into::into) };
         self.stores.named.lock().unwrap().insert(name.to_string(), stored);
     }
 
     async fn resolve(&self, consumer: u8, name: &str) -> Result<(String, u64), ServiceError> {
         let placeholder = ProofPurpose::Resolve { request_digest: [0; 32] };
         let mut request = ResolveRequest {
-            name: SecretName::new(name).unwrap(),
+            name: BlobName::new(name).unwrap(),
             context: self.context(placeholder).await,
             proof: IdentityProof::AppKey { key_id: key(consumer).key_id(), signature: vec![] },
         };
@@ -39,7 +38,7 @@ impl Harness {
         self.service.resolve(request).await.map(|r| (r.blob, r.version))
     }
 
-    /// Makes every named secret held here due for a fetch.
+    /// Makes every named blob held here due for a fetch.
     fn age_named(&self) {
         for (at, _) in crate::lock(&self.service.runtime.named).values_mut() {
             *at = 0;
@@ -80,7 +79,7 @@ async fn versions_the_root_did_not_sign_or_that_swap_the_blob_are_refused() {
     h.stores.named.lock().unwrap().get_mut("openai").unwrap().blob = Some(other);
     assert_eq!(h.resolve(CONSUMER, "openai").await.unwrap_err().code, ErrorCode::NotAllowed, "another blob");
 
-    let stripe = SecretName::new("stripe").unwrap();
+    let stripe = BlobName::new("stripe").unwrap();
     h.publish_named(&stripe, 1, Some(&blob), &[ADMIN]);
     let served_as_openai = h.stores.named.lock().unwrap()["stripe"].clone();
     h.stores.named.lock().unwrap().insert("openai".into(), served_as_openai);

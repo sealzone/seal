@@ -23,7 +23,7 @@
 //! - `write_token`: the bearer token admin writes need; `SEAL_CONTROL_WRITE_TOKEN` in the
 //!   environment takes precedence. At least 16 characters.
 //! - `SEAL_CONTROL_DATABASE_URL` in the environment, required: the Postgres control keeps
-//!   everything in, its documents (`store`), named secrets and telemetry (`telemetry_db`);
+//!   everything in, its documents (`store`), named blobs and telemetry (`telemetry_db`);
 //!   `sslmode=verify-full` in production. One control process serves a database. `SEAL_CONTROL_DATABASE_AUTH=entra` signs
 //!   in with the VM's managed identity's Entra token instead of a password in the URL.
 //! - `telemetry_retention_days`: optional; batches and hourly counts older

@@ -308,7 +308,7 @@ impl TelemetryDb {
         Ok(Self { pool, retention_secs: retention_days.map(|d| i64::from(d) * DAY), partitions: Mutex::default() })
     }
 
-    /// The pool, which the control plane's other tables share (`named_secrets`).
+    /// The pool, which the control plane's other tables share (`named_blobs`).
     pub fn pool(&self) -> PgPool {
         self.pool.clone()
     }

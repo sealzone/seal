@@ -18,7 +18,7 @@ each item are in [ARCHITECTURE.md](docs/ARCHITECTURE.md#scope) and
   Vault.
 - Signed tenant state with a pending window for changes that widen access, and network rules.
 - Telemetry with receipts and optional encryption.
-- Named secrets: blobs admins publish under a name in the console or the CLI, signed by their
+- Named blobs: blobs admins publish under a name in the console or the CLI, signed by their
   admin keys, which apps use by name and follow to new versions.
 - App Integrity interfaces, with the artifact-hash check enforced.
 - The `seal` CLI, the Rust, Python, Node/TypeScript and Go SDKs, and the browser verifier.

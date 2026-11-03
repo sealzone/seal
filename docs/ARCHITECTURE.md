@@ -384,7 +384,7 @@ and two replicas on 127.0.0.1 and 127.0.0.2 with the same ports. `scripts/sim-de
 Redis; the key guardian with M-of-N releases, the log and the time lock (plus an optional
 auditor or tenant co-signature), and succession; signed tenant state with the pending window,
 freshness from the log (tenant-run signers optional) and network rules; telemetry with receipts
-and optional encryption; named secrets (admin-signed versions stored by the control plane,
+and optional encryption; named blobs (admin-signed versions stored by the control plane,
 looked up through the enclave); the CLI, the Rust, Python, Node and Go SDKs and the browser verifier;
 the Azure platform (customer enclaves, Seal's hosted replicas, Seal's guardian on Key Vault
 Premium), GCP Confidential Space and the sim platform; customer-deployed enclaves pinned to one

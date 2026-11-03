@@ -11,7 +11,7 @@ use seal_proto::blob::Blob;
 use seal_proto::policy::{Destination, Protocol};
 use seal_proto::session::{ConsumerTier, SessionInfo, SESSION_EXTEND_SECS};
 use seal_proto::tunnel::LOCAL_KEY_PREFIX;
-use seal_proto::{Bearer, ErrorCode, SecretName};
+use seal_proto::{Bearer, BlobName, ErrorCode};
 use sha2::{Digest, Sha256};
 
 use crate::client::{now, placeholder};
@@ -110,7 +110,7 @@ impl SessionBuilder<'_> {
     /// starts the session and its tunnel.
     async fn open(self, kind: Option<Kind>) -> Result<Session, ClientError> {
         // A blob's text always has dots, which a name never has.
-        let name = SecretName::new(self.blob.as_str()).ok();
+        let name = BlobName::new(self.blob.as_str()).ok();
         let blob = match &name {
             Some(name) => self.client.resolve_version(name.as_str()).await?.0,
             None => {
@@ -295,8 +295,8 @@ struct Live {
     reporter: Arc<dyn integrity::EndpointReporter>,
     reload: Option<Reload>,
     on_reseal: Option<OnReseal>,
-    /// The named secret the session follows, if it was started on a name.
-    name: Option<SecretName>,
+    /// The named blob the session follows, if it was started on a name.
+    name: Option<BlobName>,
     /// The blob the current session runs on.
     blob: Mutex<String>,
     token: Arc<tunnel::TokenCell>,
@@ -351,7 +351,7 @@ impl Live {
         let newest = match self.client.resolve(name.as_str()).await {
             Ok(blob) => blob,
             Err(e) => {
-                tracing::debug!(%name, error = %e, "named secret: lookup failed; staying on the current blob");
+                tracing::debug!(%name, error = %e, "named blob: lookup failed; staying on the current blob");
                 return None;
             }
         };
@@ -363,7 +363,7 @@ impl Live {
         if destination(&newest) != destination(&current) {
             tracing::warn!(
                 %name,
-                "named secret: the new version has another destination; it reaches new sessions only"
+                "named blob: the new version has another destination; it reaches new sessions only"
             );
             return None;
         }
@@ -431,7 +431,7 @@ impl Live {
             match self.start().await {
                 Ok((response, _)) => return Ok(Renewal::Restarted(Box::new(response))),
                 Err(e) => {
-                    tracing::warn!(error = %e, "named secret: starting on the new version failed; extending the current one");
+                    tracing::warn!(error = %e, "named blob: starting on the new version failed; extending the current one");
                     *self.blob.lock().unwrap_or_else(|e| e.into_inner()) = previous;
                 }
             }

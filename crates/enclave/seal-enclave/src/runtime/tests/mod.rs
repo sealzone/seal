@@ -298,8 +298,8 @@ pub(super) struct Stores {
     pub signals: Mutex<Vec<SignedSignal>>,
     pub ends: Mutex<Vec<SignedSessionEnd>>,
     pub certificates: Mutex<Vec<SignedServiceKeyCertificate>>,
-    /// Named secrets by name, as the control plane would serve them.
-    pub named: Mutex<std::collections::HashMap<String, seal_proto::named::NamedSecretVersion>>,
+    /// Named blobs by name, as the control plane would serve them.
+    pub named: Mutex<std::collections::HashMap<String, seal_proto::named::NamedBlobVersion>>,
     pub named_down: std::sync::atomic::AtomicBool,
 }
 
@@ -327,11 +327,11 @@ impl TenantStore for Stores {
         self.certificates.lock().unwrap().push(certificate.clone());
         Ok(())
     }
-    async fn named_secret(
+    async fn named_blob(
         &self,
-        name: &seal_proto::SecretName,
-    ) -> Result<Option<seal_proto::named::NamedSecretVersion>, ServiceError> {
-        self.calls.push("tenants.named_secret");
+        name: &seal_proto::BlobName,
+    ) -> Result<Option<seal_proto::named::NamedBlobVersion>, ServiceError> {
+        self.calls.push("tenants.named_blob");
         if self.named_down.load(std::sync::atomic::Ordering::SeqCst) {
             return Err(crate::fail(seal_proto::ErrorCode::Unavailable, "control plane down"));
         }

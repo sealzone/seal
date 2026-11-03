@@ -282,7 +282,7 @@ pub enum Operation {
     Extend,
     End,
     Signal,
-    /// A lookup of a named secret (`POST /v1/secrets/resolve`); only refusals are recorded,
+    /// A lookup of a named blob (`POST /v1/blobs/resolve`); only refusals are recorded,
     /// since the session it leads to is.
     Resolve,
 }

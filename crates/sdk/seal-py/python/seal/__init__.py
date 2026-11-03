@@ -10,7 +10,7 @@
     with seal.session(db_blob) as db:
         conn = psycopg.connect(db.dsn)
 
-    with seal.session("openai") as s:  # a named secret the tenant's admins published
+    with seal.session("openai") as s:  # a named blob the tenant's admins published
         client = OpenAI(base_url=s.url, api_key=s.key)
 
     seal.signal("edr-alert", severity="high")

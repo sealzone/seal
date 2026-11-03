@@ -19,23 +19,23 @@ use seal_proto::api::{
 use seal_proto::blob::Blob;
 use seal_proto::freshness::{ProofTicket, ATTESTATION_MAX_AGE_SECS};
 use seal_proto::identity::WorkloadIdentity;
-use seal_proto::named::{NamedSecretVersion, NAMED_SECRET_LABEL};
+use seal_proto::named::{NamedBlobVersion, NAMED_BLOB_LABEL};
 use seal_proto::release::TenantWrapKey;
 use seal_proto::session::{
     ConsumerTier, SessionClaims, SessionEnd, SessionInfo, SignedSessionEnd, SESSION_END_LABEL, SESSION_TOKEN_SECS,
 };
 use seal_proto::state::TenantState;
 use seal_proto::telemetry::{Operation, TelemetryEvent};
-use seal_proto::{codec, ErrorCode, PlatformId, SecretName, TrustedTime, UnixTime};
+use seal_proto::{codec, BlobName, ErrorCode, PlatformId, TrustedTime, UnixTime};
 use seal_verify::{TenantVerifier, VerifiedTenant};
 
 use super::state::Local;
 use super::{fail, lock, random, rng, Runtime};
 use crate::ServiceError;
 
-/// How long a named secret fetched from the control plane answers lookups before it is fetched
+/// How long a named blob fetched from the control plane answers lookups before it is fetched
 /// again: a new version reaches sessions within this plus the SDK's extend interval.
-pub(crate) const NAMED_SECRET_CACHE_SECS: UnixTime = 30;
+pub(crate) const NAMED_BLOB_CACHE_SECS: UnixTime = 30;
 
 /// A refused operation: what the caller gets, and who it was once authenticated.
 pub(super) struct Refusal {
@@ -259,23 +259,23 @@ impl Runtime {
     }
 
     /// `name`'s newest version that verifies under `tenant`'s root in force: fetched when the
-    /// one held here is `NAMED_SECRET_CACHE_SECS` old. Versions never go back: a fetched one
+    /// one held here is `NAMED_BLOB_CACHE_SECS` old. Versions never go back: a fetched one
     /// older than the one held (a control plane serving an old version) is ignored. While the
     /// control plane is unreachable, or serves one that does not verify, the one held answers.
     async fn named_version(
         &self,
-        name: &SecretName,
+        name: &BlobName,
         tenant: &VerifiedTenant,
         now: UnixTime,
-    ) -> Result<NamedSecretVersion, ServiceError> {
+    ) -> Result<NamedBlobVersion, ServiceError> {
         let held = lock(&self.named).get(name).cloned();
         let held = held.filter(|(_, v)| self.check_named(v, name, tenant).is_ok());
         if let Some((at, version)) = &held {
-            if now < at.saturating_add(NAMED_SECRET_CACHE_SECS) {
+            if now < at.saturating_add(NAMED_BLOB_CACHE_SECS) {
                 return Ok(version.clone());
             }
         }
-        let fetched = match self.tenants.named_secret(name).await {
+        let fetched = match self.tenants.named_blob(name).await {
             Ok(Some(fetched)) => self.check_named(&fetched, name, tenant).map(|()| fetched),
             Ok(None) => Err(fail(ErrorCode::NotAllowed, "no such name")),
             Err(e) => Err(e),
@@ -284,7 +284,7 @@ impl Runtime {
             (Ok(fetched), Some((_, held))) if held.entry.body.version > fetched.entry.body.version => held,
             (Ok(fetched), _) => fetched,
             (Err(e), Some((_, held))) => {
-                tracing::warn!(%name, error = %e, "named secret: answering with the version held");
+                tracing::warn!(%name, error = %e, "named blob: answering with the version held");
                 return Ok(held);
             }
             (Err(e), None) => return Err(e),
@@ -297,17 +297,17 @@ impl Runtime {
     /// force, and carries the blob it names.
     fn check_named(
         &self,
-        version: &NamedSecretVersion,
-        name: &SecretName,
+        version: &NamedBlobVersion,
+        name: &BlobName,
         tenant: &VerifiedTenant,
     ) -> Result<(), ServiceError> {
         let entry = &version.entry.body;
         if entry.tenant != self.pin.tenant || &entry.root_id != tenant.root_id() || &entry.name != name {
-            return Err(fail(ErrorCode::NotAllowed, "a named secret for another tenant, chain or name"));
+            return Err(fail(ErrorCode::NotAllowed, "a named blob for another tenant, chain or name"));
         }
-        TenantVerifier::verify_admin_signed(tenant.root(), NAMED_SECRET_LABEL, &version.entry)
-            .map_err(|_| fail(ErrorCode::NotAllowed, "a named secret not signed by the root in force"))?;
-        version.check().map_err(|_| fail(ErrorCode::NotAllowed, "a named secret without the blob it names"))
+        TenantVerifier::verify_admin_signed(tenant.root(), NAMED_BLOB_LABEL, &version.entry)
+            .map_err(|_| fail(ErrorCode::NotAllowed, "a named blob not signed by the root in force"))?;
+        version.check().map_err(|_| fail(ErrorCode::NotAllowed, "a named blob without the blob it names"))
     }
 
     pub(crate) async fn session(

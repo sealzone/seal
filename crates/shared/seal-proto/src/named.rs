@@ -1,10 +1,10 @@
-//! Named secrets: blobs a tenant's admins publish under a name (`openai`), so apps start
+//! Named blobs: blobs a tenant's admins publish under a name (`openai`), so apps start
 //! sessions on the name and pick up a new version without a redeploy.
 //!
 //! The control plane stores them; it is untrusted, so each version is its own document signed
-//! by the threshold of the tenant's latest root (`NAMED_SECRET_LABEL`). They are not part of
+//! by the threshold of the tenant's latest root (`NAMED_BLOB_LABEL`). They are not part of
 //! signed tenant state: publishing has no pending window and is not logged. An app reaches a
-//! name only through its enclave (`POST /v1/secrets/resolve`), which fetches the newest version
+//! name only through its enclave (`POST /v1/blobs/resolve`), which fetches the newest version
 //! from the control plane, checks the signatures against the latest root, that the blob is the
 //! one signed for, and that the caller is granted one of the blob's apps.
 //!
@@ -19,15 +19,15 @@ use sha2::{Digest, Sha256};
 
 use crate::blob::Blob;
 use crate::signed::Signed;
-use crate::{codec, BlobId, ProtoError, SecretName, TenantId, TenantRootId, UnixTime};
+use crate::{codec, BlobId, BlobName, ProtoError, TenantId, TenantRootId, UnixTime};
 
 /// What admins sign for one version of a name.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NamedSecret {
+pub struct NamedBlob {
     pub tenant: TenantId,
     /// The chain the version was published under. Its admin keys are the latest root's.
     pub root_id: TenantRootId,
-    pub name: SecretName,
+    pub name: BlobName,
     /// 1 for a name's first version, one more for each after it, deletions included.
     pub version: u64,
     /// The blob this version points at; `None` deletes the name.
@@ -36,10 +36,10 @@ pub struct NamedSecret {
     pub published_at: UnixTime,
 }
 
-/// The signatures cover `labeled_digest(NAMED_SECRET_LABEL, &NamedSecret)`.
-pub const NAMED_SECRET_LABEL: &str = "seal/named-secret/v1";
+/// The signatures cover `labeled_digest(NAMED_BLOB_LABEL, &NamedBlob)`.
+pub const NAMED_BLOB_LABEL: &str = "seal/named-blob/v1";
 
-pub type SignedNamedSecret = Signed<NamedSecret>;
+pub type SignedNamedBlob = Signed<NamedBlob>;
 
 /// One blob, by its id and the SHA-256 of its text.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -60,12 +60,12 @@ impl BlobRef {
 /// One version as the control plane stores and serves it: the signed entry and, unless it is a
 /// deletion, the blob's text.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NamedSecretVersion {
-    pub entry: SignedNamedSecret,
+pub struct NamedBlobVersion {
+    pub entry: SignedNamedBlob,
     pub blob: Option<String>,
 }
 
-impl NamedSecretVersion {
+impl NamedBlobVersion {
     /// The blob is the one the entry names (and both are absent for a deletion), and it is the
     /// entry's tenant and chain's. Signatures are checked separately, against the latest root.
     pub fn check(&self) -> Result<(), ProtoError> {
@@ -94,9 +94,9 @@ impl NamedSecretVersion {
 }
 
 /// Names one tenant may have, deletions excluded.
-pub const MAX_NAMED_SECRETS: usize = 256;
+pub const MAX_NAMED_BLOBS: usize = 256;
 /// Versions of each name the control plane keeps, newest first.
-pub const NAMED_SECRET_VERSIONS_KEPT: usize = 10;
+pub const NAMED_BLOB_VERSIONS_KEPT: usize = 10;
 /// Largest blob text a name may point at.
 pub const MAX_NAMED_BLOB_BYTES: usize = 256 << 10;
 
@@ -127,13 +127,13 @@ mod tests {
         .to_string()
     }
 
-    fn version(text: Option<String>, named: Option<&str>) -> NamedSecretVersion {
-        NamedSecretVersion {
+    fn version(text: Option<String>, named: Option<&str>) -> NamedBlobVersion {
+        NamedBlobVersion {
             entry: Signed {
-                body: NamedSecret {
+                body: NamedBlob {
                     tenant: TenantId::new("acme").unwrap(),
                     root_id: TenantRootId([6; 32]),
-                    name: SecretName::new("openai").unwrap(),
+                    name: BlobName::new("openai").unwrap(),
                     version: 1,
                     blob: named.map(|t| BlobRef::of(t).unwrap()),
                     published_at: 1,
@@ -158,8 +158,8 @@ mod tests {
 
     #[test]
     fn names_are_never_blobs() {
-        assert!(SecretName::new("openai").is_ok());
-        assert!(SecretName::new(blob("acme", 6, 1)).is_err());
-        assert!(SecretName::new("open.ai").is_err());
+        assert!(BlobName::new("openai").is_ok());
+        assert!(BlobName::new(blob("acme", 6, 1)).is_err());
+        assert!(BlobName::new("open.ai").is_err());
     }
 }

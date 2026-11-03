@@ -10,7 +10,7 @@
 //! | POST   | /v1/sessions/extend | `ExtendRequest`       | `ExtendResponse`      | identity proof + token |
 //! | POST   | /v1/sessions/end    | `EndRequest`          | (empty)               | token |
 //! | POST   | /v1/signals         | `SignalRequest`       | (empty)               | identity proof |
-//! | POST   | /v1/secrets/resolve | `ResolveRequest`      | `ResolveResponse`     | identity proof |
+//! | POST   | /v1/blobs/resolve | `ResolveRequest`      | `ResolveResponse`     | identity proof |
 //!
 //! `/v1/attestation` serves the enclave's latest periodic attestation
 //! (`freshness::ATTESTATION_REFRESH_SECS`). With `?nonce=` (32 bytes, base64url, the only
@@ -199,14 +199,14 @@ pub struct SignalRequest {
     pub signatures: Vec<crate::signed::Signature>,
 }
 
-/// Look up a named secret (`named`): the enclave fetches the name's newest version from the
+/// Look up a named blob (`named`): the enclave fetches the name's newest version from the
 /// control plane, checks it is signed by the threshold of the tenant's latest root and carries
 /// the blob it names, and returns the blob if the caller holds a grant for one of its apps. An
 /// unknown, deleted or ungranted name is `NotAllowed` alike. The SDK then starts a session on
 /// the blob as on any other.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ResolveRequest {
-    pub name: crate::SecretName,
+    pub name: crate::BlobName,
     pub context: ProofContext,
     pub proof: IdentityProof,
 }

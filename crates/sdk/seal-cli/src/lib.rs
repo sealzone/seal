@@ -160,10 +160,10 @@ enum Command {
     /// Seal a secret (read from the terminal, or stdin) for apps; prints the blob, and with
     /// --name publishes it for apps to use by name
     Secret(SecretArgs),
-    /// The tenant's named secrets: list them, or delete one
-    Secrets {
+    /// The tenant's named blobs: list them, or delete one
+    Blobs {
         #[command(subcommand)]
-        cmd: Option<named::SecretsCmd>,
+        cmd: Option<named::BlobsCmd>,
         #[command(flatten)]
         sign: SignArgs,
     },
@@ -248,7 +248,7 @@ struct SecretArgs {
     /// the name (`seal.session("openai")`) and follow its newest version. Signed here by the
     /// root's threshold of admin keys (--key-file, or --passkey)
     #[arg(long, value_name = "NAME", help_heading = "Publish")]
-    name: Option<seal_proto::SecretName>,
+    name: Option<seal_proto::BlobName>,
     /// Sign the published version with an admin passkey on a security key
     #[arg(long, requires = "name", help_heading = "Publish")]
     passkey: bool,
@@ -946,7 +946,7 @@ async fn dispatch(cli: Cli) -> anyhow::Result<()> {
             env.sign = args.sign.clone();
             seal_secret(&env, args).await?
         }
-        Command::Secrets { cmd, sign } => {
+        Command::Blobs { cmd, sign } => {
             env.sign = sign;
             named::run(&env, cmd).await?;
         }
@@ -990,7 +990,7 @@ async fn dispatch(cli: Cli) -> anyhow::Result<()> {
 
 /// The command groups of the help and the overview.
 const SECTIONS: [(&str, &[&str]); 3] = [
-    ("Everyday", &["login", "logout", "whoami", "use", "status", "secret", "secrets"]),
+    ("Everyday", &["login", "logout", "whoami", "use", "status", "secret", "blobs"]),
     ("Who may do what", &["grant", "revoke", "changes"]),
     ("Tenant settings", &["settings", "deploy", "key", "telemetry", "release", "completion"]),
 ];

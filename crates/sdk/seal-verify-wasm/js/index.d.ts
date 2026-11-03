@@ -15,7 +15,7 @@ export const LABELS: {
   readonly tenantState: "seal/tenant-state/v1"
   readonly tenantRoot: "seal/tenant-root/v1"
   readonly releaseCosign: "seal/release-cosign/v1"
-  readonly namedSecret: "seal/named-secret/v1"
+  readonly namedBlob: "seal/named-blob/v1"
 }
 
 export interface TlogTrust {
@@ -128,25 +128,25 @@ export function webauthnSignature(
 ): Json
 /** Key ids (hex) of the root's admin keys with a valid signature on `signed`. */
 export function signers(root: Json, label: string, signed: Json): string[]
-/** A named secret's version as the control plane stores it: the signed entry and the blob. */
-export interface NamedSecretVersion {
+/** A named blob's version as the control plane stores it: the signed entry and the blob. */
+export interface NamedBlobVersion {
   entry: { body: Json; signatures: Json[] }
   blob: string | null
 }
 /**
  * A name's version `version`, unsigned: pointing at `blob`, or deleting the name when `blob`
- * is null. Admins sign `entry.body` under `LABELS.namedSecret`, then the control plane takes it.
+ * is null. Admins sign `entry.body` under `LABELS.namedBlob`, then the control plane takes it.
  */
-export function namedSecret(args: {
+export function namedBlob(args: {
   tenant: string
   rootId: string
   name: string
   version: number
   blob: string | null
   publishedAt?: number
-}): NamedSecretVersion
+}): NamedBlobVersion
 /** What a stored version is: signed by the root's threshold (as enclaves check it), and its blob's policy. */
-export interface DescribedNamedSecret {
+export interface DescribedNamedBlob {
   name: string
   version: number
   published_at: number
@@ -167,12 +167,12 @@ export interface DescribedNamedSecret {
     hardened_only: boolean
   } | null
 }
-export function describeNamedSecret(
+export function describeNamedBlob(
   tenant: string,
   rootId: string,
   root: Json,
-  version: NamedSecretVersion,
-): DescribedNamedSecret
+  version: NamedBlobVersion,
+): DescribedNamedBlob
 export function adminKeyId(adminKey: Json): string
 export function rootId(rootV1: Json): string
 

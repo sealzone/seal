@@ -78,9 +78,9 @@ name_type!(
     "app"
 );
 name_type!(
-    /// A named secret in a tenant (e.g. `openai`): the blob its admins published under that
+    /// A named blob in a tenant (e.g. `openai`): the blob its admins published under that
     /// name (`named`). It never contains a dot, so it can't be mistaken for a blob's text.
-    SecretName,
+    BlobName,
     "name"
 );
 

@@ -186,7 +186,7 @@ export declare class Client {
   seal(secret: Secret, options: SealOptions & { withReceipt?: false }): Promise<string>;
   seal(secret: Secret, options: SealOptions & { withReceipt: true }): Promise<{ blob: string; receipt: TelemetryReceipt }>;
   /**
-   * Start a session on `blob`, or on a named secret (`"openai"`) the tenant's admins
+   * Start a session on `blob`, or on a named blob (`"openai"`) the tenant's admins
    * published. Needs an app grant listed in the blob's policy. A name is looked up again at
    * every extend, so a new version reaches the session without a restart.
    */

@@ -1,4 +1,4 @@
-"""Named secrets: an admin publishes a blob under a name, apps start sessions on the name, and a
+"""Named blobs: an admin publishes a blob under a name, apps start sessions on the name, and a
 new version reaches a running session at its next extend without the app restarting."""
 
 from __future__ import annotations
@@ -21,10 +21,10 @@ def publish(world: World, secret: str, name: str) -> str:
 
 
 def secrets(world: World, *args: str) -> str:
-    return world.admin("secrets", *args, "--key-file", str(world.admin_key))
+    return world.admin("blobs", *args, "--key-file", str(world.admin_key))
 
 
-def test_apps_follow_a_named_secret_to_its_new_version(world: World) -> None:
+def test_apps_follow_a_named_blob_to_its_new_version(world: World) -> None:
     publish(world, SECRET, "upstream")
     listed = secrets(world)
     assert "upstream" in listed and "v1" in listed, listed

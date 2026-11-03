@@ -1,4 +1,4 @@
-//! Named secrets: `seal secret --name` publishes the blob it seals, `seal secrets` lists the
+//! Named blobs: `seal secret --name` publishes the blob it seals, `seal blobs` lists the
 //! tenant's names and deletes one. Apps start sessions on a name (`seal.session("openai")`) and
 //! follow its newest version.
 //!
@@ -10,14 +10,14 @@ use anyhow::{bail, Context as _};
 use clap::Subcommand;
 
 use seal::admin::{cosign, Admin, Current};
-use seal_proto::named::{NamedSecretVersion, NAMED_SECRET_LABEL};
-use seal_proto::SecretName;
+use seal_proto::named::{NamedBlobVersion, NAMED_BLOB_LABEL};
+use seal_proto::BlobName;
 
 use crate::sign::confirm;
 use crate::{now, say, time, ui, Env, Scope};
 
 #[derive(Subcommand, Debug)]
-pub enum SecretsCmd {
+pub enum BlobsCmd {
     /// Every name, its version, where it may be sent and which apps may use it (the default)
     List {
         /// JSON instead of text
@@ -28,7 +28,7 @@ pub enum SecretsCmd {
     /// force no longer cover (an admin removed, a higher threshold), which enclaves refuse
     Approve {
         /// The name to approve again
-        name: SecretName,
+        name: BlobName,
         /// Approve with an admin passkey on a security key, not a --key-file
         #[arg(long)]
         passkey: bool,
@@ -37,7 +37,7 @@ pub enum SecretsCmd {
     /// working until they expire; rotate the credential upstream to end them
     Delete {
         /// The name to delete
-        name: SecretName,
+        name: BlobName,
         /// Delete with an admin passkey on a security key, not a --key-file
         #[arg(long)]
         passkey: bool,
@@ -45,7 +45,7 @@ pub enum SecretsCmd {
 }
 
 /// Signs `version` with the `--key-file` keys, or the security key with `passkey`.
-async fn sign(env: &Env, current: &Current, version: &mut NamedSecretVersion, passkey: bool) -> anyhow::Result<()> {
+async fn sign(env: &Env, current: &Current, version: &mut NamedBlobVersion, passkey: bool) -> anyhow::Result<()> {
     let root = current.tenant.root();
     if passkey {
         return sign_with_passkey(root, version).await;
@@ -53,23 +53,20 @@ async fn sign(env: &Env, current: &Current, version: &mut NamedSecretVersion, pa
     let keys: Vec<_> = env.keys()?.into_iter().map(|(_, k)| k).collect();
     if keys.is_empty() {
         bail!(
-            "a named secret is signed here: pass --key-file (the root's threshold of admin keys) or --passkey, or publish it in the console"
+            "a named blob is signed here: pass --key-file (the root's threshold of admin keys) or --passkey, or publish it in the console"
         );
     }
-    version.entry = cosign(root, NAMED_SECRET_LABEL, version.entry.clone(), &keys);
+    version.entry = cosign(root, NAMED_BLOB_LABEL, version.entry.clone(), &keys);
     Ok(())
 }
 
 #[cfg(feature = "passkey")]
-async fn sign_with_passkey(
-    root: &seal_proto::state::TenantRoot,
-    version: &mut NamedSecretVersion,
-) -> anyhow::Result<()> {
-    crate::passkey::cosign(root, NAMED_SECRET_LABEL, &mut version.entry).await
+async fn sign_with_passkey(root: &seal_proto::state::TenantRoot, version: &mut NamedBlobVersion) -> anyhow::Result<()> {
+    crate::passkey::cosign(root, NAMED_BLOB_LABEL, &mut version.entry).await
 }
 
 #[cfg(not(feature = "passkey"))]
-async fn sign_with_passkey(_: &seal_proto::state::TenantRoot, _: &mut NamedSecretVersion) -> anyhow::Result<()> {
+async fn sign_with_passkey(_: &seal_proto::state::TenantRoot, _: &mut NamedBlobVersion) -> anyhow::Result<()> {
     bail!("this seal was built without passkey support (the `passkey` feature): sign with --key-file")
 }
 
@@ -86,34 +83,34 @@ pub fn check_publishable(env: &Env, tenant: &seal_proto::TenantId, passkey: bool
 }
 
 /// Publishes `blob` as `name`'s next version.
-pub async fn publish(env: &Env, name: &SecretName, blob: &str, passkey: bool) -> anyhow::Result<u64> {
+pub async fn publish(env: &Env, name: &BlobName, blob: &str, passkey: bool) -> anyhow::Result<u64> {
     let admin = env.admin(Scope::Submit).await?;
     let current = admin.fetch(&time()).await?;
-    let mut version = admin.draft_secret(&current, name, Some(blob), now()).await?;
+    let mut version = admin.draft_blob(&current, name, Some(blob), now()).await?;
     sign(env, &current, &mut version, passkey).await?;
-    admin.publish_secret(&current, &version).await.with_context(|| format!("publishing {name}"))?;
+    admin.publish_blob(&current, &version).await.with_context(|| format!("publishing {name}"))?;
     Ok(version.entry.body.version)
 }
 
-pub async fn run(env: &Env, cmd: Option<SecretsCmd>) -> anyhow::Result<()> {
-    match cmd.unwrap_or(SecretsCmd::List { json: false }) {
-        SecretsCmd::List { json } => list(env, json).await,
-        SecretsCmd::Delete { name, passkey } => delete(env, &name, passkey).await,
-        SecretsCmd::Approve { name, passkey } => approve(env, &name, passkey).await,
+pub async fn run(env: &Env, cmd: Option<BlobsCmd>) -> anyhow::Result<()> {
+    match cmd.unwrap_or(BlobsCmd::List { json: false }) {
+        BlobsCmd::List { json } => list(env, json).await,
+        BlobsCmd::Delete { name, passkey } => delete(env, &name, passkey).await,
+        BlobsCmd::Approve { name, passkey } => approve(env, &name, passkey).await,
     }
 }
 
 async fn list(env: &Env, json: bool) -> anyhow::Result<()> {
     let admin = env.admin(Scope::Read).await?;
     let current = admin.fetch(&time()).await?;
-    let names = admin.named_secrets().await?;
+    let names = admin.named_blobs().await?;
     if json {
         let rows: Vec<_> = names.iter().map(|v| row_json(&admin, &current, v)).collect();
         println!("{}", serde_json::to_string_pretty(&rows)?);
         return Ok(());
     }
     if names.is_empty() {
-        say!("{} has no named secrets: `seal secret --name NAME` publishes one", admin.tenant());
+        say!("{} has no named blobs: `seal secret --name NAME` publishes one", admin.tenant());
         return Ok(());
     }
     let mut rows = vec![["NAME", "VERSION", "DESTINATION", "APPS", "PUBLISHED"].map(ui::dim).to_vec()];
@@ -134,7 +131,7 @@ async fn list(env: &Env, json: bool) -> anyhow::Result<()> {
 }
 
 /// The destination and apps a version's blob names, from its clear-text policy.
-fn describe(version: &NamedSecretVersion) -> (String, String) {
+fn describe(version: &NamedBlobVersion) -> (String, String) {
     match version.text().and_then(|t| t.parse::<seal_proto::blob::Blob>().ok()) {
         Some(blob) => {
             let apps: Vec<String> = blob.policy.apps().iter().map(ToString::to_string).collect();
@@ -144,7 +141,7 @@ fn describe(version: &NamedSecretVersion) -> (String, String) {
     }
 }
 
-fn row_json(admin: &Admin, current: &Current, version: &NamedSecretVersion) -> serde_json::Value {
+fn row_json(admin: &Admin, current: &Current, version: &NamedBlobVersion) -> serde_json::Value {
     let entry = &version.entry.body;
     let (destination, apps) = describe(version);
     serde_json::json!({
@@ -158,39 +155,39 @@ fn row_json(admin: &Admin, current: &Current, version: &NamedSecretVersion) -> s
     })
 }
 
-async fn approve(env: &Env, name: &SecretName, passkey: bool) -> anyhow::Result<()> {
+async fn approve(env: &Env, name: &BlobName, passkey: bool) -> anyhow::Result<()> {
     let admin = env.admin(Scope::Submit).await?;
     let current = admin.fetch(&time()).await?;
-    let latest = admin.named_secrets().await?.into_iter().find(|v| &v.entry.body.name == name);
+    let latest = admin.named_blobs().await?.into_iter().find(|v| &v.entry.body.name == name);
     let Some(blob) = latest.as_ref().and_then(|v| v.blob.clone()) else {
-        bail!("{} has no named secret {name}", admin.tenant());
+        bail!("{} has no named blob {name}", admin.tenant());
     };
-    let mut version = admin.draft_secret(&current, name, Some(&blob), now()).await?;
+    let mut version = admin.draft_blob(&current, name, Some(&blob), now()).await?;
     let (destination, apps) = describe(&version);
     confirm(
         env,
-        &format!("{}: approve the named secret again", admin.tenant()),
+        &format!("{}: approve the named blob again", admin.tenant()),
         &[format!("~ {name} version {}: {destination} for {apps}", version.entry.body.version)],
         "Sign",
     )?;
     sign(env, &current, &mut version, passkey).await?;
-    admin.publish_secret(&current, &version).await.with_context(|| format!("approving {name}"))?;
+    admin.publish_blob(&current, &version).await.with_context(|| format!("approving {name}"))?;
     say!("{}", ui::ok(&format!("approved {name} as version {}", version.entry.body.version)));
     Ok(())
 }
 
-async fn delete(env: &Env, name: &SecretName, passkey: bool) -> anyhow::Result<()> {
+async fn delete(env: &Env, name: &BlobName, passkey: bool) -> anyhow::Result<()> {
     let admin = env.admin(Scope::Submit).await?;
     let current = admin.fetch(&time()).await?;
-    let mut version = admin.draft_secret(&current, name, None, now()).await?;
+    let mut version = admin.draft_blob(&current, name, None, now()).await?;
     confirm(
         env,
-        &format!("{}: delete the named secret", admin.tenant()),
+        &format!("{}: delete the named blob", admin.tenant()),
         &[format!("- {name} (apps can no longer start sessions on it)")],
         "Delete",
     )?;
     sign(env, &current, &mut version, passkey).await?;
-    admin.publish_secret(&current, &version).await.with_context(|| format!("deleting {name}"))?;
+    admin.publish_blob(&current, &version).await.with_context(|| format!("deleting {name}"))?;
     say!("{}", ui::ok(&format!("deleted {name}")));
     Ok(())
 }

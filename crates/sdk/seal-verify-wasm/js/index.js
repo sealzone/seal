@@ -14,8 +14,8 @@ import init, {
   labeledDigest as wasmLabeledDigest,
   webauthnSignature as wasmWebauthnSignature,
   signers as wasmSigners,
-  namedSecret as wasmNamedSecret,
-  describeNamedSecret as wasmDescribeNamedSecret,
+  namedBlob as wasmNamedBlob,
+  describeNamedBlob as wasmDescribeNamedBlob,
   adminKeyId as wasmAdminKeyId,
   rootId as wasmRootId,
   certifiedTelemetryKeys as wasmCertifiedTelemetryKeys,
@@ -34,7 +34,7 @@ export const LABELS = Object.freeze({
   tenantState: "seal/tenant-state/v1",
   tenantRoot: "seal/tenant-root/v1",
   releaseCosign: "seal/release-cosign/v1",
-  namedSecret: "seal/named-secret/v1",
+  namedBlob: "seal/named-blob/v1",
 })
 
 const json = (value) => JSON.stringify(value)
@@ -97,12 +97,12 @@ export function signers(root, label, signed) {
   return parse(wasmSigners(json(root), label, json(signed)))
 }
 
-export function namedSecret({ tenant, rootId, name, version, blob, publishedAt = nowSecs() }) {
-  return parse(wasmNamedSecret(tenant, rootId, name, version, blob ?? "", publishedAt))
+export function namedBlob({ tenant, rootId, name, version, blob, publishedAt = nowSecs() }) {
+  return parse(wasmNamedBlob(tenant, rootId, name, version, blob ?? "", publishedAt))
 }
 
-export function describeNamedSecret(tenant, rootId, root, version) {
-  return parse(wasmDescribeNamedSecret(tenant, rootId, json(root), json(version)))
+export function describeNamedBlob(tenant, rootId, root, version) {
+  return parse(wasmDescribeNamedBlob(tenant, rootId, json(root), json(version)))
 }
 
 export function adminKeyId(adminKey) {

@@ -84,7 +84,7 @@ type Session struct {
 	ptr *C.seal_session
 }
 
-// Session starts a session on blob, or on a named secret ("openai") the tenant's admins
+// Session starts a session on blob, or on a named blob ("openai") the tenant's admins
 // published: the enclave opens it and the app gets a stand-in. Needs an app grant listed in
 // the blob's policy. A name is looked up again at every extend, so a new version reaches the
 // session without a restart.

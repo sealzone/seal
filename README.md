@@ -178,7 +178,7 @@ seal status         # admin keys, the state in force, grants, pending changes
 seal grant app checkout azure --object-id OID --entra-tenant TID --audience api://seal-acme
 seal secret --to https://api.openai.com/v1 --app checkout --header authorization < key.txt > openai.blob
 seal secret --name openai --key-file admin.key --to https://api.openai.com/v1 --app checkout < key.txt
-seal secrets        # the named secrets apps use as seal.session("openai")
+seal blobs        # the named blobs apps use as seal.session("openai")
 seal deploy azure   # an enclave replica in the VNet your apps run in
 ```
 

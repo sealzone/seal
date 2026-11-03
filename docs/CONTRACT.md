@@ -27,7 +27,7 @@ guardian freezes.
 | seal | Encrypt a secret together with its policy into a portable blob (`Client::seal`, `/v1/blobs`) |
 | open | Decrypt a blob, literally open the seal. Only the enclave does this (`BlobCipher::open`) |
 | session | Use a blob through the enclave without receiving its plaintext (`Client::session`, `/v1/sessions`) |
-| named secret | A blob the tenant's admins published under a name (`openai`), so apps start sessions on the name and follow its newest version (`seal_proto::named`, `/v1/secrets/resolve`) |
+| named blob | A blob the tenant's admins published under a name (`openai`), so apps start sessions on the name and follow its newest version (`seal_proto::named`, `/v1/blobs/resolve`) |
 | extend | Replace a session's token with a fresh identity proof (`Session::extend`, `/v1/sessions/extend`, `TunnelPreamble::Extend`) |
 | end | Stop a session on every replica before its token expires (`Session::close`, `/v1/sessions/end`, `Verdict::End`). It is recorded as a `SessionEnd` |
 | signal | An input saying an endpoint may be compromised. It comes from a workload about itself (`signal`, `/v1/signals`), from a detector or from an external source |
@@ -112,7 +112,7 @@ field. `seal grant network APP CIDR…` sets a rule.
   an identity, and the enclave rate-limits seals per connection source. Which blob an app
   loads is the app's configuration. A blob swapped for another with the same apps (the
   sealer's own credential, or another destination) is outside what Seal claims. An app that
-  starts sessions on a named secret leaves that choice to the tenant's admins instead: the
+  starts sessions on a named blob leaves that choice to the tenant's admins instead: the
   enclave hands out only a version signed by the threshold of the root in force ("Named
   secrets").
 - Consumer roles are grants that the enclave checks, not SDK types. One `seal::Client`
@@ -130,7 +130,7 @@ let blob = seal.seal(secret, "https://api.openai.com/v1", ["checkout"])
     .header("x-api-key")                               // format, pin, expires, methods, deny, sealed_only, hardened_only
     .await?;
 let s = seal.session(&blob).http().await?;             // min_tier, reload_with, on_reseal, endpoint_reporter
-let s = seal.session("openai").http().await?;          // a named secret: its newest published version
+let s = seal.session("openai").http().await?;          // a named blob: its newest published version
 let (url, key) = (s.url(), s.key());                   // .database() → db.dsn(); s.info()
 s.close().await?;
 seal.signal("edr-alert", Severity::High).await?;
@@ -225,8 +225,8 @@ with seal.session(blob) as s:                          # HttpSession or Database
   itself, and `extend` extends now. `close` ends the session on the server and waits for
   cleanup. Dropping a session starts the same in the background.
 
-  `session` also takes a named secret's name (`session("openai")`; a name has no dots, a
-  blob always does). The SDK looks it up (`Client::resolve`, `POST /v1/secrets/resolve`)
+  `session` also takes a named blob's name (`session("openai")`; a name has no dots, a
+  blob always does). The SDK looks it up (`Client::resolve`, `POST /v1/blobs/resolve`)
   before the kind check and starts on the blob it gets, and looks it up again before every
   extend. A newer version with the same destination restarts the session on it, keeping
   `url`, `key` and `dsn`. One with another destination reaches new sessions only, since the
@@ -409,28 +409,28 @@ elsewhere, and the session token never leaves the SDK.
   are rechecked on every tenant state change, each against its tunnel's address, so a
   network rule added or narrowed later also ends tunnels already open from outside it.
 
-### Named secrets
+### Named blobs
 
 A tenant's admins can publish a blob under a name, so apps start sessions on the name and
 pick up a new version without a redeploy. They publish in the console, which seals in the
-tab, or with `seal secret --name NAME`; `seal secrets` lists the names and deletes one.
+tab, or with `seal secret --name NAME`; `seal blobs` lists the names and deletes one.
 
-- **Signed, outside tenant state.** Each version is a `NamedSecret { tenant, root_id, name,
+- **Signed, outside tenant state.** Each version is a `NamedBlob { tenant, root_id, name,
   version, blob, published_at }` (`blob`: the blob's id and the SHA-256 of its text, or none
   for a deletion), signed by the threshold of the root in force under
-  `seal/named-secret/v1`. It is not part of signed tenant state: publishing has no pending
+  `seal/named-blob/v1`. It is not part of signed tenant state: publishing has no pending
   window and is not logged. Versions number 1, 2, … per name, deletions included.
-- **Stored by the control plane** in its Postgres, beside its other documents: every name's newest version,
-  and the `NAMED_SECRET_VERSIONS_KEPT` (10) newest of each. The control plane checks a version
+- **Stored by the control plane** in its Postgres, beside its other documents: every name's
+  newest version, and the `NAMED_BLOB_VERSIONS_KEPT` (10) newest of each. The control plane checks a version
   before it stores it (the next number, the blob it names, this tenant and chain, the latest
-  root's threshold) and refuses more than `MAX_NAMED_SECRETS` (256) names or a blob over
+  root's threshold) and refuses more than `MAX_NAMED_BLOBS` (256) names or a blob over
   `MAX_NAMED_BLOB_BYTES` (256 KiB). It is still untrusted: enclaves check again.
-- **Looked up through the enclave** (`POST /v1/secrets/resolve`, an identity proof bound to the
+- **Looked up through the enclave** (`POST /v1/blobs/resolve`, an identity proof bound to the
   name). The enclave fetches the name's newest version with its telemetry key, checks that it
   is this tenant's and chain's, signed by the threshold of the root in force, and carries the
   blob it names, then that the blob is valid (expiry, tenant key version) and the caller holds
   a grant for one of its apps and is not suspended. An unknown, deleted or ungranted name is
-  `NotAllowed` alike. A version is held `NAMED_SECRET_CACHE_SECS` (30) before it is fetched
+  `NotAllowed` alike. A version is held `NAMED_BLOB_CACHE_SECS` (30) before it is fetched
   again, never replaced by an older one, and answers while the control plane is unreachable.
   Refusals are recorded as `Operation::Resolve`. The session the app then starts is checked
   like any other.
@@ -440,7 +440,7 @@ tab, or with `seal secret --name NAME`; `seal secrets` lists the names and delet
 
 ### How access ends
 
-Seal stores blobs only as named secrets, and a blob anyone holds keeps opening, so there is
+Seal stores blobs only as named blobs, and a blob anyone holds keeps opening, so there is
 no per-blob kill switch. Access ends through these mechanisms:
 
 | Mechanism | Scope | Who |
@@ -451,14 +451,14 @@ no per-blob kill switch. Access ends through these mechanisms:
 | Raising `oldest_accepted` | Every blob below that tenant key version | Admin (signed tenant state) |
 | Revoking the credential at the upstream | The secret itself | Whoever owns the upstream account |
 | Ending the session (`SessionEnd`) | One session: its tokens and every connection | The client (`close`), or the enclave on an integrity finding |
-| Deleting a named secret, or publishing a new version | New sessions on the name; running ones move to a new version at their next extend | Admin (a signed version) |
+| Deleting a named blob, or publishing a new version | New sessions on the name; running ones move to a new version at their next extend | Admin (a signed version) |
 | Integrity suspension | Everything one identity does | Tenant integrity policy, on signals (below) |
 
 Live sessions are rechecked whenever the tenant's verified state changes
 (`Session::ended`). So a grant removal or a published `SessionEnd` also ends connections
 already established, once a replica has loaded the new state. The admin mechanisms narrow
 access, so they apply as soon as they are logged, whatever the pending window. Rotating a
-secret means sealing the new value (`seal secret`), and for a named secret publishing it as
+secret means sealing the new value (`seal secret`), and for a named blob publishing it as
 the next version (`seal secret --name`, or the console). Revoking the old credential at the
 upstream is its owner's job.
 
@@ -812,9 +812,9 @@ Who may read and write a tenant's documents (the crate docs hold the full route 
 | Documents (`/documents`), proposals, telemetry | Console members, admins |
 | Put, sign, withdraw, submit proposals | Console members with `submit`, admins |
 | Put roots, states, release co-signatures (each still carries its own admin signatures) | Console members with `submit`, admins, the write token |
-| A named secret's newest version | Console members, admins, the tenant's enclaves (telemetry key) |
-| Named secrets listed, a name's versions | Console members, admins |
-| Publish or delete a named secret (each version carries its own admin signatures) | Console members with `submit`, admins |
+| A named blob's newest version | Console members, admins, the tenant's enclaves (telemetry key) |
+| Named blobs listed, a name's versions | Console members, admins |
+| Publish or delete a named blob (each version carries its own admin signatures) | Console members with `submit`, admins |
 | Service key certificates, releases, release listings and templates, release co-signatures, the checkpoint | Anyone |
 | Post signals, session ends, telemetry, certificates, freshness statements (each verified by its own signature) | Anyone |
 | Put releases and release templates | The write token |
@@ -861,7 +861,7 @@ Who may read and write a tenant's documents (the crate docs hold the full route 
 - **Storage** is one Postgres database (`SEAL_CONTROL_DATABASE_URL`, optionally
   `SEAL_CONTROL_DATABASE_AUTH=entra`) and nothing on disk: roots, states and their proofs,
   freshness statements, signals, session ends, certificates, wrap keys, anchors, proposals,
-  release evidence, named secrets and telemetry. Each is stored as the document it is served
+  release evidence, named blobs and telemetry. Each is stored as the document it is served
   as, and none is believed for being there. One control process serves a database: it keeps
   each tenant's small documents in memory.
 - **Telemetry** is served in pages (see "Telemetry", Reading). Batches are partitioned by the
@@ -994,10 +994,10 @@ Who may read and write a tenant's documents (the crate docs hold the full route 
   reseal. It never exposes a secret, since Seal stores no plaintext customer data (a named
   secret is a blob, sealed) and the immutable release policies stop even the owner from
   reading a root.
-- **Named secrets are outside tenant state.** Publishing has no pending window and is not
+- **Named blobs are outside tenant state.** Publishing has no pending window and is not
   logged, which is what keeps it a single signature. So a stolen admin key of a threshold-1
   root can point a name at a blob of its choosing (sealing is open), and apps on that name
-  move to it within `NAMED_SECRET_CACHE_SECS` plus one extend; a higher threshold raises the
+  move to it within `NAMED_BLOB_CACHE_SECS` plus one extend; a higher threshold raises the
   bar as it does for states. A control plane can serve a replica that restarted an older
   version the admins once signed, until a newer one reaches it, and can withhold a new one.
   Versions are signed by the root in force, so removing an admin key or raising the

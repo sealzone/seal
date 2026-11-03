@@ -212,7 +212,7 @@ impl<'a> TenantAuthorizer<'a> {
             .ok_or_else(|| self.artifact_mismatch(identity, blob, time))
     }
 
-    /// Whether `request`'s caller may have `blob`, a named secret's: the blob itself is valid
+    /// Whether `request`'s caller may have `blob`, a named blob's: the blob itself is valid
     /// (`check_blob`), and the caller holds a grant for one of its apps and is not suspended.
     /// Networks, artifact rules and tiers are the session's to check, on the blob it gets.
     pub fn resolve(
