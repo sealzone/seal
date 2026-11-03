@@ -19,6 +19,14 @@
 //! - `user_data` = Seal's 32-byte binding; `nonce` and `public_key` unused.
 //! - `tcb` is empty: the document carries no hypervisor version.
 //!
+//! The enclave's own documents (`seal_tee::nitro`) are read two more ways:
+//! - `peek` reads an enclave document's fields without checking anything but their shape:
+//!   the attestor learns its own PCRs from a document the local NSM just returned.
+//! - `verify_timestamp` is `NitroClock`'s check: the document verifies as above at its own
+//!   `timestamp` (the leaf lasts three hours, so a document is valid when it is made), its PCRs
+//!   are not a debug enclave's, and its `nonce` is the clock's fresh one. The timestamp is then
+//!   the hypervisor's, made after the nonce was chosen: neither set nor replayed by the parent.
+//!
 //! A NitroTPM document (`verify_tpm`) proves that an EC2 instance, not an enclave, made it:
 //! - `module_id` is `<instance id>-tpm<16 lowercase hex digits>`, and `certificate`'s one
 //!   common name is `<module_id>.<region>.aws`. The instance id and region are returned.
@@ -70,8 +78,57 @@ pub struct TpmDocument {
     pub public_key: Option<Vec<u8>>,
 }
 
+/// An enclave document's fields, read by `peek` without checking its chain or signature.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Unverified {
+    pub module_id: String,
+    /// When the hypervisor made the document, in milliseconds since the Unix epoch.
+    pub timestamp_ms: u64,
+    pub pcrs: BTreeMap<u8, [u8; PCR_LEN]>,
+    pub public_key: Option<Vec<u8>>,
+    pub user_data: Option<Vec<u8>>,
+    pub nonce: Option<Vec<u8>>,
+}
+
+impl Unverified {
+    /// `measurement` of PCR0..2, refused as `verify` refuses them (missing, or all zero).
+    pub fn measurement(&self) -> Result<Measurement, AttestError> {
+        enclave_measurement(&self.pcrs)
+    }
+}
+
 pub(crate) fn verify(document: &[u8], time: &TrustedTime) -> Result<VerifiedEvidence, AttestError> {
     verify_enclave_with_root(document, time, &baked_root()?)
+}
+
+/// An enclave document's fields as it states them (module docs). Nothing is verified: for
+/// documents this enclave's own NSM returned.
+pub fn peek(document: &[u8]) -> Result<Unverified, AttestError> {
+    let p = parse(document, "pcrs")?;
+    Ok(Unverified {
+        module_id: p.module_id,
+        timestamp_ms: p.timestamp_ms,
+        pcrs: p.pcrs,
+        public_key: p.public_key,
+        user_data: p.user_data,
+        nonce: p.nonce,
+    })
+}
+
+/// The `timestamp` (milliseconds) of an enclave document that verifies against the baked root
+/// at that very time and carries `nonce` (module docs).
+pub fn verify_timestamp(document: &[u8], nonce: &[u8]) -> Result<u64, AttestError> {
+    verify_timestamp_with_root(document, nonce, &baked_root()?)
+}
+
+fn verify_timestamp_with_root(document: &[u8], nonce: &[u8], root: &Cert) -> Result<u64, AttestError> {
+    let stated = parse(document, "pcrs")?.timestamp_ms;
+    let doc = verify_document(document, &TrustedTime::exact(stated / 1000), root, "pcrs")?;
+    enclave_measurement(&doc.pcrs)?;
+    if doc.nonce.as_deref() != Some(nonce) {
+        return Err(reject("document does not carry the clock's nonce"));
+    }
+    Ok(doc.timestamp_ms)
 }
 
 /// Verifies a NitroTPM document against the baked root.
@@ -100,14 +157,7 @@ fn baked_root() -> Result<Cert, AttestError> {
 
 fn verify_enclave_with_root(document: &[u8], time: &TrustedTime, root: &Cert) -> Result<VerifiedEvidence, AttestError> {
     let doc = verify_document(document, time, root, "pcrs")?;
-    let pcr = |i: u8| -> Result<&[u8; PCR_LEN], AttestError> {
-        let value = doc.pcrs.get(&i).ok_or_else(|| reject(format!("document has no PCR{i}")))?;
-        if value.iter().all(|b| *b == 0) {
-            return Err(AttestError::DebugMode);
-        }
-        Ok(value)
-    };
-    let measurement = measurement(pcr(0)?, pcr(1)?, pcr(2)?);
+    let measurement = enclave_measurement(&doc.pcrs)?;
     let report_data: [u8; 32] = doc
         .user_data
         .as_deref()
@@ -121,6 +171,19 @@ fn verify_enclave_with_root(document: &[u8], time: &TrustedTime, root: &Cert) ->
         report_data,
         deployment: None,
     })
+}
+
+/// `measurement` of PCR0..2: each present and not all zero (debug mode or an attached
+/// console).
+fn enclave_measurement(pcrs: &BTreeMap<u8, [u8; PCR_LEN]>) -> Result<Measurement, AttestError> {
+    let pcr = |i: u8| -> Result<&[u8; PCR_LEN], AttestError> {
+        let value = pcrs.get(&i).ok_or_else(|| reject(format!("document has no PCR{i}")))?;
+        if value.iter().all(|b| *b == 0) {
+            return Err(AttestError::DebugMode);
+        }
+        Ok(value)
+    };
+    Ok(measurement(pcr(0)?, pcr(1)?, pcr(2)?))
 }
 
 fn verify_tpm_with_root(document: &[u8], time: &TrustedTime, root: &Cert) -> Result<TpmDocument, AttestError> {
@@ -163,8 +226,38 @@ struct Document {
     nonce: Option<Vec<u8>>,
 }
 
+/// A document's fields and certificates, parsed but not checked against each other.
+struct Parsed {
+    sign1: CoseSign1,
+    module_id: String,
+    timestamp_ms: u64,
+    pcrs: BTreeMap<u8, [u8; PCR_LEN]>,
+    leaf: Cert,
+    bundle: Vec<Cert>,
+    public_key: Option<Vec<u8>>,
+    user_data: Option<Vec<u8>>,
+    nonce: Option<Vec<u8>>,
+}
+
 /// The checks both kinds share. `pcrs_key` names the PCR map: `pcrs` or `nitrotpm_pcrs`.
 fn verify_document(document: &[u8], time: &TrustedTime, root: &Cert, pcrs_key: &str) -> Result<Document, AttestError> {
+    let Parsed { sign1, module_id, timestamp_ms, pcrs, leaf, bundle, public_key, user_data, nonce } =
+        parse(document, pcrs_key)?;
+
+    check_chain(&bundle, &leaf, time, root)?;
+
+    // The signature, over the protected header as received.
+    let key = leaf.p384_public_key()?;
+    sign1.verify_signature(b"", |sig, tbs| {
+        let sig = p384::ecdsa::Signature::from_slice(sig).map_err(|_| reject("malformed document signature"))?;
+        key.verify(tbs, &sig).map_err(|_| reject("document signature does not verify"))
+    })?;
+
+    Ok(Document { module_id, timestamp_ms, pcrs, leaf, public_key, user_data, nonce })
+}
+
+/// The COSE envelope and every field, cheapest first, before any signature.
+fn parse(document: &[u8], pcrs_key: &str) -> Result<Parsed, AttestError> {
     let sign1 = CoseSign1::from_tagged_slice(document)
         .or_else(|_| CoseSign1::from_slice(document))
         .map_err(|_| reject("attestation document is not a COSE_Sign1"))?;
@@ -173,7 +266,6 @@ fn verify_document(document: &[u8], time: &TrustedTime, root: &Cert, pcrs_key: &
     }
     let payload = sign1.payload.as_deref().ok_or_else(|| reject("attestation document payload is detached"))?;
 
-    // Fields, cheapest first, before any signature.
     let Value::Map(entries) =
         ciborium::from_reader::<Value, _>(payload).map_err(|_| reject("attestation document payload is not CBOR"))?
     else {
@@ -241,17 +333,8 @@ fn verify_document(document: &[u8], time: &TrustedTime, root: &Cert, pcrs_key: &
         })
         .collect::<Result<Vec<_>, _>>()?;
     let (public_key, user_data, nonce) = (optional("public_key")?, optional("user_data")?, optional("nonce")?);
-
-    check_chain(&bundle, &leaf, time, root)?;
-
-    // The signature, over the protected header as received.
-    let key = leaf.p384_public_key()?;
-    sign1.verify_signature(b"", |sig, tbs| {
-        let sig = p384::ecdsa::Signature::from_slice(sig).map_err(|_| reject("malformed document signature"))?;
-        key.verify(tbs, &sig).map_err(|_| reject("document signature does not verify"))
-    })?;
-
-    Ok(Document { module_id: module_id.clone(), timestamp_ms, pcrs, leaf, public_key, user_data, nonce })
+    let module_id = module_id.clone();
+    Ok(Parsed { sign1, module_id, timestamp_ms, pcrs, leaf, bundle, public_key, user_data, nonce })
 }
 
 /// `[root, intermediates..]` then `leaf`: the first identical to `root`, each signing the
