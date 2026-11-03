@@ -291,13 +291,159 @@ async fn the_enclave_boots_on_the_hosts_messages() {
 
 // ---- ingress ----
 
+fn limits(connections: usize, per_source: usize, idle_ms: u64) -> ingress::Limits {
+    ingress::Limits { connections, per_source, idle: Duration::from_millis(idle_ms) }
+}
+
+/// An enclave port on loopback: every connection it accepts is reported on the channel (with
+/// the client its PROXY header names) and then held until its client closes, as the enclave
+/// does, or closed after `drop_after`.
+async fn enclave_port(
+    drop_after: Option<Duration>,
+) -> Option<(u32, tokio::sync::mpsc::UnboundedReceiver<std::net::SocketAddr>)> {
+    let listener = listener()?;
+    let port = listener.port();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut header = [0u8; 28];
+            if stream.read_exact(&mut header).await.is_err() {
+                continue;
+            }
+            let ip = std::net::Ipv4Addr::new(header[16], header[17], header[18], header[19]);
+            let port = u16::from_be_bytes([header[24], header[25]]);
+            let _ = tx.send(std::net::SocketAddr::from((ip, port)));
+            match drop_after {
+                Some(after) => {
+                    tokio::spawn(async move {
+                        tokio::time::sleep(after).await;
+                        drop(stream);
+                    });
+                }
+                None => {
+                    tokio::spawn(async move {
+                        let mut rest = Vec::new();
+                        let _ = stream.read_to_end(&mut rest).await;
+                    });
+                }
+            }
+        }
+    });
+    Some((port, rx))
+}
+
+/// A TCP client from loopback address `from`.
+async fn client_from(from: [u8; 4], to: std::net::SocketAddr) -> tokio::net::TcpStream {
+    let socket = tokio::net::TcpSocket::new_v4().unwrap();
+    socket.bind(std::net::SocketAddr::from((from, 0))).unwrap();
+    socket.connect(to).await.unwrap()
+}
+
+/// The review's finding: clients that send nothing and ignore the close, after the enclave has
+/// dropped them (its handshake timeout), must not keep their places on the parent's port.
+#[tokio::test]
+async fn silent_clients_the_enclave_dropped_do_not_fill_the_port() {
+    let Some((port, mut accepted)) = enclave_port(Some(Duration::from_millis(50))).await else { return };
+    let inbound = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listen = inbound.local_addr().unwrap();
+    tokio::spawn(ingress::serve(inbound, CID_LOCAL, port, limits(4, 4, 60_000)));
+    // Fill the port with clients that never send, never read, never close.
+    let mut silent = Vec::new();
+    for _ in 0..4 {
+        silent.push(client_from([127, 0, 0, 1], listen).await);
+        tokio::time::timeout(Duration::from_secs(5), accepted.recv()).await.unwrap().unwrap();
+    }
+    // The enclave dropped them all; the next client still gets through.
+    let reached = async {
+        loop {
+            let mut next = client_from([127, 0, 0, 1], listen).await;
+            next.write_all(b"\x16").await.unwrap();
+            let me = next.local_addr().unwrap();
+            if let Ok(Some(named)) = tokio::time::timeout(Duration::from_millis(500), accepted.recv()).await {
+                assert_eq!(named, me);
+                return;
+            }
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(10), reached).await.expect("the silent clients still hold the port");
+    drop(silent);
+}
+
+#[tokio::test]
+async fn each_source_holds_at_most_its_share() {
+    let Some((port, mut accepted)) = enclave_port(None).await else { return };
+    let inbound = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listen = inbound.local_addr().unwrap();
+    tokio::spawn(ingress::serve(inbound, CID_LOCAL, port, limits(8, 2, 60_000)));
+    let mut held = Vec::new();
+    for _ in 0..2 {
+        held.push(client_from([127, 0, 0, 1], listen).await);
+        tokio::time::timeout(Duration::from_secs(5), accepted.recv()).await.unwrap().unwrap();
+    }
+    // A third from the same address is closed before the enclave hears of it.
+    let mut third = client_from([127, 0, 0, 1], listen).await;
+    let mut buf = [0u8; 1];
+    let closed = tokio::time::timeout(Duration::from_secs(5), third.read(&mut buf)).await.unwrap();
+    assert!(matches!(closed, Ok(0) | Err(_)), "{closed:?}");
+    assert!(tokio::time::timeout(Duration::from_millis(300), accepted.recv()).await.is_err());
+    // Another address still gets in, and a freed place is taken again.
+    let other = client_from([127, 0, 0, 2], listen).await;
+    let named = tokio::time::timeout(Duration::from_secs(5), accepted.recv()).await.unwrap().unwrap();
+    assert_eq!(named, other.local_addr().unwrap());
+    drop(held.pop());
+    let again = async {
+        loop {
+            let c = client_from([127, 0, 0, 1], listen).await;
+            if let Ok(Some(_)) = tokio::time::timeout(Duration::from_millis(300), accepted.recv()).await {
+                return c;
+            }
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(10), again).await.expect("a freed place is taken again");
+}
+
+#[tokio::test]
+async fn idle_relays_end() {
+    let Some((port, mut accepted)) = enclave_port(None).await else { return };
+    let inbound = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listen = inbound.local_addr().unwrap();
+    tokio::spawn(ingress::serve(inbound, CID_LOCAL, port, limits(4, 4, 300)));
+    let mut client = client_from([127, 0, 0, 1], listen).await;
+    tokio::time::timeout(Duration::from_secs(5), accepted.recv()).await.unwrap().unwrap();
+    let started = std::time::Instant::now();
+    let mut buf = [0u8; 1];
+    let closed = tokio::time::timeout(Duration::from_secs(5), client.read(&mut buf)).await.expect("never closed");
+    assert!(matches!(closed, Ok(0) | Err(_)), "{closed:?}");
+    assert!(started.elapsed() >= Duration::from_millis(250), "{:?}", started.elapsed());
+}
+
+#[tokio::test]
+async fn relays_carry_both_ways_and_pass_a_clients_close_on() {
+    // Over pipes: the client closes its side first, the enclave still answers, then closes.
+    let (mut client, client_end) = tokio::io::duplex(1024);
+    let (enclave_end, mut enclave) = tokio::io::duplex(1024);
+    let relay = tokio::spawn(ingress::relay(client_end, enclave_end, Duration::from_secs(60)));
+    client.write_all(b"request").await.unwrap();
+    client.shutdown().await.unwrap();
+    let mut got = Vec::new();
+    enclave.read_to_end(&mut got).await.unwrap();
+    assert_eq!(got, b"request");
+    enclave.write_all(b"answer").await.unwrap();
+    drop(enclave);
+    let mut back = Vec::new();
+    client.read_to_end(&mut back).await.unwrap();
+    assert_eq!(back, b"answer");
+    tokio::time::timeout(Duration::from_secs(5), relay).await.unwrap().unwrap();
+}
+
 #[tokio::test]
 async fn ingress_names_the_client_to_the_enclave() {
     let Some(enclave) = listener() else { return };
     let enclave_port = enclave.port();
     let inbound = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let listen = inbound.local_addr().unwrap();
-    tokio::spawn(ingress::serve(inbound, CID_LOCAL, enclave_port, 4));
+    tokio::spawn(ingress::serve(inbound, CID_LOCAL, enclave_port, limits(4, 4, 60_000)));
 
     let mut client = tokio::net::TcpStream::connect(listen).await.unwrap();
     let client_addr = client.local_addr().unwrap();
@@ -324,7 +470,7 @@ async fn ingress_closes_clients_when_the_enclave_is_not_there() {
     drop(probe);
     let inbound = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let listen = inbound.local_addr().unwrap();
-    tokio::spawn(ingress::serve(inbound, CID_LOCAL, gone, 4));
+    tokio::spawn(ingress::serve(inbound, CID_LOCAL, gone, limits(4, 4, 60_000)));
     let mut client = tokio::net::TcpStream::connect(listen).await.unwrap();
     let mut buf = Vec::new();
     let closed = tokio::time::timeout(Duration::from_secs(10), client.read_to_end(&mut buf)).await;

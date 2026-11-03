@@ -39,8 +39,6 @@ mod tests;
 pub const DEFAULT_ENCLAVE_CID: u32 = 16;
 /// The release's `listen` port.
 pub const DEFAULT_PORT: u16 = 8443;
-/// Inbound connections at once: what the enclave's port holds (`seal_enclave::api::MAX_CONNECTIONS`).
-pub const DEFAULT_MAX_CONNECTIONS: usize = 1024;
 /// Egress tunnels at once.
 pub const DEFAULT_MAX_TUNNELS: usize = 4096;
 
@@ -53,7 +51,7 @@ pub struct Config {
     /// Where clients reach the enclave on the instance.
     pub listen: SocketAddr,
     pub sts: sigv4::Sts,
-    pub max_connections: usize,
+    pub inbound: ingress::Limits,
     pub max_tunnels: usize,
 }
 
@@ -76,7 +74,7 @@ pub async fn run(config: Config, credentials: Arc<dyn parent::CredentialSource>)
     tokio::select! {
         _ = parent::serve(message_port, config.enclave_cid, messages) => {}
         _ = egress::serve(egress_port, config.enclave_cid, config.max_tunnels, egress::Policy::default()) => {}
-        _ = ingress::serve(inbound, config.enclave_cid, config.enclave_port, config.max_connections) => {}
+        _ = ingress::serve(inbound, config.enclave_cid, config.enclave_port, config.inbound) => {}
     }
     anyhow::bail!("a server stopped")
 }

@@ -4,7 +4,8 @@
 //! ```text
 //! seal-nitro-host --tenant <tenant>@<root id> [--enclave-cid 16] [--listen 0.0.0.0:8443]
 //!                 [--enclave-port 8443] [--sts-region REGION]
-//!                 [--max-connections 1024] [--max-tunnels 4096]
+//!                 [--max-connections 1024] [--max-connections-per-source 512]
+//!                 [--idle-timeout 350] [--max-tunnels 4096]
 //! ```
 #![forbid(unsafe_code)]
 
@@ -12,7 +13,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use clap::Parser;
-use seal_nitro_host::{imds, sigv4, Config};
+use seal_nitro_host::{imds, ingress, sigv4, Config};
 use seal_proto::TenantPin;
 
 #[derive(Parser)]
@@ -35,8 +36,14 @@ struct Cli {
     #[arg(long)]
     sts_region: Option<String>,
     /// Inbound connections at once
-    #[arg(long, default_value_t = seal_nitro_host::DEFAULT_MAX_CONNECTIONS)]
+    #[arg(long, default_value_t = ingress::Limits::default().connections)]
     max_connections: usize,
+    /// Inbound connections from one source (an IPv4 address or an IPv6 /64) at once
+    #[arg(long, default_value_t = ingress::Limits::default().per_source)]
+    max_connections_per_source: usize,
+    /// Seconds an inbound connection may go with no byte moving either way
+    #[arg(long, default_value_t = ingress::Limits::default().idle.as_secs())]
+    idle_timeout: u64,
     /// Egress tunnels at once
     #[arg(long, default_value_t = seal_nitro_host::DEFAULT_MAX_TUNNELS)]
     max_tunnels: usize,
@@ -61,7 +68,11 @@ async fn main() {
         enclave_port: cli.enclave_port,
         listen: cli.listen,
         sts,
-        max_connections: cli.max_connections,
+        inbound: ingress::Limits {
+            connections: cli.max_connections,
+            per_source: cli.max_connections_per_source,
+            idle: std::time::Duration::from_secs(cli.idle_timeout),
+        },
         max_tunnels: cli.max_tunnels,
     };
     let served = tokio::select! {
