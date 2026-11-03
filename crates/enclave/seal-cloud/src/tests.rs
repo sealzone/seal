@@ -112,10 +112,10 @@ fn sim_from_environment() {
     assert!(Sim::from_vars(measurement(), vars(Some(&pin_text), Some(&deployment), Some("soon"))).is_err());
 }
 
-#[test]
-fn detect_without_a_tee_or_sim_selection() {
+#[tokio::test]
+async fn detect_without_a_tee_or_sim_selection() {
     if std::env::var_os("SEAL_SIM").is_some() {
         return;
     }
-    assert!(matches!(Cloud::detect(), Err(CloudError::Tee(seal_tee::TeeError::NotInTee))));
+    assert!(matches!(Cloud::detect().await, Err(CloudError::Tee(seal_tee::TeeError::NotInTee))));
 }

@@ -173,7 +173,7 @@ async fn proof_needs_an_azure_deployment() {
 #[tokio::test]
 #[ignore = "needs an ACI confidential container group"]
 async fn live_capture() {
-    let cloud = crate::Cloud::detect().unwrap();
+    let cloud = crate::Cloud::detect().await.unwrap();
     let crate::Cloud::AzureSnpAci(aci) = &cloud else { panic!("not Azure") };
     println!("CAPTURE pin {}", cloud.tenant_pin());
     println!("CAPTURE measurement {}", cloud.attestor().measurement());

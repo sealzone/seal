@@ -49,7 +49,7 @@ async fn main() {
         }
         Err(e) => println!("SEAL_PROBE attest failed: {e}"),
     }
-    let cloud = match Cloud::detect() {
+    let cloud = match Cloud::detect().await {
         Ok(c) => c,
         Err(e) => {
             println!("SEAL_PROBE Cloud::detect failed: {e}");

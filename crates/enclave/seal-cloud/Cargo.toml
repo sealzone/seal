@@ -9,6 +9,9 @@ publish = false
 
 [features]
 sim = ["seal-tee/sim", "seal-attest/sim"]
+# `Listener::Forwarded`, a TCP listener that names its clients as the Nitro parent's does, for
+# the enclave's own tests. Never in an image.
+testing = []
 
 [dependencies]
 seal-proto.workspace = true
