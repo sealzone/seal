@@ -367,11 +367,19 @@ the header.
 serves the parent's messages (the pin, and a deployment proof presigned with the instance
 role from IMDSv2) and an egress proxy the enclave dials over vsock with `CONNECT host:port`
 (`seal_cloud::nitro::ParentDialer`). The proxy resolves names and reaches what a NAT gateway
-would, except the instance's own addresses (loopback, link-local, which holds IMDS, and EC2's
-IPv6 service addresses), so the role's credentials stay on the parent. It forwards the
-instance's port to the enclave's vsock port of the same number, after a PROXY v2 header naming
-the client, and the enclave takes that address for its network rules. Every stream is the
-enclave's own TLS, so the parent sees what any network sees. Trusted time needs no network:
+would, except the instance's own addresses (loopback, link-local, which holds IMDS, EC2's IPv6
+service addresses, its interface addresses, and their NAT64 forms), so the role's credentials
+stay on the parent; that filter protects the parent and is defence in depth, not a boundary.
+It forwards the instance's port to the enclave's vsock port of the same number, after a PROXY
+v2 header naming the client, and the enclave takes that address for its network rules and
+per-source limits. The parent holds the enclave's own connection limits too, and ends a relay
+as soon as the enclave closes its side. Every stream is the enclave's own TLS, so the parent
+sees what any network sees.
+
+On Nitro the network the enclave sees is the parent instance, an ordinary EC2 instance, not
+the cloud provider's host: network rules and per-source limits there are only as strong as
+root on that instance, which can name any client address it likes. Seal-hosted replicas are
+not supported on Nitro: the front door's PROXY header would conflict with the parent's. Trusted time needs no network:
 the hypervisor's signed attestation timestamp (`seal_tee::nitro::NitroClock`) stands in for
 Roughtime.
 

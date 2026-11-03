@@ -96,7 +96,10 @@ what the connecting side wrote (`seal-enclave` `proxy`). A Nitro replica is the 
 has no network interface, and every connection comes from its parent instance over vsock, so
 the parent's forwarder names each client in a PROXY v2 header and the replica takes that
 address (a connection without one is closed). The parent is the network there, as the host is
-on every other cloud. States that use no rules omit the field. `seal grant network APP CIDR…`
+on every other cloud, but it is an ordinary EC2 instance rather than the cloud provider's host:
+on Nitro, network rules and per-source limits are only as strong as root on the parent
+instance. A Seal-hosted replica on Nitro is not supported, since the front door's PROXY
+header would conflict with the parent's. States that use no rules omit the field. `seal grant network APP CIDR…`
 sets a rule.
 
 ## Roles
@@ -822,7 +825,12 @@ The enclave's internal ports and components are in the crate docs and
     kind of proof, is refused.
   - Port 9001 (`EGRESS_PORT`) takes `CONNECT host:port HTTP/1.1` for every outbound stream.
     The parent answers `200` and relays, or a 4xx or 5xx, which fails that dial. A replica
-    sends only host names and addresses, never anything with spaces or `@`.
+    sends only host names and addresses, never anything with spaces or `@`. `seal-nitro-host`
+    refuses the instance's own addresses (loopback, link-local with IMDS, EC2's service
+    addresses, its interface addresses, and their NAT64 forms) as defence in depth for the
+    parent; the replica relies on none of it.
+  - The parent's inbound port holds what the replica's does (1024 connections, 512 per
+    source), ends a relay once the replica closes its side, and drops a flow idle for 350 s.
   - The replica listens on its own CID at the release's `listen` port (8443), accepts only
     CID 3, and requires a PROXY v2 header first.
   - Time is the NSM's (`NitroClock`): a document with a fresh nonce at least every 60 s.

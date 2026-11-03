@@ -6,11 +6,18 @@
 //! (no name, no connection) or `503` (`max_tunnels` open) and closes.
 //!
 //! What the enclave reaches is what a NAT gateway gives replicas on Azure and GCP: any public or
-//! private address, on any port. Refused (`forbidden`): addresses that are the instance's own
-//! rather than a network's, which the enclave never needs: unspecified, loopback, link-local
-//! (IMDS, the Time Sync Service and the Amazon DNS resolver, `169.254.0.0/16`, `fe80::/10`),
-//! EC2's IPv6 service addresses (`fd00:ec2::/32`), multicast and broadcast. So the instance
-//! role's credentials stay on the parent, which presigns with them itself.
+//! private address, on any port. Refused: addresses that are the instance's own rather than a
+//! network's, which the enclave never needs. `forbidden` lists them: unspecified, loopback,
+//! link-local (IMDS, the Time Sync Service and the Amazon DNS resolver, `169.254.0.0/16`,
+//! `fe80::/10`), EC2's IPv6 service addresses (`fd00:ec2::/32`), multicast and broadcast, and
+//! any of those behind the NAT64 prefix `64:ff9b::/96`. `is_own` adds the instance's interface
+//! addresses (its VPC addresses), and their NAT64 forms: an address the kernel would answer
+//! from itself. So the instance role's credentials and the parent's own services stay out of
+//! reach of whatever runs in the enclave.
+//!
+//! This filtering protects the parent, as defence in depth; it is not a security boundary of
+//! Seal's. The enclave trusts nothing it reaches through the parent (every stream is TLS it
+//! verifies), and whoever has root on the parent can change or bypass this process.
 //!
 //! The streams are the enclave's TLS (it verifies every peer at trusted time); the parent sees
 //! only names, addresses and sizes, as any network does.
@@ -37,17 +44,47 @@ pub struct Policy {
 }
 
 impl Policy {
+    /// Why `ip` is refused under this policy, if it is.
+    pub fn refusal_for(&self, ip: IpAddr) -> Option<&'static str> {
+        self.refuses(ip)
+    }
+
     fn refuses(&self, ip: IpAddr) -> Option<&'static str> {
         let ip = ip.to_canonical();
         if self.allow_loopback && ip.is_loopback() {
             return None;
         }
-        forbidden(ip)
+        forbidden(ip).or_else(|| {
+            let own = is_own(ip) || nat64_embedded(ip).is_some_and(|v4| is_own(IpAddr::V4(v4)));
+            own.then_some("the instance's own address")
+        })
     }
 }
 
-/// Why `ip` is refused, if it is (module docs).
+/// The IPv4 address behind the NAT64 well-known prefix `64:ff9b::/96`, if `ip` is under it.
+fn nat64_embedded(ip: IpAddr) -> Option<Ipv4Addr> {
+    let IpAddr::V6(v6) = ip else { return None };
+    let o = v6.octets();
+    (o[..12] == [0, 0x64, 0xff, 0x9b, 0, 0, 0, 0, 0, 0, 0, 0]).then(|| Ipv4Addr::new(o[12], o[13], o[14], o[15]))
+}
+
+/// Whether `ip` is one of this instance's own addresses: the kernel would send to it from
+/// that very address. Asked of a UDP socket's route (`connect` sends nothing), so no interface
+/// list is needed; an address with no route is not ours.
+pub fn is_own(ip: IpAddr) -> bool {
+    let any: SocketAddr = match ip {
+        IpAddr::V4(_) => (Ipv4Addr::UNSPECIFIED, 0).into(),
+        IpAddr::V6(_) => (Ipv6Addr::UNSPECIFIED, 0).into(),
+    };
+    let Ok(socket) = std::net::UdpSocket::bind(any) else { return false };
+    socket.connect((ip, 9)).is_ok() && socket.local_addr().is_ok_and(|local| local.ip() == ip)
+}
+
+/// Why `ip` is refused, if it is (module docs; the instance's own VPC addresses are `is_own`).
 pub fn forbidden(ip: IpAddr) -> Option<&'static str> {
+    if let Some(v4) = nat64_embedded(ip) {
+        return forbidden(IpAddr::V4(v4));
+    }
     match ip.to_canonical() {
         IpAddr::V4(v4) => {
             if v4.is_unspecified() || v4.octets()[0] == 0 {

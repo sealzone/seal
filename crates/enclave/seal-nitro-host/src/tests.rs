@@ -120,15 +120,45 @@ fn the_instances_own_addresses_are_refused() {
         "ff02::1",
         "::ffff:169.254.169.254",
         "::ffff:127.0.0.1",
+        "64:ff9b::a9fe:a9fe",
+        "64:ff9b::7f00:1",
     ] {
         assert!(forbidden(ip.parse().unwrap()).is_some(), "{ip}");
     }
     // What a NAT gateway reaches: public and private networks.
-    for ip in
-        ["10.0.0.7", "172.16.0.1", "192.168.1.1", "100.64.0.1", "52.94.1.1", "2600:1f18::1", "fd00:1::1", "fc00::1"]
-    {
+    for ip in [
+        "10.0.0.7",
+        "172.16.0.1",
+        "192.168.1.1",
+        "100.64.0.1",
+        "52.94.1.1",
+        "2600:1f18::1",
+        "fd00:1::1",
+        "64:ff9b::3401:203",
+    ] {
         assert!(forbidden(ip.parse().unwrap()).is_none(), "{ip}");
     }
+}
+
+#[test]
+fn the_instances_interface_addresses_are_its_own() {
+    // The address this machine would send from towards a public one: one of its interfaces'.
+    let probe = std::net::UdpSocket::bind("0.0.0.0:0").unwrap();
+    if probe.connect("192.0.2.1:9").is_err() {
+        return eprintln!("no IPv4 route here; skipped");
+    }
+    let own = probe.local_addr().unwrap().ip();
+    assert!(egress::is_own(own), "{own}");
+    assert!(!egress::is_own("192.0.2.1".parse().unwrap()));
+    // Refused by the policy, as such and behind NAT64.
+    let std::net::IpAddr::V4(v4) = own else { unreachable!() };
+    let nat64 = std::net::IpAddr::V6(std::net::Ipv6Addr::from(
+        0x0064_ff9b_0000_0000_0000_0000_0000_0000 | u128::from(u32::from(v4)),
+    ));
+    for ip in [own, nat64] {
+        assert_eq!(Policy::default().refusal_for(ip), Some("the instance's own address"), "{ip}");
+    }
+    assert_eq!(Policy::default().refusal_for("192.0.2.1".parse().unwrap()), None);
 }
 
 #[tokio::test]

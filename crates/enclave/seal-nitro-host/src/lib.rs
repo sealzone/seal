@@ -5,7 +5,7 @@
 //! | Serves | On | What |
 //! | --- | --- | --- |
 //! | `parent` | vsock `PARENT_PORT` | one `ParentMessage` per connection: the tenant pin and a fresh deployment proof, a `GetCallerIdentity` presigned with the instance role (IMDSv2) |
-//! | `egress` | vsock `EGRESS_PORT` | `CONNECT host:port` to anything a NAT gateway would reach, except the instance's own addresses |
+//! | `egress` | vsock `EGRESS_PORT` | `CONNECT host:port` to anything a NAT gateway would reach, except the instance's own addresses (loopback, link-local with IMDS, EC2's service addresses, its interface addresses, and their NAT64 forms): defence in depth for the parent, not a boundary |
 //! | `ingress` | TCP `listen` (`0.0.0.0:8443`) | each client relayed to the enclave's vsock port, after a PROXY v2 header naming it |
 //!
 //! Only connections from the enclave's CID are served on the vsock ports.
