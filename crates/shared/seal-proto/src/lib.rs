@@ -22,6 +22,7 @@ pub mod ids;
 pub mod integrity;
 pub mod named;
 pub mod net;
+pub mod nitro;
 pub mod policy;
 pub mod release;
 pub mod secret;

@@ -35,6 +35,11 @@ sha2.workspace = true
 # Reads the leaf's DNS SANs for the trailing-dot exception.
 x509-cert.workspace = true
 
+# vsock (`vsock`), for AWS Nitro enclaves and their parents. Both are already under tokio.
+[target.'cfg(target_os = "linux")'.dependencies]
+socket2.workspace = true
+libc.workspace = true
+
 [dev-dependencies]
 # Test PKI: certificates built with x509-cert's builder, signed with P-256.
 p256.workspace = true

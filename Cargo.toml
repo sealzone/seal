@@ -91,6 +91,8 @@ sev = { version = "8", default-features = false, features = ["snp"] }
 libc = "0.2"
 
 # network
+# vsock sockets (seal-net, Nitro). The version and features tokio already pulls.
+socket2 = { version = "0.6", features = ["all"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 webpki-roots = "1"

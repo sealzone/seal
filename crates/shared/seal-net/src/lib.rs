@@ -9,8 +9,9 @@
 //!    must also contain a pinned key. Pins narrow the baked roots, never replace them.
 //!
 //! Every outbound byte stream starts at a `Dialer`. `TcpDialer` is the usual one; a cloud
-//! without a network interface supplies its own (`seal-cloud`). Whatever carries the bytes is
-//! untrusted, like any host: everything above it is TLS verified here, or HPKE-sealed.
+//! without a network interface supplies its own (`seal-cloud`), over the vsock sockets in
+//! `vsock` (Linux) on AWS Nitro. Whatever carries the bytes is untrusted, like any host:
+//! everything above it is TLS verified here, or HPKE-sealed.
 
 #![forbid(unsafe_code)]
 
@@ -29,6 +30,11 @@ mod test_pki;
 #[cfg(test)]
 mod tls_tests;
 mod verify;
+#[cfg(target_os = "linux")]
+pub mod vsock;
+#[cfg(not(target_os = "linux"))]
+#[path = "vsock_unsupported.rs"]
+pub mod vsock;
 
 pub trait AsyncStream: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send> AsyncStream for T {}
