@@ -26,9 +26,11 @@
 //! template (stdout) and the commands that would change something (stderr), and runs none.
 
 pub mod aci;
-pub mod az;
+pub mod cli;
+pub mod gcp;
 pub mod network;
 pub mod release;
+pub mod steps;
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -47,9 +49,10 @@ use seal_verify::{ReleaseVerifier, TenantVerifier};
 use crate::sign::edit_state;
 use crate::{invalid, say, ui, Env, Scope};
 use aci::{Deployed, Placement, ReleaseTemplate};
-use az::{line, Az, Scratch};
+use cli::{Cli, Scratch, AZ};
 use network::{leaf, Nat, Plan, Subnet, Vnet, SUBNET};
 use release::Candidate;
+use steps::Steps;
 
 const DELEGATION: &str = "Microsoft.ContainerInstance/containerGroups";
 const IDENTITY_TYPE: &str = "Microsoft.ManagedIdentity/userAssignedIdentities";
@@ -65,9 +68,9 @@ pub enum DeployCmd {
     /// Not available in this build
     #[command(hide = true)]
     Aws(Passthrough),
-    /// Not available in this build
-    #[command(hide = true)]
-    Gcp(Passthrough),
+    /// A replica in your Google Cloud project, in the VPC your apps run in: a Confidential Space
+    /// VM, with its service account, Cloud NAT and firewall rule made when missing
+    Gcp(gcp::GcpArgs),
     /// Move an Azure replica to the newest verified release, keeping its identity, network and pin
     Upgrade(UpgradeArgs),
 }
@@ -143,7 +146,8 @@ pub struct UpgradeArgs {
 
 pub async fn run(env: &Env, cmd: DeployCmd) -> anyhow::Result<()> {
     match cmd {
-        DeployCmd::Aws(_) | DeployCmd::Gcp(_) => bail!("`seal deploy aws|gcp` is not available in this build"),
+        DeployCmd::Aws(_) => bail!("`seal deploy aws` is not available in this build"),
+        DeployCmd::Gcp(args) => gcp::deploy(env, args).await,
         DeployCmd::Azure(args) => azure(env, args).await,
         DeployCmd::Upgrade(args) => upgrade(env, args).await,
     }
@@ -161,30 +165,24 @@ fn control<T>(r: Result<T, seal::admin::ControlError>) -> anyhow::Result<T> {
     r.map_err(|e| anyhow!("control plane: {e}"))
 }
 
-/// The release to deploy and its template, checked as the module docs say.
+/// The release to deploy on `platform`, checked as the module docs say: verified, the one
+/// `wanted` names or the newest, and for tenants with `cosign_releases` co-signed by its admins.
 async fn choose(
     env: &Env,
     admin: &Admin,
     current: &Current,
-    args: &ReleaseArgs,
+    wanted: Option<Measurement>,
     time: &TrustedTime,
-) -> anyhow::Result<(Candidate, ReleaseTemplate)> {
+    platform: PlatformId,
+) -> anyhow::Result<Candidate> {
     let trust = env.trust()?.full.ok_or_else(|| {
         anyhow!("the trust names no release trust (`releases` in --trust FILE): deploying verifies releases with it")
     })?;
     let verifier = ReleaseVerifier::new(trust.releases);
     let control_plane = admin.control();
-    let from_file = args.template.as_deref().map(read_template).transpose()?;
-    let wanted = match (&from_file, args.release) {
-        (Some(t), Some(m)) if t.measurement != m => {
-            bail!("the template's policy measures {}, not --release {m}", t.measurement)
-        }
-        (Some(t), _) => Some(t.measurement),
-        (None, m) => m,
-    };
     let listed = match &wanted {
-        Some(m) => vec![control(control_plane.get_release(PlatformId::AzureSnpAci, m).await)?],
-        None => control(control_plane.get_releases(PlatformId::AzureSnpAci).await)?,
+        Some(m) => vec![control(control_plane.get_release(platform, m).await)?],
+        None => control(control_plane.get_releases(platform).await)?,
     };
     let latest = match control_plane.get_checkpoint().await {
         Ok(checkpoint) => Some(checkpoint),
@@ -193,23 +191,12 @@ async fn choose(
             None
         }
     };
-    let (verified, refused) = release::verify_all(&verifier, listed, latest.as_ref(), time);
+    let (verified, refused) = release::verify_all(&verifier, listed, latest.as_ref(), time, platform);
     for line in &refused {
         eprintln!("not verified: {line}");
     }
-    let candidate = release::pick(&verified, wanted.as_ref())?;
+    let candidate = release::pick(&verified, wanted.as_ref(), platform)?;
     let m = candidate.measurement();
-    let template = match from_file {
-        Some(t) => t,
-        None => {
-            let value = control(control_plane.get_release_template(PlatformId::AzureSnpAci, &m).await)
-                .context("the release template")?;
-            ReleaseTemplate::parse(&value).context("the release template")?
-        }
-    };
-    if template.measurement != m {
-        bail!("the release template's policy measures {}, not release {m}: refusing it", template.measurement);
-    }
     let root = current.tenant.root();
     if root.cosign_releases {
         let cosigned = match control_plane.get_release_cosign(admin.tenant(), &m).await {
@@ -226,13 +213,46 @@ async fn choose(
     }
     let manifest = candidate.release.manifest();
     eprintln!(
-        "release {} (commit {}), measurement {m}, host_data {}: verified (public since {}, log entry {})",
+        "release {} (commit {}), measurement {m}: verified (public since {}, log entry {})",
         manifest.version,
         manifest.source_commit,
-        crate::config::hex(&template.host_data),
         candidate.release.public_since(),
         candidate.leaf_index
     );
+    Ok(candidate)
+}
+
+/// The Azure release to deploy and its ACI template (`--template`, else the control plane's),
+/// refused unless the template's policy measures that release.
+async fn choose_azure(
+    env: &Env,
+    admin: &Admin,
+    current: &Current,
+    args: &ReleaseArgs,
+    time: &TrustedTime,
+) -> anyhow::Result<(Candidate, ReleaseTemplate)> {
+    let from_file = args.template.as_deref().map(read_template).transpose()?;
+    let wanted = match (&from_file, args.release) {
+        (Some(t), Some(m)) if t.measurement != m => {
+            bail!("the template's policy measures {}, not --release {m}", t.measurement)
+        }
+        (Some(t), _) => Some(t.measurement),
+        (None, m) => m,
+    };
+    let candidate = choose(env, admin, current, wanted, time, PlatformId::AzureSnpAci).await?;
+    let m = candidate.measurement();
+    let template = match from_file {
+        Some(t) => t,
+        None => {
+            let value = control(admin.control().get_release_template(PlatformId::AzureSnpAci, &m).await)
+                .context("the release template")?;
+            ReleaseTemplate::parse(&value).context("the release template")?
+        }
+    };
+    if template.measurement != m {
+        bail!("the release template's policy measures {}, not release {m}: refusing it", template.measurement);
+    }
+    eprintln!("  its ACI policy's host_data {}", crate::config::hex(&template.host_data));
     Ok((candidate, template))
 }
 
@@ -315,7 +335,7 @@ fn text<'a>(v: &'a Value, what: &str) -> anyhow::Result<&'a str> {
 /// Writes the template (and parameters, with the registry password) and runs
 /// `az deployment group create`.
 async fn deploy(
-    az: &Az,
+    az: &Cli,
     resource_group: &str,
     name: &str,
     template: &Value,
@@ -350,11 +370,11 @@ fn deploy_lines(resource_group: &str, name: &str, registry: bool) -> Vec<String>
     if registry {
         args.extend(["--parameters", "@PARAMETERS"]);
     }
-    vec![line(&args)]
+    vec![AZ.line(&args)]
 }
 
 /// Where the SDK reaches a deployed replica.
-async fn report(az: &Az, resource_group: &str, name: &str, template: &ReleaseTemplate) -> anyhow::Result<()> {
+async fn report(az: &Cli, resource_group: &str, name: &str, template: &ReleaseTemplate) -> anyhow::Result<()> {
     let show = az.show(&["container", "show", "-g", resource_group, "-n", name]).await?;
     let ip = show.as_ref().and_then(|s| Deployed::parse(s).ok()).and_then(|d| d.ip);
     match ip {
@@ -367,6 +387,43 @@ async fn report(az: &Az, resource_group: &str, name: &str, template: &ReleaseTem
     Ok(())
 }
 
+/// How long a replica may take from `az deployment group create` returning to serving.
+const READY_SECS: u64 = 600;
+
+/// Waits until the replica serves: the group running and the enclave saying so in its log
+/// (the address is private, so this reads Azure's view of it). An enclave that cannot boot
+/// says why (most often a deployment grant not yet in force) and ACI restarts it; that reason
+/// is reported once and the wait goes on, until `READY_SECS`.
+async fn wait_azure(az: &Cli, rg: &str, name: &str) -> anyhow::Result<()> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(READY_SECS);
+    let mut said = String::new();
+    loop {
+        let logs = az.text(&["container", "logs", "-g", rg, "-n", name]).await.unwrap_or_default();
+        if logs.contains("serving the API") {
+            say!("{} {name}: serving", ui::dim("·"));
+            return Ok(());
+        }
+        if let Some(reason) = boot_failure(&logs).filter(|r| *r != said) {
+            say!("{} {name} has not booted yet: {reason}", ui::dim("·"));
+            said = reason;
+        }
+        if std::time::Instant::now() > deadline {
+            bail!(
+                "{name} is not serving after {} min{}; its log: az container logs -g {rg} -n {name}",
+                READY_SECS / 60,
+                if said.is_empty() { String::new() } else { format!(" ({said})") }
+            );
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+    }
+}
+
+/// The reason in an enclave's log that it could not boot, if it says one.
+fn boot_failure(logs: &str) -> Option<String> {
+    let line = logs.lines().rev().find(|l| l.contains("ERROR") && l.contains("boot"))?;
+    Some(line.split_once("boot:").map_or(line, |(_, why)| why).trim().to_owned())
+}
+
 fn print_plan(title: &str, lines: &[String], template: &Value) -> anyhow::Result<()> {
     eprintln!("{title}");
     for l in lines {
@@ -374,33 +431,6 @@ fn print_plan(title: &str, lines: &[String], template: &Value) -> anyhow::Result
     }
     println!("{}", serde_json::to_string_pretty(template)?);
     Ok(())
-}
-
-/// What `azure` does, step by step: said as it goes, or for `--dry-run` listed with the
-/// commands that would change something, none of which runs.
-struct Steps<'a> {
-    az: &'a Az,
-    dry: bool,
-    lines: Vec<String>,
-}
-
-impl Steps<'_> {
-    fn note(&mut self, text: String) {
-        if self.dry {
-            self.lines.push(text);
-        } else {
-            say!("{} {text}", ui::dim("·"));
-        }
-    }
-
-    /// `az ARGS`'s output; `None` on a dry run, which lists the command instead.
-    async fn change(&mut self, args: &[&str]) -> anyhow::Result<Option<Value>> {
-        if self.dry {
-            self.lines.push(format!("  {}", line(args)));
-            return Ok(None);
-        }
-        self.az.json(args).await.map(Some)
-    }
 }
 
 /// The replica's subnet: a prepared one (`--subnet`, checked), or what `network::plan` found.
@@ -411,7 +441,7 @@ enum Network {
 
 /// The VNet `wanted` names (a resource id, or a name in the subscription), else the one chosen
 /// at the terminal.
-async fn find_vnet(env: &Env, az: &Az, wanted: Option<&str>) -> anyhow::Result<Vnet> {
+async fn find_vnet(env: &Env, az: &Cli, wanted: Option<&str>) -> anyhow::Result<Vnet> {
     if let Some(id) = wanted.filter(|w| w.starts_with("/subscriptions/")) {
         let vnet = az.show(&["network", "vnet", "show", "--ids", id]).await?.ok_or_else(|| anyhow!("no VNet {id}"))?;
         return Vnet::parse(&vnet);
@@ -465,7 +495,7 @@ async fn register_audience(steps: &mut Steps<'_>, tenant: &str) -> anyhow::Resul
              URI api://APP_ID, with a service principal), then pass --audience api://APP_ID"
         )
     };
-    let apps = steps.az.json(&["ad", "app", "list", "--display-name", &display]).await.with_context(refused)?;
+    let apps = steps.cli.json(&["ad", "app", "list", "--display-name", &display]).await.with_context(refused)?;
     let found = registered_app(&apps);
     let (app_id, has_uri) = match &found {
         Some(found) => found.clone(),
@@ -488,7 +518,7 @@ async fn register_audience(steps: &mut Steps<'_>, tenant: &str) -> anyhow::Resul
         (None, true) => Value::Null,
         _ => {
             let filter = format!("appId eq '{app_id}'");
-            steps.az.json(&["ad", "sp", "list", "--filter", &filter]).await.with_context(refused)?
+            steps.cli.json(&["ad", "sp", "list", "--filter", &filter]).await.with_context(refused)?
         }
     };
     if !principals.as_array().is_some_and(|p| !p.is_empty()) {
@@ -501,7 +531,7 @@ async fn register_audience(steps: &mut Steps<'_>, tenant: &str) -> anyhow::Resul
 /// `seal-nat` in `rg`: the one an earlier run made, else a new one with a static public IP.
 async fn nat_gateway(steps: &mut Steps<'_>, rg: &str, location: &str, tags: &str) -> anyhow::Result<String> {
     let show = ["network", "nat", "gateway", "show", "-g", rg, "-n", NAT];
-    if let Some(nat) = steps.az.show(&show).await? {
+    if let Some(nat) = steps.cli.show(&show).await? {
         steps.note(format!("NAT gateway: using {NAT}"));
         return Ok(text(&nat["id"], "NAT gateway id")?.to_owned());
     }
@@ -513,7 +543,7 @@ async fn nat_gateway(steps: &mut Steps<'_>, rg: &str, location: &str, tags: &str
     if steps.dry {
         return Ok("NAT_GATEWAY_ID".to_owned());
     }
-    let nat = steps.az.show(&show).await?.ok_or_else(|| anyhow!("{NAT} was created but az does not show it"))?;
+    let nat = steps.cli.show(&show).await?.ok_or_else(|| anyhow!("{NAT} was created but az does not show it"))?;
     Ok(text(&nat["id"], "NAT gateway id")?.to_owned())
 }
 
@@ -569,9 +599,19 @@ async fn prepare(
 }
 
 async fn azure(env: &Env, args: AzureArgs) -> anyhow::Result<()> {
+    AZ.preflight().await?;
+    let mut steps = Steps::new(&AZ, args.release.dry_run);
+    let result = azure_steps(env, args, &mut steps).await;
+    if result.is_err() {
+        steps.explain_failure("seal deploy azure (with the same arguments)");
+    }
+    result
+}
+
+async fn azure_steps(env: &Env, args: AzureArgs, steps: &mut Steps<'_>) -> anyhow::Result<()> {
     let time = crate::time();
     let (admin, current, pin) = tenant(env, &time).await?;
-    let (candidate, release) = choose(env, &admin, &current, &args.release, &time).await?;
+    let (candidate, release) = choose_azure(env, &admin, &current, &args.release, &time).await?;
     let version = candidate.release.manifest().version.clone();
     let password = registry_password(&args.release)?;
     let audience = audience(&args, &current)?;
@@ -582,9 +622,9 @@ async fn azure(env: &Env, args: AzureArgs) -> anyhow::Result<()> {
         );
     }
     let tenant = &pin.tenant;
-    let az = Az;
+    let az = &AZ;
     let wanted = network::wanted(args.vnet.as_deref(), args.subnet.as_deref())?;
-    let vnet = find_vnet(env, &az, wanted.vnet.as_deref()).await?;
+    let vnet = find_vnet(env, az, wanted.vnet.as_deref()).await?;
     let network = match &wanted.subnet {
         Some(s) => {
             let subnet = vnet.subnet(s).ok_or_else(|| anyhow!("{} has no subnet {s}", vnet.name))?;
@@ -598,7 +638,6 @@ async fn azure(env: &Env, args: AzureArgs) -> anyhow::Result<()> {
     let name = args.name.clone().unwrap_or_else(|| format!("seal-{tenant}"));
     let identity = args.identity.clone().unwrap_or_else(|| format!("seal-{tenant}"));
     let tags = format!("seal-tenant={tenant}");
-    let mut steps = Steps { az: &az, dry: args.release.dry_run, lines: Vec::new() };
 
     let audience = match audience {
         Some(a) => {
@@ -606,14 +645,14 @@ async fn azure(env: &Env, args: AzureArgs) -> anyhow::Result<()> {
             steps.note(format!("audience {a}{own}"));
             a
         }
-        None => register_audience(&mut steps, tenant.as_ref()).await?,
+        None => register_audience(steps, tenant.as_ref()).await?,
     };
     let subnet = match network {
         Network::Prepared { id, nat } => {
             steps.note(format!("subnet {} in {}: delegated, NAT gateway {nat}", leaf(&id), vnet.name));
             id
         }
-        Network::Plan(plan) => prepare(&mut steps, &vnet, plan, &rg, &location, &tags).await?,
+        Network::Plan(plan) => prepare(steps, &vnet, plan, &rg, &location, &tags).await?,
     };
     if !steps.dry {
         let shown = az.show(&["network", "vnet", "subnet", "show", "--ids", &subnet]).await?;
@@ -673,16 +712,19 @@ async fn azure(env: &Env, args: AzureArgs) -> anyhow::Result<()> {
         let title = format!("dry run: {name} in {rg} ({location}), pinned to {pin}; nothing is changed");
         return print_plan(&title, &steps.lines, &template);
     }
-    deploy(&az, &rg, &name, &template, password.as_ref()).await?;
-    report(&az, &rg, &name, &release).await
+    deploy(az, &rg, &name, &template, password.as_ref()).await?;
+    steps.made(&format!("container group {name}"), &["container", "delete", "-g", &rg, "-n", &name, "--yes"]);
+    wait_azure(az, &rg, &name).await?;
+    report(az, &rg, &name, &release).await
 }
 
 async fn upgrade(env: &Env, args: UpgradeArgs) -> anyhow::Result<()> {
     let time = crate::time();
     let (admin, current, pin) = tenant(env, &time).await?;
+    AZ.preflight().await?;
     let rg = args.resource_group.as_str();
     let name = args.name.clone().unwrap_or_else(|| format!("seal-{}", pin.tenant));
-    let az = Az;
+    let az = &AZ;
     let show = az
         .show(&["container", "show", "-g", rg, "-n", &name])
         .await?
@@ -691,7 +733,7 @@ async fn upgrade(env: &Env, args: UpgradeArgs) -> anyhow::Result<()> {
     if deployed.pin != pin.to_string() {
         bail!("{name} is pinned to {}, not this home's tenant {pin}", deployed.pin);
     }
-    let (candidate, release) = choose(env, &admin, &current, &args.release, &time).await?;
+    let (candidate, release) = choose_azure(env, &admin, &current, &args.release, &time).await?;
     let m = candidate.measurement();
     let version = candidate.release.manifest().version.clone();
     match deployed.measurement {
@@ -705,7 +747,8 @@ async fn upgrade(env: &Env, args: UpgradeArgs) -> anyhow::Result<()> {
                     let trust = env.trust()?.full.ok_or_else(|| anyhow!("no release trust"))?;
                     let verifier = ReleaseVerifier::new(trust.releases);
                     let latest = admin.control().get_checkpoint().await.ok();
-                    let (verified, _) = release::verify_all(&verifier, vec![evidence], latest.as_ref(), &time);
+                    let (verified, _) =
+                        release::verify_all(&verifier, vec![evidence], latest.as_ref(), &time, PlatformId::AzureSnpAci);
                     verified.first().filter(|c| c.leaf_index > candidate.leaf_index).cloned()
                 }
                 Err(_) => None,
@@ -749,15 +792,16 @@ async fn upgrade(env: &Env, args: UpgradeArgs) -> anyhow::Result<()> {
         let lines = deploy_lines(rg, &name, password.is_some());
         return print_plan(&format!("dry run: {name} in {rg} from {from} to {version} ({m})"), &lines, &template);
     }
-    deploy(&az, rg, &name, &template, password.as_ref()).await.with_context(|| {
+    deploy(az, rg, &name, &template, password.as_ref()).await.with_context(|| {
         format!(
             "if Azure refuses to update the group in place, delete it (az container delete -g {rg} -n {name}) and \
              run `seal deploy azure` with -g {rg} --name {name}, the same --identity and --subnet {}",
             deployed.subnet
         )
     })?;
+    wait_azure(az, rg, &name).await?;
     say!("upgraded {name} from {from} to release {version} ({m})");
-    report(&az, rg, &name, &release).await
+    report(az, rg, &name, &release).await
 }
 
 #[cfg(test)]
@@ -792,6 +836,16 @@ mod tests {
             registered_app(&json!([{"displayName": "x"}, {"appId": "a1", "identifierUris": ["api://a1"]}])),
             Some(("a1".into(), true))
         );
+    }
+
+    #[test]
+    fn a_boot_failure_is_read_from_the_log() {
+        let log = "INFO seal_enclave: starting\nERROR seal_enclave: boot: Unavailable: guardian: unavailable: guardian answered HTTP 504\n";
+        assert_eq!(
+            boot_failure(log).as_deref(),
+            Some("Unavailable: guardian: unavailable: guardian answered HTTP 504")
+        );
+        assert_eq!(boot_failure("INFO seal_enclave: serving the API and tunnels"), None);
     }
 
     #[test]

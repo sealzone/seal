@@ -1,4 +1,4 @@
-//! Which release to deploy: every Azure enclave release the control plane lists, verified with
+//! Which release to deploy: every enclave release for the platform the control plane lists, verified with
 //! `seal_verify::ReleaseVerifier` (signatures, log inclusion, the time lock, the log's
 //! revocations), newest by log position. The control plane can withhold releases, never forge
 //! one; a release that does not verify is reported and skipped.
@@ -22,20 +22,21 @@ impl Candidate {
     }
 }
 
-/// The verified Azure enclave releases among `listed`, oldest first, and one line for each
-/// that did not verify. `latest` (the control plane's checkpoint) replaces a stored evidence's
+/// The verified enclave releases for `platform` among `listed`, oldest first, and one line for
+/// each that did not verify. `latest` (the control plane's checkpoint) replaces a stored evidence's
 /// `fresh` checkpoint when it covers at least as many entries, as the enclave does.
 pub fn verify_all(
     verifier: &ReleaseVerifier,
     listed: Vec<ReleaseEvidence>,
     latest: Option<&SignedCheckpoint>,
     time: &TrustedTime,
+    platform: PlatformId,
 ) -> (Vec<Candidate>, Vec<String>) {
     let mut verified = Vec::new();
     let mut refused = Vec::new();
     for mut evidence in listed {
         let manifest = &evidence.manifest.body;
-        if manifest.component != Component::Enclave || manifest.platform != PlatformId::AzureSnpAci {
+        if manifest.component != Component::Enclave || manifest.platform != platform {
             continue;
         }
         if let Some(latest) = latest.filter(|l| l.checkpoint.size >= evidence.fresh.checkpoint.size) {
@@ -52,15 +53,25 @@ pub fn verify_all(
 }
 
 /// `wanted`, or the newest.
-pub fn pick(verified: &[Candidate], wanted: Option<&Measurement>) -> anyhow::Result<Candidate> {
+pub fn pick(verified: &[Candidate], wanted: Option<&Measurement>, platform: PlatformId) -> anyhow::Result<Candidate> {
     let found = match wanted {
         Some(m) => verified.iter().find(|c| &c.measurement() == m),
         None => verified.last(),
     };
     match (found, wanted) {
         (Some(c), _) => Ok(c.clone()),
-        (None, Some(m)) => bail!("release {m} is not a verified Azure enclave release"),
-        (None, None) => bail!("the control plane lists no Azure enclave release that verifies"),
+        (None, Some(m)) => bail!("release {m} is not a verified {} enclave release", name(platform)),
+        (None, None) => bail!("the control plane lists no {} enclave release that verifies", name(platform)),
+    }
+}
+
+/// A platform as the CLI's messages name it.
+pub fn name(platform: PlatformId) -> &'static str {
+    match platform {
+        PlatformId::AzureSnpAci => "Azure",
+        PlatformId::GcpConfidentialSpace => "GCP",
+        PlatformId::AwsNitro => "AWS",
+        PlatformId::Sim => "sim",
     }
 }
 
@@ -144,22 +155,41 @@ mod tests {
         let gcp = log.release(4, PlatformId::GcpConfidentialSpace, &[1, 2]);
         let latest = log.log.checkpoint();
         let listed = vec![new, unsigned, old, gcp];
-        let (verified, refused) = verify_all(&log.verifier(0), listed, Some(&latest), &now());
+        let (verified, refused) = verify_all(&log.verifier(0), listed, Some(&latest), &now(), PlatformId::AzureSnpAci);
         let ms: Vec<_> = verified.iter().map(Candidate::measurement).collect();
         assert_eq!(ms, [Measurement([1; 48]), Measurement([2; 48])], "oldest first, GCP skipped");
         assert_eq!(refused.len(), 1, "{refused:?}");
         assert!(refused[0].contains("0.3.0") && refused[0].contains("signatures"), "{refused:?}");
-        assert_eq!(pick(&verified, None).unwrap().measurement(), Measurement([2; 48]));
-        assert_eq!(pick(&verified, Some(&Measurement([1; 48]))).unwrap().measurement(), Measurement([1; 48]));
-        assert!(pick(&verified, Some(&Measurement([3; 48]))).is_err(), "an unverified release is never picked");
-        assert!(pick(&[], None).is_err());
+        assert_eq!(pick(&verified, None, PlatformId::AzureSnpAci).unwrap().measurement(), Measurement([2; 48]));
+        assert_eq!(
+            pick(&verified, Some(&Measurement([1; 48])), PlatformId::AzureSnpAci).unwrap().measurement(),
+            Measurement([1; 48])
+        );
+        assert!(
+            pick(&verified, Some(&Measurement([3; 48])), PlatformId::AzureSnpAci).is_err(),
+            "an unverified release is never picked"
+        );
+        assert!(pick(&[], None, PlatformId::AzureSnpAci).is_err());
+        let (gcp, _) = verify_all(
+            &log.verifier(0),
+            vec![log.release(5, PlatformId::GcpConfidentialSpace, &[1, 2])],
+            Some(&log.log.checkpoint()),
+            &now(),
+            PlatformId::GcpConfidentialSpace,
+        );
+        assert_eq!(
+            pick(&gcp, None, PlatformId::GcpConfidentialSpace).unwrap().measurement(),
+            Measurement([5; 48]),
+            "each platform picks its own"
+        );
     }
 
     #[test]
     fn the_time_lock_holds_releases_back() {
         let mut log = Log::new("time-lock");
         let evidence = log.release(1, PlatformId::AzureSnpAci, &[1, 2]);
-        let (verified, refused) = verify_all(&log.verifier(3600), vec![evidence.clone()], None, &now());
+        let (verified, refused) =
+            verify_all(&log.verifier(3600), vec![evidence.clone()], None, &now(), PlatformId::AzureSnpAci);
         assert!(verified.is_empty());
         assert!(refused[0].contains("time lock"), "{refused:?}");
         assert!(matches!(log.verifier(3600).verify(&evidence, &now()), Err(VerifyError::TimeLock { .. })));
@@ -171,18 +201,19 @@ mod tests {
         let evidence = log.release(1, PlatformId::AzureSnpAci, &[1, 2]);
         let mut stale = evidence.clone();
         stale.fresh.cosignatures.clear();
-        let (verified, _) = verify_all(&log.verifier(0), vec![stale.clone()], None, &now());
+        let (verified, _) = verify_all(&log.verifier(0), vec![stale.clone()], None, &now(), PlatformId::AzureSnpAci);
         assert!(verified.is_empty(), "the stored checkpoint does not verify");
         log.release(2, PlatformId::AzureSnpAci, &[1, 2]);
         let latest = log.log.checkpoint();
-        let (verified, _) = verify_all(&log.verifier(0), vec![stale.clone()], Some(&latest), &now());
+        let (verified, _) =
+            verify_all(&log.verifier(0), vec![stale.clone()], Some(&latest), &now(), PlatformId::AzureSnpAci);
         assert_eq!(verified.len(), 1, "replaced by the latest");
         // A checkpoint smaller than the stored one is not used.
         let smaller = evidence.included.checkpoint.clone();
         let mut newer = evidence;
         newer.fresh = latest;
         newer.fresh.cosignatures.clear();
-        let (verified, _) = verify_all(&log.verifier(0), vec![newer], Some(&smaller), &now());
+        let (verified, _) = verify_all(&log.verifier(0), vec![newer], Some(&smaller), &now(), PlatformId::AzureSnpAci);
         assert!(verified.is_empty(), "the stored one stays");
     }
 }
