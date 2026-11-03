@@ -295,7 +295,9 @@ Seal or cloud outage blocks enclave boots and first-time tenant key fetches at o
 running enclaves only after the tenant's freshness window (`STATE_FRESHNESS_SECS`, 24 h, unless
 the state sets a shorter one) without a fresh state statement.
 
-Seal's guardian runs on ACI with its root behind Key Vault Premium. It generated the root in
+Seal runs every platform's guardian on ACI: Azure's, and those serving GCP and AWS enclaves, each
+its own build and root (a guardian checks the evidence of the platform it serves, whatever it
+runs on). Each guardian has its root behind Key Vault Premium. It generated the root in
 its TEE at the ceremony and keeps it only RSA-OAEP-wrapped under an exportable `RSA-HSM` key
 whose immutable release policy pins the guardian's `host_data`
 (`seal_guardian::keysource::KeyVaultKeySource`). Only Azure Key Vault has a release policy the
@@ -388,7 +390,7 @@ and optional encryption; named blobs (admin-signed versions stored by the contro
 looked up through the enclave); the CLI, the Rust, Python, Node and Go SDKs and the browser verifier;
 the Azure platform (customer enclaves, Seal's hosted replicas, Seal's guardian on Key Vault
 Premium), GCP Confidential Space and the sim platform; customer-deployed enclaves pinned to one
-tenant (`seal deploy azure`, `seal deploy upgrade`); blobs wrapped per platform (HPKE to
+tenant (`seal deploy azure`, `seal deploy gcp`, `seal deploy upgrade`); blobs wrapped per platform (HPKE to
 certified wrap keys); periodic attestation, and challenged attestation on every SDK connection
 that carries a secret, proof or token; sessions with 10-minute tokens, extended every 5
 minutes and ended server-side on close or on an integrity finding; upstream key pins in the
@@ -405,8 +407,8 @@ the Hardened tier in practice (it needs compiled-in evidence checks, and none sh
 aggregated telemetry metrics; leases; budgets.
 
 **Designed, not built:** AWS Nitro (only evidence verification, `seal_attest::nitro`, is built;
-the attestor, clock, egress proxy and key source are stubs), and customer-run enclaves on GCP Confidential Space (`seal
-deploy aws|gcp`); the guardian's root on Managed HSM in two regions; self-hosted guardians on
+the attestor, clock, egress proxy and key source are stubs), and customer-run enclaves on it
+(`seal deploy aws`); the guardian's root on Managed HSM in two regions; self-hosted guardians on
 Nitro with AWS KMS; customer-managed KMS with Seal's guardian. That last one is Azure Key Vault
 only: Seal's guardian performs Key Vault SKR against the customer's own key, whose immutable
 release policy pins the guardian's measurement, and the tenant root names that key so the

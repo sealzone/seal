@@ -180,10 +180,14 @@ seal secret --to https://api.openai.com/v1 --app checkout --header authorization
 seal secret --name openai --key-file admin.key --to https://api.openai.com/v1 --app checkout < key.txt
 seal blobs        # the named blobs apps use as seal.session("openai")
 seal deploy azure   # an enclave replica in the VNet your apps run in
+seal deploy gcp     # or a Confidential Space VM in the VPC your apps run in
 ```
 
 `seal deploy azure` asks which VNet, then creates the replica's subnet, NAT gateway, identity
-and audience, and the grant. Without an OS keychain, `seal login` keeps the login in a private
+and audience, and the grant. `seal deploy gcp` does the same in a Google Cloud project: the VM's
+service account, Cloud NAT, a firewall rule for the VPC, and the grant. Each step looks before it
+creates anything, so a run that stopped can simply be run again; a failed run lists what it made
+and the commands that remove it. Without an OS keychain, `seal login` keeps the login in a private
 file.
 
 Every change shows its diff against the state in force, and whether it has to wait the pending

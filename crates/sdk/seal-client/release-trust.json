@@ -1,6 +1,8 @@
 {
   "guardians": {
-    "azure_snp_aci": "c16c179cd37e3096dd5197b791ef1a36849c00eab9d3e84a8b67683e0ed5edad"
+    "azure_snp_aci": "c16c179cd37e3096dd5197b791ef1a36849c00eab9d3e84a8b67683e0ed5edad",
+    "gcp_confidential_space": "93083e54b4c9fba796a863bfbc8612915d74eccfc02b22cd1421aee23ddb25a4",
+    "aws_nitro": "526516c1f2c63725a10c69cd130be7d171670ea28f0c917ed03d21bb2d600897"
   },
   "releases": {
     "release_keys": [

@@ -8,7 +8,7 @@ each item are in [ARCHITECTURE.md](docs/ARCHITECTURE.md#scope) and
 
 - Enclaves on Azure confidential containers (SEV-SNP) and GCP Confidential Space (TDX), plus
   a local simulator.
-- Customer-run enclave replicas pinned to one tenant (`seal deploy azure`,
+- Customer-run enclave replicas pinned to one tenant (`seal deploy azure`, `seal deploy gcp`,
   `seal deploy upgrade`), and Seal-hosted replicas for callers outside your network.
 - HTTP header injection, Postgres and Redis.
 - Sessions through the SDK tunnel: 10-minute tokens, extended every 5 minutes, ended on close
@@ -40,7 +40,7 @@ These are designed but not built:
 
 - AWS Nitro Enclaves. Evidence verification is built; the attestor, clock, egress proxy and
   key source are not.
-- Customer-run enclaves on AWS and GCP (`seal deploy aws` and `seal deploy gcp`).
+- Customer-run enclaves on AWS (`seal deploy aws`).
 - Self-hosted guardians on Nitro with AWS KMS.
 - Customer-managed keys with Seal's guardian: the guardian unwraps against your own Azure Key
   Vault key, whose release policy pins the guardian's measurement.

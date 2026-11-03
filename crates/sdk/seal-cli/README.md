@@ -45,8 +45,9 @@ seal changes --watch              # proposals waiting for signatures, logged cha
 # Verify telemetry.
 seal telemetry --receipts receipts.jsonl
 
-# Deploy enclave replicas into your Azure subscription.
+# Deploy enclave replicas into your Azure subscription or Google Cloud project.
 seal deploy azure --vnet app-vnet
+seal deploy gcp --network app-vpc --zone us-central1-a
 ```
 
 The CLI builds every change on the verified state and shows it as classified differences.
