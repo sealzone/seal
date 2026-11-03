@@ -4,6 +4,12 @@
 //! seal-release trust --log-info F --release-key F... --threshold M --registrar-key F
 //!                    [--time-lock SECS] [--guardian PLATFORM=HEX]...           trust.json to stdout
 //! seal-release measure gcp sha256:<digest>                                     the GCP measurement
+//! seal-release measure aws (--nitro-cli-output F | --pcr0 HEX --pcr1 HEX --pcr2 HEX)
+//!                                                                              the AWS measurement of an EIF's PCRs
+//! seal-release nitro-eif --image REPO@sha256:D --blobs DIR --pins F --out F [--expect HEX]
+//!                                                                              check the boot blobs against their
+//!                                                                              pins, build the EIF with nitro-cli,
+//!                                                                              print PCR0..2 and the measurement
 //! seal-release aci-policy --template T --container NAME --aci-containers F --out-dir D [--policy F]
 //!                         [--component enclave|guardian]                       generate (az confcom) or read the policy,
 //!                                                                              rewrite it; writes policy.rego and
@@ -47,7 +53,7 @@ use clap::{Parser, Subcommand};
 
 use seal_proto::release::Component;
 use seal_proto::{Measurement, PlatformId, PublicKey, ServiceKeyVersion};
-use seal_release::{aci, policy, release, trust};
+use seal_release::{aci, nitro, policy, release, trust};
 
 #[derive(Parser)]
 #[command(name = "seal-release", about = "Seal release tooling (development)")]
@@ -97,6 +103,23 @@ enum Command {
         /// What Seal's container runs: its operator-set variables differ
         #[arg(long, value_parser = parse_component, default_value = "enclave")]
         component: Component,
+    },
+    /// Build the Nitro enclave image (EIF) and print its measurement
+    NitroEif {
+        /// The release's container image, by digest
+        #[arg(long)]
+        image: String,
+        /// The boot blobs (`NITRO_CLI_BLOBS`)
+        #[arg(long)]
+        blobs: PathBuf,
+        /// Their pinned SHA-256s (`sha256sum` format), committed with the release
+        #[arg(long)]
+        pins: PathBuf,
+        #[arg(long)]
+        out: PathBuf,
+        /// Fail unless the EIF measures this (a rebuild of a published release)
+        #[arg(long)]
+        expect: Option<Measurement>,
     },
     /// The Key Vault release policy a guardian's root key is created with
     KvReleasePolicy {
@@ -165,7 +188,20 @@ enum Command {
 
 #[derive(Subcommand)]
 enum MeasureCmd {
-    Gcp { digest: String },
+    Gcp {
+        digest: String,
+    },
+    /// PCR0..2 of an EIF: what `nitro-cli build-enclave` or `describe-eif` printed, or each in hex
+    Aws {
+        #[arg(long, conflicts_with_all = ["pcr0", "pcr1", "pcr2"])]
+        nitro_cli_output: Option<PathBuf>,
+        #[arg(long, requires_all = ["pcr1", "pcr2"])]
+        pcr0: Option<String>,
+        #[arg(long)]
+        pcr1: Option<String>,
+        #[arg(long)]
+        pcr2: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -248,6 +284,29 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         }
         Command::Measure(MeasureCmd::Gcp { digest }) => {
             println!("{}", seal_attest::gcp::measurement(&digest)?);
+        }
+        Command::Measure(MeasureCmd::Aws { nitro_cli_output, pcr0, pcr1, pcr2 }) => {
+            let pcrs = match (nitro_cli_output, pcr0, pcr1, pcr2) {
+                (Some(path), ..) => nitro::Pcrs::from_nitro_cli(&read(&path)?)?,
+                (None, Some(pcr0), Some(pcr1), Some(pcr2)) => nitro::Pcrs::from_hex(&pcr0, &pcr1, &pcr2)?,
+                _ => bail!("give --nitro-cli-output, or --pcr0, --pcr1 and --pcr2"),
+            };
+            println!("{}", pcrs.measurement());
+        }
+        Command::NitroEif { image, blobs, pins, out, expect } => {
+            let pins = nitro::parse_pins(&read(&pins)?)?;
+            let pcrs = nitro::build_eif(&image, &blobs, &pins, &out)?;
+            let measurement = pcrs.measurement();
+            println!("eif {}", out.display());
+            println!("pcr0 {}", hex(&pcrs.pcr0));
+            println!("pcr1 {}", hex(&pcrs.pcr1));
+            println!("pcr2 {}", hex(&pcrs.pcr2));
+            println!("measurement {measurement}");
+            if let Some(expected) = expect {
+                if measurement != expected {
+                    bail!("the EIF measures {measurement}, not {expected}");
+                }
+            }
         }
         Command::AciPolicy { template, container, aci_containers, out_dir, policy, component } => {
             let generated = match policy {
