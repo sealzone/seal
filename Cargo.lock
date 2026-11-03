@@ -3639,8 +3639,11 @@ version = "0.2.9"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
+ "ciborium",
+ "coset",
  "ed25519-dalek",
  "hex",
+ "libc",
  "proptest",
  "rand",
  "rustls",

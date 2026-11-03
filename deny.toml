@@ -60,6 +60,7 @@ deny = [
     { name = "azure_identity", reason = "one IMDS GET does not need an SDK" },
     { name = "aws-nitro-enclaves-cose", reason = "OpenSSL; use coset" },
     { name = "serde_cbor", reason = "unmaintained; use ciborium" },
+    { name = "aws-nitro-enclaves-nsm-api", reason = "pulls serde_cbor and nix; seal-tee speaks to /dev/nsm itself" },
     # aws-lc-rs needs a C/cmake build that complicates reproducible TEE images. It appears
     # only when the SDK's `aws` feature is on, which also switches rustls' aws-lc backend on
     # through feature unification; scripts/check-deps.sh proves no TEE crate ever gets it.

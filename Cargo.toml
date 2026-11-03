@@ -87,6 +87,8 @@ coset = "0.4"
 
 # TEE devices
 sev = { version = "8", default-features = false, features = ["snp"] }
+# The Nitro NSM ioctl (seal-tee) and vsock errnos (seal-net). Already in every tree (tokio, mio).
+libc = "0.2"
 
 # network
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
