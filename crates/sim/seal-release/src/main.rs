@@ -17,9 +17,11 @@
 //!                                                                              sign, log, PUT to the control plane
 //!                                                                              (write token: SEAL_CONTROL_TOKEN);
 //!                                                                              --template: an Azure enclave release's
-//!                                                                              aci-policy template.json, checked to
-//!                                                                              measure HEX, PUT after the evidence
-//!                                                                              for `seal deploy`
+//!                                                                              aci-policy template.json, or a GCP
+//!                                                                              one's {"image": "REPO@sha256:…",
+//!                                                                              "port": N}, checked to measure HEX,
+//!                                                                              PUT after the evidence for
+//!                                                                              `seal deploy`
 //! seal-release policy FILE [--log URL]                                        check a checkpoint policy (JSON
 //!                                                                              `ReleaseConstraints`) against the
 //!                                                                              platforms' TCB components and the
@@ -134,7 +136,8 @@ enum Command {
         control: url::Url,
         #[arg(long)]
         evidence_out: Option<PathBuf>,
-        /// Azure enclave releases: the deployable template (`aci-policy` output) `seal deploy` uses
+        /// Enclave releases: what `seal deploy` deploys. Azure: the deployable template (`aci-policy`
+        /// output); GCP: `{"image": "REPO@sha256:…", "port": N}`
         #[arg(long)]
         template: Option<PathBuf>,
     },
@@ -310,14 +313,25 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             let template = match template {
                 None => None,
                 Some(path) => {
-                    if component != Component::Enclave || platform != PlatformId::AzureSnpAci {
-                        bail!("--template is for Azure enclave releases");
+                    if component != Component::Enclave {
+                        bail!("--template is for enclave releases");
                     }
                     let template: serde_json::Value =
                         serde_json::from_str(&read(&path)?).with_context(|| format!("{}", path.display()))?;
-                    let host_data = aci::host_data(&aci::policy_of(&template)?);
-                    if seal_attest::azure::measurement(&host_data) != measurement {
-                        bail!("{}: its policy does not measure {measurement}", path.display());
+                    let measured = match platform {
+                        PlatformId::AzureSnpAci => {
+                            seal_attest::azure::measurement(&aci::host_data(&aci::policy_of(&template)?))
+                        }
+                        PlatformId::GcpConfidentialSpace => {
+                            let image = template["image"].as_str().context("the GCP template names no image")?;
+                            let (_, digest) =
+                                image.rsplit_once('@').context("the GCP template's image has no digest")?;
+                            seal_attest::gcp::measurement(digest)?
+                        }
+                        _ => bail!("--template is for Azure and GCP enclave releases"),
+                    };
+                    if measured != measurement {
+                        bail!("{}: it measures {measured}, not {measurement}", path.display());
                     }
                     Some(template)
                 }
