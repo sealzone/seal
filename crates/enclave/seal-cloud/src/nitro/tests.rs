@@ -253,6 +253,7 @@ async fn messages_are_read_whole_and_bounded() {
         Vec::new(),
     ]);
     assert_eq!(super::message(&*parent, &[1; 32]).await.unwrap().tenant, pin("acme"));
+    assert_eq!(parent.nonces(), [[1; 32]], "the nonce goes first");
     assert!(super::message(&*parent, &[1; 32]).await.unwrap_err().contains("the parent's message"));
     assert!(super::message(&*parent, &[1; 32]).await.unwrap_err().contains("too long"));
     assert!(super::message(&*parent, &[1; 32]).await.unwrap_err().contains("the parent's message"));
