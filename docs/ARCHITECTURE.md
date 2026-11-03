@@ -16,7 +16,7 @@ Crates are grouped by role under `crates/`. A crate's name does not change with 
 | Folder | Crates | Runs |
 | --- | --- | --- |
 | `shared/` | seal-proto, seal-crypto, seal-tlog, seal-verify, seal-attest, seal-net, seal-tee | In more than one realm, and all in the enclave and the guardian. seal-tee never runs in the SDK |
-| `enclave/` | seal-enclave, seal-cloud, seal-authz, seal-integrity | In the customer's cloud, inside the enclave TEE |
+| `enclave/` | seal-enclave, seal-cloud, seal-authz, seal-integrity, seal-nitro-host | In the customer's cloud, inside the enclave TEE. seal-nitro-host runs beside it, on the Nitro enclave's parent instance, untrusted |
 | `enclave/adapters/` | seal-adapter, seal-adapter-{http,pg,redis,clickhouse} | Inside the enclave TEE. One upstream protocol per crate |
 | `guardian/` | seal-guardian | Run by Seal in its own TEE. A release is frozen; a successor release takes over its root |
 | `control-plane/` | seal-control, seal-registrar | Run by Seal with no TEE, untrusted. The registrar signs only root version 1 of new tenants |
@@ -32,8 +32,8 @@ sources in `seal-guardian`, the enclave's per-cloud wiring in `seal-cloud`. Chec
 Platforms are a closed set, so platform code dispatches with a `match` on an enum, never a
 trait object: `seal_proto::Evidence`, `seal_tee::{Attestor, Clock}`, `seal_cloud::Cloud` and
 `seal_guardian::KeySource`. Adding a cloud fails to compile until every match handles it.
-Outside `seal-attest`, `seal-tee`, `seal-cloud` and the guardian's key sources, no crate names a
-cloud.
+Outside `seal-attest`, `seal-tee`, `seal-cloud`, the guardian's key sources and
+`seal-nitro-host` (the Nitro parent's side), no crate names a cloud.
 
 ### Published names
 
@@ -69,15 +69,16 @@ The graph is acyclic. An arrow means "may depend on".
 ```
 seal-proto    ◄── everything. Data only: ids, codec, error, secret, signed, time, policy, blob,
                   named, identity, integrity, freshness, session, api, state, release, tunnel,
-                  telemetry.
+                  telemetry, nitro (the enclave-parent protocol).
 seal-crypto   ──► proto                                  pure crypto, no IO
 seal-tlog     ──► proto, crypto                          pure log primitives (+ `dev` log/witness server)
 seal-verify   ──► proto, crypto, tlog                    pure release + tenant-bundle verification (ONE impl)
-seal-net      ──► proto                                  `Dialer`, outbound TLS with baked roots; `UpstreamStream`
+seal-net      ──► proto                                  `Dialer`, outbound TLS with baked roots; `UpstreamStream`; vsock
 seal-attest   ──► proto, crypto                          pure evidence verification, one `verify` for every platform
-seal-tee      ──► proto, crypto, attest, net             being a TEE: `Attestor`, `Clock` (Roughtime)
+seal-tee      ──► proto, crypto, attest, net             being a TEE: `Attestor`, `Clock` (Roughtime, NitroClock)
 seal-authz    ──► proto, crypto, verify, net             proof contexts, identity proofs, state cache, decisions
-seal-cloud     ──► proto, net, tee, attest, authz         the enclave's cloud: `Cloud` (pin, deployment proof, dialer)
+seal-cloud     ──► proto, net, tee, attest, authz         the enclave's cloud: `Cloud` (pin, deployment proof, dialer, listener)
+seal-nitro-host ──► proto, net                           the Nitro parent's side: bin (egress, inbound port, pin and proof)
 seal-integrity ──► proto                                 App Integrity plug-ins: observations, detectors, verdicts
 seal-adapter  ──► proto, net, integrity                  upstream adapter contract (+ `testing` doubles)
 seal-adapter-{http,pg,redis,clickhouse} ──► adapter, proto     one wire protocol each
@@ -144,8 +145,9 @@ Async is tokio. HTTP is hyper 1 for server and client, with axum for the control
 enclave APIs. TLS is rustls 0.23 with the `ring` provider. Unit tests live next to the code.
 Dependencies follow [DEPS.md](DEPS.md).
 
-No `unsafe` outside the bindings; the SNP device ioctl goes through `sev`. The bindings that use
-it are `seal-ffi` (the C ABI), `seal-node` (in what napi-rs expands to), `seal-py` (its
+No `unsafe` outside the bindings and one ioctl. The SNP device ioctl goes through `sev`; the
+Nitro NSM ioctl is `seal-tee`'s own, which sets `deny` and allows it only in that one call
+(`nitro::nsm::raw`). The bindings that use it are `seal-ffi` (the C ABI), `seal-node` (in what napi-rs expands to), `seal-py` (its
 per-process runtime pointer) and `seal-verify-wasm`, which sets `deny` and allows it only in the
 module `#[wasm_bindgen]` expands in.
 
@@ -193,7 +195,8 @@ seal-run, shared by all customers
 The customer runs only enclave replicas, in the app's network on its own cloud, never inside
 the app's TEE or container group (that would put the app into the measurement). `seal deploy
 azure` deploys them from the release's published template and `seal deploy upgrade` upgrades
-them. AWS and GCP deployment is designed, not built.
+them. `seal deploy aws` and `seal deploy gcp` are designed, not built; the Nitro enclave and the
+parent's side it needs (`seal-nitro-host`) are built.
 
 An Azure release's template is the output of `seal-release aci-policy`, published untrusted
 next to the evidence by `seal-release publish --template` and served by the control plane at
@@ -209,7 +212,7 @@ untrusted template therefore cannot add a resource, a role assignment or a conta
 | Cloud | Replica | Measurement | Tenant pin | Deployment identity | Locked down by |
 | --- | --- | --- | --- | --- | --- |
 | Azure | Confidential container group (ACI) | Container policy hash (`host_data`) | `SEAL_TENANT` and the optional exit timer `SEAL_EXIT_AFTER_SECS`, each allowed by an anchored re2 rule in the policy | Group's managed identity | The policy: no exec, no stack dumps, no unencrypted scratch, no env var dropping (a rule for every variable ACI injects, including `APP_IDENTITY_ENDPOINT`). Seal's container is unprivileged with fixed mounts. No Microsoft infra fragment, which would let containers join without changing `host_data`. ACI adds its own containers to every confidential group (`atlas-mount-resolv-conf`, plus `msi-atlas-adapter` and `atlas-netstats` with a managed identity; two are privileged); the release policy lists those three itself, copied from the infra fragment and refreshed when Microsoft changes them. seal-release refuses a policy with any line outside the framework skeleton, such as its own rule, a comment, or a framework rule bound to another or not in `FRAMEWORK_RULES` |
-| AWS | Nitro enclave on an EC2 parent | PCR0/1/2 of the enclave image | First message from the parent over vsock | Parent's instance role (SigV4) | Nitro: no network, shell, debug or attached console (zero PCRs are refused) |
+| AWS | Nitro enclave on an EC2 parent | PCR0/1/2 of the enclave image (EIF) | First message from the parent over vsock (`seal_proto::nitro::ParentMessage`) | Parent's instance role (SigV4) | Nitro: no network, shell, debug or attached console (zero PCRs are refused). The EIF's environment is part of PCR2, so nothing but the parent's message varies |
 | GCP | Confidential Space VM (TDX, `c3-*`; SEV-SNP once Google attests it) | Container image digest | `tee-env-SEAL_TENANT` (read as `SEAL_TENANT`) and `tee-env-SEAL_EXIT_AFTER_SECS`, the only overrides the launch policy allows (`tee.launch_policy.allow_env_override`) | Project number and the one service account, from the attestation token (PKI type, audience `seal_attest::gcp::AUDIENCE`) | The launch policy: the production Confidential Space image, no other env or command overrides, no log redirect. Only the ports the image `EXPOSE`s are open |
 
 The tenant pin is unattested everywhere and can only narrow what the enclave serves. It is the
@@ -262,7 +265,9 @@ One container image per release yields three measurements. The image holds every
 attestor and picks the one whose TEE device is present (`seal_tee::Attestor::detect`). ACI and
 Confidential Space run it directly. `nitro-cli build-enclave` builds the Nitro image from it
 with a boot blob set (`bzImage`, `cmdline`, `init`, `nsm.ko`, `linuxkit`) pinned by SHA-256 and
-committed at `source_commit`. Each platform gets its own signed, logged, time-locked manifest.
+committed at `source_commit`: `seal-release nitro-eif` checks the blobs against the pins, runs
+`nitro-cli build-enclave` on the image by digest, reads the PCRs back with `describe-eif` and
+prints the measurement. Each platform gets its own signed, logged, time-locked manifest.
 Nitro starts `CMD` as root from `/` and ignores `USER`, `WORKDIR` and `ENTRYPOINT`, so the image
 uses `CMD` only.
 
@@ -278,7 +283,7 @@ names no address of its own: clients reach it at their `SEAL_ENDPOINT` and pin i
 so Seal-hosted replicas of every tenant run one release.
 
 `seal-release` turns a build into a release: the measurement (the image digest on GCP, the
-`host_data` of the rewritten `az confcom` policy on Azure), 2-of-3 signatures, the log entry and
+`host_data` of the rewritten `az confcom` policy on Azure, the EIF's PCR0..2 on AWS), 2-of-3 signatures, the log entry and
 the upload. It also checks a booted guardian's attested key before that key enters the trust,
 and a checkpoint policy before the log takes it (`seal-release policy`).
 
@@ -356,10 +361,18 @@ its tenant's state lists it as Seal's hosted deployment (`seal-enclave` `proxy`)
 replica reads past a header and keeps the connection's address, since the connecting side wrote
 the header.
 
-**AWS.** The enclave has no network interface. The parent, the untrusted host, runs an egress
-proxy the enclave dials over vsock with `CONNECT host:port`, and forwards the enclave's port
-inbound. Trusted time needs no network: the hypervisor's signed attestation timestamp
-(`seal_tee::nitro::NitroClock`) stands in for Roughtime.
+**AWS.** The enclave has no network interface. The parent, the untrusted host, runs
+`seal-nitro-host`, which is the enclave's network (`seal_proto::nitro` has the ports). It
+serves the parent's messages (the pin, and a deployment proof presigned with the instance
+role from IMDSv2) and an egress proxy the enclave dials over vsock with `CONNECT host:port`
+(`seal_cloud::nitro::ParentDialer`). The proxy resolves names and reaches what a NAT gateway
+would, except the instance's own addresses (loopback, link-local, which holds IMDS, and EC2's
+IPv6 service addresses), so the role's credentials stay on the parent. It forwards the
+instance's port to the enclave's vsock port of the same number, after a PROXY v2 header naming
+the client, and the enclave takes that address for its network rules. Every stream is the
+enclave's own TLS, so the parent sees what any network sees. Trusted time needs no network:
+the hypervisor's signed attestation timestamp (`seal_tee::nitro::NitroClock`) stands in for
+Roughtime.
 
 **GCP.** Replicas run in a VPC subnet without external IPs, with egress through Cloud NAT, and
 also reach Google's attestation service.
@@ -387,7 +400,10 @@ freshness from the log (tenant-run signers optional) and network rules; telemetr
 and optional encryption; named blobs (admin-signed versions stored by the control plane,
 looked up through the enclave); the CLI, the Rust, Python, Node and Go SDKs and the browser verifier;
 the Azure platform (customer enclaves, Seal's hosted replicas, Seal's guardian on Key Vault
-Premium), GCP Confidential Space and the sim platform; customer-deployed enclaves pinned to one
+Premium), GCP Confidential Space, AWS Nitro Enclaves (the attestor and clock over `/dev/nsm`,
+the pin and deployment proof from the parent, vsock egress and inbound through
+`seal-nitro-host`, and the EIF measurement in `seal-release`; tested against fakes, not yet
+on a Nitro instance) and the sim platform; customer-deployed enclaves pinned to one
 tenant (`seal deploy azure`, `seal deploy upgrade`); blobs wrapped per platform (HPKE to
 certified wrap keys); periodic attestation, and challenged attestation on every SDK connection
 that carries a secret, proof or token; sessions with 10-minute tokens, extended every 5
@@ -404,8 +420,7 @@ always disable them.
 the Hardened tier in practice (it needs compiled-in evidence checks, and none ship here);
 aggregated telemetry metrics; leases; budgets.
 
-**Designed, not built:** AWS Nitro (only evidence verification, `seal_attest::nitro`, is built;
-the attestor, clock, egress proxy and key source are stubs), and customer-run enclaves on GCP Confidential Space (`seal
+**Designed, not built:** customer-run enclaves on AWS Nitro and GCP Confidential Space (`seal
 deploy aws|gcp`); the guardian's root on Managed HSM in two regions; self-hosted guardians on
 Nitro with AWS KMS; customer-managed KMS with Seal's guardian. That last one is Azure Key Vault
 only: Seal's guardian performs Key Vault SKR against the customer's own key, whose immutable

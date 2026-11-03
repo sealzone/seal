@@ -38,8 +38,10 @@ These are specified, and the code has hooks for them:
 
 These are designed but not built:
 
-- AWS Nitro Enclaves. Evidence verification is built; the attestor, clock, egress proxy and
-  key source are not.
+- AWS Nitro Enclaves. The enclave side (attestor, clock, pin, deployment proof, vsock
+  networking), the parent's host proxy and the release measurement are built and tested
+  without Nitro hardware. Still to come: a run on a Nitro instance, the pinned boot blobs,
+  and a guardian serving Nitro.
 - Customer-run enclaves on AWS and GCP (`seal deploy aws` and `seal deploy gcp`).
 - Self-hosted guardians on Nitro with AWS KMS.
 - Customer-managed keys with Seal's guardian: the guardian unwraps against your own Azure Key

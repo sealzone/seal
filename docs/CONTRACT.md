@@ -92,8 +92,12 @@ replica is reachable only from Seal's front door, which names the client in a PR
 v2 header before the TLS handshake. The replica takes the client's address from that header
 only while its tenant's state lists it as Seal's hosted deployment (`HostedMode`). Any other
 replica reads past a header and keeps the connection's own address, since a header is only
-what the connecting side wrote (`seal-enclave` `proxy`). States that use no rules omit the
-field. `seal grant network APP CIDR…` sets a rule.
+what the connecting side wrote (`seal-enclave` `proxy`). A Nitro replica is the exception: it
+has no network interface, and every connection comes from its parent instance over vsock, so
+the parent's forwarder names each client in a PROXY v2 header and the replica takes that
+address (a connection without one is closed). The parent is the network there, as the host is
+on every other cloud. States that use no rules omit the field. `seal grant network APP CIDR…`
+sets a rule.
 
 ## Roles
 
@@ -743,8 +747,10 @@ The enclave's internal ports and components are in the crate docs and
   bundle (a chain matching the root id, a fresh state, and the state in force worked out
   from its own platform's guardian anchors), then its deployment identity. The cloud
   supplies a `DeploymentProof`: the ACI group's managed-identity token, a SigV4 request the
-  Nitro parent presigned with its instance role, or the project and service account from
-  the enclave's own Confidential Space attestation. The replica checks it against
+  Nitro parent presigned with its instance role (`GetCallerIdentity` signing only `host`, in
+  a fresh `seal_proto::nitro::ParentMessage`, asked for only when the deployments name an
+  AWS role), or the project and service account from the enclave's own Confidential Space
+  attestation. The replica checks it against
   `TenantState::deployments` before requesting any key. So a genuine enclave that someone
   deploys for a tenant that never authorized it holds none of that tenant's keys. Service
   keys come with the guardian's `ServiceKeyCertificate`, which the replica serves in
@@ -801,6 +807,20 @@ The enclave's internal ports and components are in the crate docs and
     the replica.
 - **Clock.** Between trusted clock reads, expiry checks widen the clock's radius by 1 s plus
   1 s per 1000 s, so a live connection may end up to about a second early.
+- **On AWS Nitro** the replica talks only to its parent instance, over vsock
+  (`seal_proto::nitro`), where `seal-nitro-host` serves it:
+  - The parent's vsock port 9000 (`PARENT_PORT`, CID 3) answers each connection with one
+    `ParentMessage` as JSON and closes: `{"tenant": "<tenant>@<root id>", "deployment":
+    <IdentityProof::AwsSigV4>}`, at most 64 KiB. The replica waits up to 60 s at boot for the
+    first one and takes its `tenant` as the pin. Before requesting keys it takes another and
+    uses its `deployment`. A later message naming another tenant, or any other kind of proof,
+    is refused.
+  - Port 9001 (`EGRESS_PORT`) takes `CONNECT host:port HTTP/1.1` for every outbound stream.
+    The parent answers `200` and relays, or a 4xx or 5xx, which fails that dial. A replica
+    sends only host names and addresses, never anything with spaces or `@`.
+  - The replica listens on its own CID at the release's `listen` port (8443), accepts only
+    CID 3, and requires a PROXY v2 header first.
+  - Time is the NSM's (`NitroClock`): a document with a fresh nonce at least every 60 s.
 
 ## Control plane (`seal-control`)
 
@@ -1142,14 +1162,28 @@ Who may read and write a tenant's documents (the crate docs hold the full route 
   booted on the second. This has not been reproduced.
 - **Tenant onboarding.** The registrar's API (`seal-registrar`) is called only by Seal's
   console and is not part of this contract.
-- **AWS, still to test.**
+- **AWS, still to test.** The Nitro platform is built and tested against fakes and this
+  machine's vsock loopback, never on a Nitro instance. Still to verify there:
+  - That `/dev/nsm` answers the hand-written ioctl (`seal_tee::nitro::nsm`) and request
+    encoding as the AWS library's, and that its documents verify (`seal_attest::nitro`,
+    with a recorded enclave document added to the test data).
   - The accuracy of the NSM attestation timestamp that `NitroClock` uses. AWS documents
     what it is, not how the hypervisor's clock is disciplined. `RADIUS` is 1 s until
     measured.
+  - That tokio serves vsock sockets handed to it as `TcpStream`s inside the enclave's
+    kernel as it does on this machine's loopback (`seal_net::vsock`), and that the enclave
+    image boots with AWS's `init` without a loopback interface.
+  - PCR0..2 of an EIF built by `seal-release nitro-eif` against the PCRs a running enclave
+    reports, and the SHA-256 pins of the boot blobs, which are taken from the `nitro-cli`
+    release that builds the first Nitro release (not yet committed).
+  - The parent's presigned `GetCallerIdentity` against STS, and IMDSv2 on a real instance.
   - vsock proxy throughput for the data plane.
   - Booting a Nitro image whose boot blobs Seal builds from source (a 6.6 kernel) instead
     of AWS's (4.14). That would end the dependency on AWS keeping the pinned blob bytes
     available.
+- **No exit timer on Nitro.** An EIF's environment is part of PCR2, so a deployer cannot
+  set `SEAL_EXIT_AFTER_SECS` there. The parent can stop the enclave, but its final telemetry
+  batch is then lost.
 - **GCP managed databases.** Cloud SQL in Google-managed shared-CA mode chains to one public
   root valid until 2049 (`Google Cloud SQL Root Server CA`, the same for every customer), so
   it can be baked. Its certificates name the host with a trailing dot (`….sql.goog.`).
