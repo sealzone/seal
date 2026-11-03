@@ -142,8 +142,7 @@ fn unavailable_mentioning<T>(r: Result<T, TeeError>, needle: &str) {
 
 #[test]
 fn the_ioctl_is_nsm_ioctl_raw() {
-    assert_eq!(nsm::raw::NSM_IOCTL_RAW, 0xC020_0A00);
-    assert_eq!(nsm::raw::iowr(0x0A, 0, 32), 0xC020_0A00);
+    assert_eq!(seal_tee_nsm_sys::NSM_IOCTL_RAW, 0xC020_0A00);
 }
 
 #[test]
@@ -320,6 +319,34 @@ async fn the_clock_fails_closed_and_tries_again() {
     *fake.canned.lock().unwrap() = None;
     assert_eq!(clock.now().await.unwrap().now, 1_793_165_986);
     assert_eq!(fake.nonces().len(), 4);
+}
+
+/// Answers only after `STUCK`.
+struct StuckNsm;
+
+const STUCK: std::time::Duration = std::time::Duration::from_millis(1500);
+
+impl Nsm for StuckNsm {
+    fn exchange(&self, _: &[u8]) -> Result<Vec<u8>, TeeError> {
+        std::thread::sleep(STUCK);
+        Err(TeeError::Unavailable("too late".into()))
+    }
+}
+
+#[tokio::test]
+async fn a_stuck_nsm_fails_closed() {
+    let short = std::time::Duration::from_millis(100);
+    assert_eq!(super::NSM_TIMEOUT, std::time::Duration::from_secs(10));
+    let mut clock = NitroClock::with(std::sync::Arc::new(StuckNsm), stated);
+    clock.timeout = short;
+    let started = std::time::Instant::now();
+    unavailable_mentioning(clock.now().await, "did not answer");
+    assert!(started.elapsed() < STUCK, "{:?}", started.elapsed());
+    // The attestor's later requests too, once it has its measurement.
+    let mut attestor = NitroAttestor::with(FakeNsm::new()).unwrap();
+    attestor.nsm = std::sync::Arc::new(StuckNsm);
+    attestor.timeout = short;
+    unavailable_mentioning(attestor.attest([5; 32]).await, "did not answer");
 }
 
 #[tokio::test]

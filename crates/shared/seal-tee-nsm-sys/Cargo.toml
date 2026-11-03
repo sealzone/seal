@@ -1,0 +1,11 @@
+[package]
+name = "seal-tee-nsm-sys"
+description = "The AWS Nitro Secure Module's one ioctl (`/dev/nsm`, NSM_IOCTL_RAW), and nothing else: the only unsafe code seal-tee links."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+# Runs inside Seal's own images; never published.
+publish = false
+
+[dependencies]
+libc.workspace = true

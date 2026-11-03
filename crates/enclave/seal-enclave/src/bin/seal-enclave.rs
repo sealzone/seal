@@ -155,7 +155,10 @@ async fn run() -> Result<(), String> {
 
     // The key provider and the control-plane credential attest with their own handle on this
     // TEE: `Cloud` moves into the runtime.
-    let attestor = seal_tee::Attestor::detect().map_err(|e| format!("attestor: {e}"))?;
+    let attestor = tokio::task::spawn_blocking(seal_tee::Attestor::detect)
+        .await
+        .map_err(|e| format!("attestor: {e}"))?
+        .map_err(|e| format!("attestor: {e}"))?;
     if attestor.platform() != platform || attestor.measurement() != cloud.attestor().measurement() {
         return Err("the key provider's attestor is not the cloud's".into());
     }

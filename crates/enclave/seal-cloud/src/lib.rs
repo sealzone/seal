@@ -58,8 +58,15 @@ impl Cloud {
     /// `CloudError::Tee`) when none is. On AWS Nitro it waits for the parent's first message
     /// (`nitro::PARENT_WAIT`). A `sim` build with `SEAL_SIM=1` gets the simulator cloud,
     /// configured from the environment (`sim` module).
+    ///
+    /// `Attestor::detect` asks the TEE device (or launcher) for evidence and blocks, so it runs
+    /// on tokio's blocking pool, within `DETECT_TIMEOUT`.
     pub async fn detect() -> Result<Self, CloudError> {
-        match Attestor::detect()? {
+        let attestor = tokio::time::timeout(DETECT_TIMEOUT, tokio::task::spawn_blocking(Attestor::detect))
+            .await
+            .map_err(|_| seal_tee::TeeError::Unavailable("the TEE device did not answer".into()))?
+            .map_err(|e| seal_tee::TeeError::Unavailable(format!("TEE detection: {e}")))??;
+        match attestor {
             Attestor::AzureSnpAci(attestor) => Ok(Cloud::AzureSnpAci(azure::Aci::from_env(attestor)?)),
             Attestor::AwsNitro(attestor) => Ok(Cloud::AwsNitro(nitro::Nitro::from_parent(attestor).await?)),
             Attestor::GcpConfidentialSpace(attestor) => {
@@ -231,6 +238,10 @@ impl Listener {
         }
     }
 }
+
+/// How long `Cloud::detect` waits for `Attestor::detect`: the Confidential Space launcher
+/// takes up to 30 s per token, and a sim build hashes its own binary.
+const DETECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
 /// The environment variable every cloud delivers the tenant pin in.
 const TENANT_VAR: &str = "SEAL_TENANT";

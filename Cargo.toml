@@ -27,6 +27,7 @@ seal-proto = { path = "crates/shared/seal-proto", version = "0.2.9", package = "
 seal-crypto = { path = "crates/shared/seal-crypto", version = "0.2.9", package = "sealzone-crypto" }
 seal-attest = { path = "crates/shared/seal-attest", version = "0.2.9", package = "sealzone-attest" }
 seal-tee = { path = "crates/shared/seal-tee", version = "0.2.9" }
+seal-tee-nsm-sys = { path = "crates/shared/seal-tee-nsm-sys", version = "0.2.9" }
 seal-tlog = { path = "crates/shared/seal-tlog", version = "0.2.9", package = "sealzone-tlog" }
 seal-net = { path = "crates/shared/seal-net", version = "0.2.9", package = "sealzone-net" }
 seal-verify = { path = "crates/shared/seal-verify", version = "0.2.9", package = "sealzone-verify" }
@@ -87,7 +88,7 @@ coset = "0.4"
 
 # TEE devices
 sev = { version = "8", default-features = false, features = ["snp"] }
-# The Nitro NSM ioctl (seal-tee) and vsock errnos (seal-net). Already in every tree (tokio, mio).
+# The Nitro NSM ioctl (seal-tee-nsm-sys) and vsock errnos (seal-net). Already in every tree (tokio, mio).
 libc = "0.2"
 
 # network

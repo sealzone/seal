@@ -27,9 +27,9 @@ ed25519-dalek.workspace = true
 rand.workspace = true
 # Azure: the security context files (base64).
 base64.workspace = true
-# Nitro: the NSM's CBOR requests, and its one ioctl.
+# Nitro: the NSM's CBOR requests, and its one ioctl (the only unsafe code this crate links).
 ciborium.workspace = true
-libc.workspace = true
+seal-tee-nsm-sys.workspace = true
 
 [dev-dependencies]
 async-trait.workspace = true

@@ -3670,10 +3670,10 @@ dependencies = [
  "coset",
  "ed25519-dalek",
  "hex",
- "libc",
  "proptest",
  "rand",
  "rustls",
+ "seal-tee-nsm-sys",
  "sealzone-attest",
  "sealzone-crypto",
  "sealzone-net",
@@ -3685,6 +3685,13 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "seal-tee-nsm-sys"
+version = "0.2.9"
+dependencies = [
+ "libc",
 ]
 
 [[package]]

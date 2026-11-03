@@ -29,17 +29,24 @@ pub const PORT_ANY: u32 = u32::MAX;
 /// Connections waiting to be accepted.
 const BACKLOG: i32 = 1024;
 
-/// A stream to `cid:port`, connected within `timeout`.
+/// A stream to `cid:port`, connected within `timeout`. The connect is non-blocking: tokio waits
+/// for the socket to turn writable, so a peer that never answers holds no thread.
 pub async fn connect(cid: u32, port: u32, timeout: Duration) -> io::Result<TcpStream> {
-    let socket = tokio::task::spawn_blocking(move || {
-        let socket = Socket::new(Domain::VSOCK, Type::STREAM, None)?;
-        socket.connect_timeout(&SockAddr::vsock(cid, port), timeout)?;
-        socket.set_nonblocking(true)?;
-        Ok::<_, io::Error>(socket)
-    })
-    .await
-    .map_err(io::Error::other)??;
-    TcpStream::from_std(socket.into())
+    let socket = Socket::new(Domain::VSOCK, Type::STREAM, None)?;
+    socket.set_nonblocking(true)?;
+    match socket.connect(&SockAddr::vsock(cid, port)) {
+        Ok(()) => {}
+        Err(e) if e.raw_os_error() == Some(libc::EINPROGRESS) || e.kind() == io::ErrorKind::WouldBlock => {}
+        Err(e) => return Err(e),
+    }
+    let stream = TcpStream::from_std(socket.into())?;
+    tokio::time::timeout(timeout, stream.writable())
+        .await
+        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, format!("vsock connect timed out after {timeout:?}")))??;
+    if let Some(e) = stream.take_error()? {
+        return Err(e);
+    }
+    Ok(stream)
 }
 
 /// A listening vsock socket.

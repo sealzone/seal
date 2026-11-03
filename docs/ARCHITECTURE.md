@@ -15,7 +15,7 @@ Crates are grouped by role under `crates/`. A crate's name does not change with 
 
 | Folder | Crates | Runs |
 | --- | --- | --- |
-| `shared/` | seal-proto, seal-crypto, seal-tlog, seal-verify, seal-attest, seal-net, seal-tee | In more than one realm, and all in the enclave and the guardian. seal-tee never runs in the SDK |
+| `shared/` | seal-proto, seal-crypto, seal-tlog, seal-verify, seal-attest, seal-net, seal-tee, seal-tee-nsm-sys | In more than one realm, and all in the enclave and the guardian. seal-tee never runs in the SDK |
 | `enclave/` | seal-enclave, seal-cloud, seal-authz, seal-integrity, seal-nitro-host | In the customer's cloud, inside the enclave TEE. seal-nitro-host runs beside it, on the Nitro enclave's parent instance, untrusted |
 | `enclave/adapters/` | seal-adapter, seal-adapter-{http,pg,redis,clickhouse} | Inside the enclave TEE. One upstream protocol per crate |
 | `guardian/` | seal-guardian | Run by Seal in its own TEE. A release is frozen; a successor release takes over its root |
@@ -75,7 +75,8 @@ seal-tlog     ──► proto, crypto                          pure log primitiv
 seal-verify   ──► proto, crypto, tlog                    pure release + tenant-bundle verification (ONE impl)
 seal-net      ──► proto                                  `Dialer`, outbound TLS with baked roots; `UpstreamStream`; vsock
 seal-attest   ──► proto, crypto                          pure evidence verification, one `verify` for every platform
-seal-tee      ──► proto, crypto, attest, net             being a TEE: `Attestor`, `Clock` (Roughtime, NitroClock)
+seal-tee      ──► proto, crypto, attest, net, tee-nsm-sys   being a TEE: `Attestor`, `Clock` (Roughtime, NitroClock)
+seal-tee-nsm-sys                                         the NSM ioctl alone (libc)
 seal-authz    ──► proto, crypto, verify, net             proof contexts, identity proofs, state cache, decisions
 seal-cloud     ──► proto, net, tee, attest, authz         the enclave's cloud: `Cloud` (pin, deployment proof, dialer, listener)
 seal-nitro-host ──► proto, net                           the Nitro parent's side: bin (egress, inbound port, pin and proof)
@@ -146,8 +147,8 @@ enclave APIs. TLS is rustls 0.23 with the `ring` provider. Unit tests live next 
 Dependencies follow [DEPS.md](DEPS.md).
 
 No `unsafe` outside the bindings and one ioctl. The SNP device ioctl goes through `sev`; the
-Nitro NSM ioctl is `seal-tee`'s own, which sets `deny` and allows it only in that one call
-(`nitro::nsm::raw`). The bindings that use it are `seal-ffi` (the C ABI), `seal-node` (in what napi-rs expands to), `seal-py` (its
+Nitro NSM ioctl is `seal-tee-nsm-sys`, a crate of that one call, so `seal-tee` keeps
+`forbid(unsafe_code)`. The bindings that use it are `seal-ffi` (the C ABI), `seal-node` (in what napi-rs expands to), `seal-py` (its
 per-process runtime pointer) and `seal-verify-wasm`, which sets `deny` and allows it only in the
 module `#[wasm_bindgen]` expands in.
 

@@ -31,15 +31,23 @@ fn unavailable(msg: impl std::fmt::Display) -> TeeError {
     TeeError::Unavailable(format!("nitro: {msg}"))
 }
 
-/// One attestation document from `nsm` with these optional fields, on tokio's blocking pool.
+/// How long one NSM request may take before the caller fails closed. The NSM answers in
+/// milliseconds; a request that does not return leaves its blocking thread behind.
+pub const NSM_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// One attestation document from `nsm` with these optional fields, on tokio's blocking pool,
+/// within `NSM_TIMEOUT`.
 async fn document(
     nsm: &Arc<dyn Nsm>,
+    timeout: Duration,
     user_data: Option<[u8; 32]>,
     nonce: Option<[u8; 32]>,
 ) -> Result<Vec<u8>, TeeError> {
     let nsm = nsm.clone();
-    tokio::task::spawn_blocking(move || nsm::attestation(&*nsm, user_data.as_ref(), nonce.as_ref()))
+    let request = tokio::task::spawn_blocking(move || nsm::attestation(&*nsm, user_data.as_ref(), nonce.as_ref()));
+    tokio::time::timeout(timeout, request)
         .await
+        .map_err(|_| unavailable(format!("the NSM did not answer within {timeout:?}")))?
         .map_err(|e| unavailable(format!("NSM request: {e}")))?
 }
 
@@ -47,11 +55,14 @@ async fn document(
 pub struct NitroAttestor {
     nsm: Arc<dyn Nsm>,
     measurement: Measurement,
+    /// `NSM_TIMEOUT`; shorter in tests.
+    pub(crate) timeout: Duration,
 }
 
 impl NitroAttestor {
-    /// From `/dev/nsm`; requests one document to learn PCR0..2. `Unavailable` when the device
-    /// does not answer with a usable document.
+    /// From `/dev/nsm`; requests one document to learn PCR0..2, blocking (callers in async
+    /// code run it on the blocking pool: `seal_cloud::Cloud::detect`). `Unavailable` when the
+    /// device does not answer with a usable document.
     pub fn new() -> Result<Self, TeeError> {
         Self::with(Arc::new(nsm::NsmDevice::open()?))
     }
@@ -59,7 +70,7 @@ impl NitroAttestor {
     pub(crate) fn with(nsm: Arc<dyn Nsm>) -> Result<Self, TeeError> {
         let document = nsm::attestation(&*nsm, Some(&[0; 32]), None)?;
         let measurement = measurement_of(&document)?;
-        Ok(Self { nsm, measurement })
+        Ok(Self { nsm, measurement, timeout: NSM_TIMEOUT })
     }
 
     pub fn measurement(&self) -> Measurement {
@@ -68,7 +79,7 @@ impl NitroAttestor {
 
     /// A document committing to `report_data`.
     pub async fn attest(&self, report_data: [u8; 32]) -> Result<Evidence, TeeError> {
-        let document = document(&self.nsm, Some(report_data), None).await?;
+        let document = document(&self.nsm, self.timeout, Some(report_data), None).await?;
         if measurement_of(&document)? != self.measurement {
             return Err(unavailable("the document states other PCRs"));
         }
@@ -116,6 +127,8 @@ pub(crate) type CheckDocument = fn(&[u8], &[u8]) -> Result<u64, AttestError>;
 pub struct NitroClock {
     nsm: Arc<dyn Nsm>,
     check: CheckDocument,
+    /// `NSM_TIMEOUT`; shorter in tests.
+    pub(crate) timeout: Duration,
     last: tokio::sync::Mutex<Option<Reading>>,
 }
 
@@ -137,12 +150,12 @@ impl NitroClock {
     }
 
     pub(crate) fn with(nsm: Arc<dyn Nsm>, check: CheckDocument) -> Self {
-        Self { nsm, check, last: tokio::sync::Mutex::new(None) }
+        Self { nsm, check, timeout: NSM_TIMEOUT, last: tokio::sync::Mutex::new(None) }
     }
 
     /// The time now: from the last document if it is younger than `REFRESH`, else from a new
-    /// one. `Unavailable` when the NSM fails or its document does not check out; callers fail
-    /// closed, as with Roughtime.
+    /// one. `Unavailable` when the NSM fails, does not answer within `NSM_TIMEOUT`, or its
+    /// document does not check out; callers fail closed, as with Roughtime.
     pub async fn now(&self) -> Result<TrustedTime, TeeError> {
         let mut last = self.last.lock().await;
         let reading = match *last {
@@ -159,7 +172,7 @@ impl NitroClock {
     async fn read(&self) -> Result<Reading, TeeError> {
         let nonce = random_nonce(&mut rand::rand_core::UnwrapErr(rand::rngs::SysRng));
         let sent = Instant::now();
-        let document = document(&self.nsm, None, Some(nonce)).await?;
+        let document = document(&self.nsm, self.timeout, None, Some(nonce)).await?;
         let received = Instant::now();
         let timestamp_ms = (self.check)(&document, &nonce).map_err(|e| unavailable(format!("clock document: {e}")))?;
         Ok(Reading { timestamp_ms, in_flight: received - sent, received })

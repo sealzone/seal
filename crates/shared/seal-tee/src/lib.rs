@@ -6,10 +6,10 @@
 //! `Attestor::detect` picks the one whose TEE device is present. Each refuses to start
 //! outside its TEE. The set is closed: dispatch is a `match`, not a trait object.
 //!
-//! The SNP guest-device ioctl goes through `sev` (`/dev/sev-guest`). The Nitro NSM ioctl
-//! (`/dev/nsm`) is this crate's own: one `unsafe` call in `nitro::nsm::raw`, the only place
-//! `unsafe_code` is allowed.
-#![deny(unsafe_code)]
+//! The SNP guest-device ioctl goes through `sev` (`/dev/sev-guest`), and the Nitro NSM ioctl
+//! (`/dev/nsm`) through `seal-tee-nsm-sys`, a crate of one `unsafe` call. This crate has no
+//! `unsafe` of its own.
+#![forbid(unsafe_code)]
 
 use seal_proto::{Evidence, Measurement, PlatformId, TrustedTime};
 
