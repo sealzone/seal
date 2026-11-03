@@ -104,7 +104,7 @@ sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio",
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio"] }
 postgres-protocol = "0.6"
 
-# SDK only, behind seal-client's `aws` feature
+# seal-client's `aws` feature, and the Nitro parent's presigner (seal-nitro-host). Never in a TEE.
 aws-sigv4 = { version = "1", default-features = false, features = ["sign-http", "http1"] }
 aws-config = "1"
 
