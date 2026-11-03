@@ -63,7 +63,7 @@ async fn main() {
     }
     match cloud.deployment(&Default::default()).await {
         Ok(seal_authz::DeploymentProof::Attested(id)) => println!("SEAL_PROBE deployment {id:?}"),
-        Ok(seal_authz::DeploymentProof::Proof(_)) => println!("SEAL_PROBE deployment: a proof, not attested"),
+        Ok(_) => println!("SEAL_PROBE deployment: a proof, not attested"),
         Err(e) => println!("SEAL_PROBE deployment: {e}"),
     }
 }

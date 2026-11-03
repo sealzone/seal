@@ -1,13 +1,15 @@
 //! The deployment proof: an STS `GetCallerIdentity` presigned (SigV4 in the query string) with
-//! the instance role's credentials, as `seal_authz` checks and replays it. It signs only `host`:
-//! a deployment has nothing to bind, so there is no `X-Seal-Binding`. The query is built in
+//! the instance role's credentials, as `seal_authz` checks and replays it. It signs `host` and
+//! `x-seal-binding`, which is hex(`DeploymentBinding { nonce }.digest()`) for the nonce the
+//! enclave sent: the binding seal-client's request proofs carry for their context, so a proof
+//! answers one enclave request and nothing else. The query is built in
 //! SigV4's canonical form, which is also the URL's canonical form, so the enclave replays
 //! exactly the URL signed. Key derivation and the signature are `aws_sigv4`'s, as in
 //! seal-client's `AwsIdentity`, whose canonical request this repeats.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use seal_proto::identity::IdentityProof;
+use seal_proto::identity::{DeploymentBinding, IdentityProof};
 use seal_proto::Bearer;
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
@@ -48,47 +50,32 @@ impl Sts {
     }
 }
 
-/// The presigned `GET https://<sts host>/?Action=GetCallerIdentity&…`, signed at `time`.
-pub fn get_caller_identity(creds: &Credentials, sts: &Sts, time: SystemTime) -> IdentityProof {
-    let query = signed_query(
+/// The presigned `GET https://<sts host>/?Action=GetCallerIdentity&…` bound to `nonce`, signed
+/// at `time`.
+pub fn get_caller_identity(creds: &Credentials, sts: &Sts, nonce: [u8; 32], time: SystemTime) -> IdentityProof {
+    let binding = hex::encode(DeploymentBinding { nonce }.digest());
+    let query = signed_query_for(
         creds,
-        sts,
+        &sts.host,
         "/",
+        &sts.region,
+        "sts",
         &[("Action", "GetCallerIdentity"), ("Version", "2011-06-15")],
+        &[("x-seal-binding", &binding)],
         time,
         EXPIRES_SECS,
+        &hex::encode(Sha256::digest(b"")),
     );
     IdentityProof::AwsSigV4 {
         method: "GET".into(),
         url: format!("https://{}/?{query}", sts.host),
-        headers: vec![("host".into(), Bearer::new(sts.host.clone()))],
+        headers: vec![("host".into(), Bearer::new(sts.host.clone())), ("x-seal-binding".into(), Bearer::new(binding))],
         body: String::new(),
     }
 }
 
-/// The canonical query string of a GET to `sts.host` + `path` that signs only `host`, followed by
-/// `&X-Amz-Signature=…`.
-fn signed_query(
-    creds: &Credentials,
-    sts: &Sts,
-    path: &str,
-    params: &[(&str, &str)],
-    time: SystemTime,
-    expires_secs: u64,
-) -> String {
-    signed_query_for(
-        creds,
-        &sts.host,
-        path,
-        &sts.region,
-        "sts",
-        params,
-        time,
-        expires_secs,
-        &hex::encode(Sha256::digest(b"")),
-    )
-}
-
+/// The canonical query string of a GET to `host` + `path` signing `host` and `headers`,
+/// followed by `&X-Amz-Signature=…`.
 #[allow(clippy::too_many_arguments)]
 fn signed_query_for(
     creds: &Credentials,
@@ -97,18 +84,25 @@ fn signed_query_for(
     region: &str,
     service: &str,
     params: &[(&str, &str)],
+    headers: &[(&str, &str)],
     time: SystemTime,
     expires_secs: u64,
     payload_hash: &str,
 ) -> String {
     let (date_time, date) = amz_date(time);
     let scope = format!("{date}/{region}/{service}/aws4_request");
+    // `host` and `headers` (lowercase names), all signed, sorted by name.
+    let mut signed: Vec<(&str, &str)> = vec![("host", host)];
+    signed.extend_from_slice(headers);
+    signed.sort();
+    let signed_headers = signed.iter().map(|(n, _)| *n).collect::<Vec<_>>().join(";");
+    let canonical_headers: String = signed.iter().map(|(n, v)| format!("{n}:{}\n", v.trim())).collect();
     let mut all: Vec<(String, String)> = params.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
     all.push(("X-Amz-Algorithm".into(), "AWS4-HMAC-SHA256".into()));
     all.push(("X-Amz-Credential".into(), format!("{}/{scope}", creds.access_key_id)));
     all.push(("X-Amz-Date".into(), date_time.clone()));
     all.push(("X-Amz-Expires".into(), expires_secs.to_string()));
-    all.push(("X-Amz-SignedHeaders".into(), "host".into()));
+    all.push(("X-Amz-SignedHeaders".into(), signed_headers.clone()));
     if let Some(token) = &creds.session_token {
         all.push(("X-Amz-Security-Token".into(), token.to_string()));
     }
@@ -116,7 +110,7 @@ fn signed_query_for(
     encoded.sort();
     let query = encoded.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join("&");
 
-    let canonical_request = format!("GET\n{path}\n{query}\nhost:{host}\n\nhost\n{payload_hash}");
+    let canonical_request = format!("GET\n{path}\n{query}\n{canonical_headers}\n{signed_headers}\n{payload_hash}");
     let string_to_sign = format!(
         "AWS4-HMAC-SHA256\n{date_time}\n{scope}\n{}",
         hex::encode(Sha256::digest(canonical_request.as_bytes()))
@@ -189,6 +183,7 @@ mod tests {
             "us-east-1",
             "s3",
             &[],
+            &[],
             UNIX_EPOCH + Duration::from_secs(1_369_353_600),
             86_400,
             "UNSIGNED-PAYLOAD",
@@ -212,12 +207,13 @@ mod tests {
     }
 
     /// The shape `seal_authz` accepts for a deployment proof (its module docs): canonical URL,
-    /// an STS host, only known parameters, presigned once for STS, `host` signed, at most 900 s.
+    /// an STS host, only known parameters, presigned once for STS, `host` and the binding signed,
+    /// at most 900 s.
     #[test]
     fn proofs_have_the_shape_the_enclave_accepts() {
         let time = UNIX_EPOCH + Duration::from_secs(1_800_000_000);
         for sts in [Sts::global(), Sts::regional("eu-west-2").unwrap()] {
-            let proof = get_caller_identity(&example_creds(Some("FQoG/token+x==")), &sts, time);
+            let proof = get_caller_identity(&example_creds(Some("FQoG/token+x==")), &sts, [9; 32], time);
             let IdentityProof::AwsSigV4 { method, url, headers, body } = proof else { panic!("not SigV4") };
             assert_eq!((method.as_str(), body.as_str()), ("GET", ""));
             let parsed = url::Url::parse(&url).unwrap();
@@ -244,14 +240,15 @@ mod tests {
             );
             let get = |k: &str| q.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str());
             assert_eq!(get("Action"), Some("GetCallerIdentity"));
-            assert_eq!(get("X-Amz-SignedHeaders"), Some("host"));
+            assert_eq!(get("X-Amz-SignedHeaders"), Some("host;x-seal-binding"));
             assert_eq!(get("X-Amz-Expires"), Some("60"));
             assert_eq!(get("X-Amz-Security-Token"), Some("FQoG/token+x=="));
             let credential = format!("AKIAIOSFODNN7EXAMPLE/20270115/{}/sts/aws4_request", sts.region);
             assert_eq!(get("X-Amz-Credential"), Some(credential.as_str()));
             assert_eq!(get("X-Amz-Signature").map(str::len), Some(64));
             let headers: Vec<(&str, &str)> = headers.iter().map(|(n, v)| (n.as_str(), v.expose())).collect();
-            assert_eq!(headers, [("host", sts.host.as_str())]);
+            let binding = hex::encode(DeploymentBinding { nonce: [9; 32] }.digest());
+            assert_eq!(headers, [("host", sts.host.as_str()), ("x-seal-binding", binding.as_str())]);
         }
     }
 }

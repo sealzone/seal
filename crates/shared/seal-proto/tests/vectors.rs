@@ -640,6 +640,7 @@ fn labels_are_distinct() {
         seal_proto::api::ATTESTATION_BINDING_LABEL,
         POLICY_LABEL,
         PROOF_CONTEXT_LABEL,
+        seal_proto::identity::DEPLOYMENT_BINDING_LABEL,
         SIGNAL_LABEL,
         SESSION_END_LABEL,
         TENANT_ROOT_LABEL,

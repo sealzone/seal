@@ -12,7 +12,7 @@ use seal_authz::DeploymentProof;
 use seal_cloud::nitro::{Nitro, ParentDialer, ParentLink};
 use seal_net::vsock::{self, VsockListener, CID_ANY, CID_LOCAL, PORT_ANY};
 use seal_net::{BoxStream, Dialer, NetError};
-use seal_proto::identity::{IdentityMatcher, IdentityProof};
+use seal_proto::identity::{DeploymentBinding, IdentityMatcher, IdentityProof};
 use seal_proto::nitro::{ParentMessage, EGRESS_PORT, PARENT_PORT};
 use seal_proto::{Measurement, TenantPin};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -236,23 +236,29 @@ impl CredentialSource for Static {
     }
 }
 
+/// The `x-seal-binding` header of a proof.
+fn binding_of(headers: &[(String, seal_proto::Bearer)]) -> Option<String> {
+    headers.iter().find(|(n, _)| n == "x-seal-binding").map(|(_, v)| v.expose().to_owned())
+}
+
 fn messages(credentials: Arc<dyn CredentialSource>) -> Arc<Messages> {
     Arc::new(Messages { tenant: pin(), sts: Sts::global(), credentials })
 }
 
 #[tokio::test]
 async fn messages_carry_the_pin_and_a_fresh_proof() {
-    let a: ParentMessage = serde_json::from_slice(&messages(Arc::new(Static)).message().await.unwrap()).unwrap();
+    let a: ParentMessage = serde_json::from_slice(&messages(Arc::new(Static)).message([1; 32]).await.unwrap()).unwrap();
     assert_eq!(a.tenant, pin());
-    let IdentityProof::AwsSigV4 { url, .. } = a.deployment else { panic!("not SigV4") };
+    let IdentityProof::AwsSigV4 { url, headers, .. } = a.deployment else { panic!("not SigV4") };
     assert!(url.starts_with("https://sts.amazonaws.com/?Action=GetCallerIdentity&"), "{url}");
+    assert_eq!(binding_of(&headers), Some(hex::encode(DeploymentBinding { nonce: [1; 32] }.digest())));
     // From IMDS.
     let (addr, _) = imds::tests::fake_imds("Success").await;
-    let from_imds = messages(Arc::new(imds::Imds::at(addr))).message().await.unwrap();
+    let from_imds = messages(Arc::new(imds::Imds::at(addr))).message([1; 32]).await.unwrap();
     assert!(String::from_utf8(from_imds).unwrap().contains("X-Amz-Credential=ASIAEXAMPLE%2F"));
     // No credentials, no message.
     let (addr, _) = imds::tests::fake_imds("Expired").await;
-    assert!(messages(Arc::new(imds::Imds::at(addr))).message().await.is_err());
+    assert!(messages(Arc::new(imds::Imds::at(addr))).message([1; 32]).await.is_err());
 }
 
 #[tokio::test]
@@ -271,14 +277,17 @@ async fn the_enclave_boots_on_the_hosts_messages() {
     let role: BTreeSet<IdentityMatcher> =
         [IdentityMatcher::AwsRole { role_arn: "arn:aws:iam::123456789012:role/seal".into(), role_id: "AROA1".into() }]
             .into();
-    let DeploymentProof::Proof(IdentityProof::AwsSigV4 { method, url, headers, body }) =
+    let DeploymentProof::Bound { proof: IdentityProof::AwsSigV4 { method, url, headers, body }, nonce } =
         cloud.deployment(&role).await.unwrap()
     else {
-        panic!("not the parent's presigned request")
+        panic!("not the parent's presigned request, bound")
     };
     assert_eq!((method.as_str(), body.as_str()), ("GET", ""));
-    assert!(url.contains("X-Amz-SignedHeaders=host&"), "{url}");
-    assert_eq!(headers.len(), 1);
+    assert!(url.contains("X-Amz-SignedHeaders=host%3Bx-seal-binding&"), "{url}");
+    // Bound to the nonce the enclave sent on this connection, and to nothing earlier.
+    assert_eq!(binding_of(&headers), Some(hex::encode(DeploymentBinding { nonce }.digest())));
+    let DeploymentProof::Bound { nonce: again, .. } = cloud.deployment(&role).await.unwrap() else { panic!() };
+    assert_ne!(again, nonce);
 
     // A host serving another CID's enclave sends this one nothing: no pin, no boot.
     let Some(other) = listener() else { return };

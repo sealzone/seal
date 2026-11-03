@@ -38,16 +38,23 @@ fn message(tenant: &str, deployment: IdentityProof) -> Vec<u8> {
 type Egress = Box<dyn Fn(DuplexStream) + Send + Sync>;
 
 /// A parent over in-memory pipes: each `PARENT_PORT` connection gets the next queued message
-/// (none left: refused), each `EGRESS_PORT` connection goes to `egress`.
+/// (none left: refused) once it has sent its nonce, which is kept; each `EGRESS_PORT`
+/// connection goes to `egress`.
 struct FakeParent {
     messages: Mutex<VecDeque<Vec<u8>>>,
     egress: Egress,
     opened: Mutex<Vec<u32>>,
+    nonces: Arc<Mutex<Vec<[u8; 32]>>>,
 }
 
 impl FakeParent {
     fn new(messages: Vec<Vec<u8>>, egress: Egress) -> Arc<Self> {
-        Arc::new(Self { messages: Mutex::new(messages.into()), egress, opened: Mutex::new(Vec::new()) })
+        Arc::new(Self {
+            messages: Mutex::new(messages.into()),
+            egress,
+            opened: Mutex::new(Vec::new()),
+            nonces: Arc::default(),
+        })
     }
 
     fn with_messages(messages: Vec<Vec<u8>>) -> Arc<Self> {
@@ -56,6 +63,10 @@ impl FakeParent {
 
     fn opened(&self) -> Vec<u32> {
         self.opened.lock().unwrap().clone()
+    }
+
+    fn nonces(&self) -> Vec<[u8; 32]> {
+        self.nonces.lock().unwrap().clone()
     }
 }
 
@@ -67,8 +78,14 @@ impl ParentLink for FakeParent {
         match port {
             PARENT_PORT => {
                 let message = self.messages.lock().unwrap().pop_front().ok_or(io::ErrorKind::ConnectionRefused)?;
+                let nonces = self.nonces.clone();
                 tokio::spawn(async move {
                     let mut theirs = theirs;
+                    let mut nonce = [0u8; 32];
+                    if theirs.read_exact(&mut nonce).await.is_err() {
+                        return;
+                    }
+                    nonces.lock().unwrap().push(nonce);
                     let _ = theirs.write_all(&message).await;
                     let _ = theirs.shutdown().await;
                 });
@@ -235,11 +252,11 @@ async fn messages_are_read_whole_and_bounded() {
         vec![b' '; MAX_PARENT_MESSAGE + 1],
         Vec::new(),
     ]);
-    assert_eq!(super::message(&*parent).await.unwrap().tenant, pin("acme"));
-    assert!(super::message(&*parent).await.unwrap_err().contains("the parent's message"));
-    assert!(super::message(&*parent).await.unwrap_err().contains("too long"));
-    assert!(super::message(&*parent).await.unwrap_err().contains("the parent's message"));
-    assert!(super::message(&*parent).await.unwrap_err().contains("connect to the parent"));
+    assert_eq!(super::message(&*parent, &[1; 32]).await.unwrap().tenant, pin("acme"));
+    assert!(super::message(&*parent, &[1; 32]).await.unwrap_err().contains("the parent's message"));
+    assert!(super::message(&*parent, &[1; 32]).await.unwrap_err().contains("too long"));
+    assert!(super::message(&*parent, &[1; 32]).await.unwrap_err().contains("the parent's message"));
+    assert!(super::message(&*parent, &[1; 32]).await.unwrap_err().contains("connect to the parent"));
 }
 
 /// Refuses the first `refusals` connections, then serves `message`.
@@ -319,13 +336,21 @@ mod cloud {
             Err(CloudError::Deployment(e)) if e.contains("no AWS role")
         ));
         assert_eq!(parent.opened(), [PARENT_PORT]);
-        for expected in ["second", "third"] {
+        for (i, expected) in ["second", "third"].into_iter().enumerate() {
             match cloud.deployment(&role()).await.unwrap() {
-                DeploymentProof::Proof(proof) => assert_eq!(proof, presigned(expected)),
-                DeploymentProof::Attested(_) => panic!("the parent's proof is not attested"),
+                DeploymentProof::Bound { proof, nonce } => {
+                    assert_eq!(proof, presigned(expected));
+                    // Bound to the nonce this connection sent the parent.
+                    assert_eq!(nonce, parent.nonces()[i + 1]);
+                }
+                _ => panic!("the parent's proof is bound"),
             }
         }
         assert_eq!(parent.opened(), [PARENT_PORT; 3]);
+        // A fresh nonce on every connection, the boot's included.
+        let nonces = parent.nonces();
+        assert_eq!(nonces.len(), 3);
+        assert!(nonces[0] != nonces[1] && nonces[1] != nonces[2] && nonces[0] != nonces[2]);
         // The parent is gone.
         assert!(matches!(cloud.deployment(&role()).await, Err(CloudError::Deployment(_))));
     }

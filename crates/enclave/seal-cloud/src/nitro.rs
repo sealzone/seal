@@ -5,11 +5,13 @@
 //!   (`PARENT_CID`:`PARENT_PORT`). `Cloud::detect` waits up to `PARENT_WAIT` for the parent to
 //!   answer, since the parent's host proxy may start after the enclave. The pin is unattested,
 //!   as on every cloud, and only narrows what the enclave serves.
-//! - **Deployment proof**: the `deployment` of a fresh `ParentMessage`: an STS
-//!   `GetCallerIdentity` the parent presigned with its instance role (`IdentityProof::AwsSigV4`),
-//!   which `seal_authz::DeploymentVerifier` replays to STS. Asked for only when the tenant's
-//!   deployments name an AWS role, and refused if the message names another tenant than the
-//!   pin, or carries another kind of proof.
+//! - **Deployment proof**: the `deployment` of a fresh `ParentMessage`, asked for with a random
+//!   nonce: an STS `GetCallerIdentity` the parent presigned with its instance role
+//!   (`IdentityProof::AwsSigV4`) and bound to that nonce, returned as `DeploymentProof::Bound`.
+//!   `seal_authz::DeploymentVerifier` checks the binding and replays the request to STS, so an
+//!   earlier proof, or any other presigned request of the role, does not pass. Asked for only
+//!   when the tenant's deployments name an AWS role, and refused if the message names another
+//!   tenant than the pin, or carries another kind of proof.
 //! - **Network**: no interface. `ParentDialer` opens a vsock stream to the parent's egress
 //!   port and asks for `CONNECT host:port`; past the parent's `200`, the stream is the
 //!   destination's (TLS verified above, as on every cloud). The parent resolves names. The
@@ -26,7 +28,9 @@ use async_trait::async_trait;
 use seal_authz::DeploymentProof;
 use seal_net::{BoxStream, Dialer, NetError};
 use seal_proto::identity::{IdentityMatcher, IdentityProof};
-use seal_proto::nitro::{ParentMessage, EGRESS_PORT, MAX_CONNECT_HEAD, MAX_PARENT_MESSAGE, PARENT_CID, PARENT_PORT};
+use seal_proto::nitro::{
+    ParentMessage, EGRESS_PORT, MAX_CONNECT_HEAD, MAX_PARENT_MESSAGE, NONCE_LEN, PARENT_CID, PARENT_PORT,
+};
 use seal_proto::TenantPin;
 use seal_tee::{Attestor, Clock};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -102,7 +106,8 @@ impl Nitro {
         if !deployments.iter().any(|m| matches!(m, IdentityMatcher::AwsRole { .. })) {
             return Err(CloudError::Deployment("the tenant's deployments name no AWS role".into()));
         }
-        let message = message(&*self.parent).await.map_err(CloudError::Deployment)?;
+        let nonce = random_nonce();
+        let message = message(&*self.parent, &nonce).await.map_err(CloudError::Deployment)?;
         if message.tenant != self.pin {
             return Err(CloudError::Deployment(format!(
                 "the parent now names tenant {}, not the pin {}",
@@ -110,17 +115,27 @@ impl Nitro {
             )));
         }
         match message.deployment {
-            proof @ IdentityProof::AwsSigV4 { .. } => Ok(DeploymentProof::Proof(proof)),
+            proof @ IdentityProof::AwsSigV4 { .. } => Ok(DeploymentProof::Bound { proof, nonce }),
             _ => Err(CloudError::Deployment("the parent's proof is not a presigned STS request".into())),
         }
     }
 }
 
-/// The parent's first message, tried every `PARENT_RETRY` for up to `wait`.
+fn random_nonce() -> [u8; NONCE_LEN] {
+    fn fill(rng: &mut impl rand::CryptoRng) -> [u8; NONCE_LEN] {
+        let mut nonce = [0u8; NONCE_LEN];
+        rng.fill_bytes(&mut nonce);
+        nonce
+    }
+    fill(&mut rand::rand_core::UnwrapErr(rand::rngs::SysRng))
+}
+
+/// The parent's first message, tried every `PARENT_RETRY` for up to `wait`. Its proof is not
+/// used, so its nonce is kept nowhere.
 pub(crate) async fn first_message(parent: &dyn ParentLink, wait: Duration) -> Result<ParentMessage, CloudError> {
     let deadline = tokio::time::Instant::now() + wait;
     loop {
-        match message(parent).await {
+        match message(parent, &random_nonce()).await {
             Ok(message) => return Ok(message),
             Err(e) if tokio::time::Instant::now() + PARENT_RETRY > deadline => {
                 return Err(CloudError::Pin(format!("no message from the parent within {} s: {e}", wait.as_secs())))
@@ -131,10 +146,11 @@ pub(crate) async fn first_message(parent: &dyn ParentLink, wait: Duration) -> Re
     }
 }
 
-/// One `ParentMessage`: a connection to `PARENT_PORT`, read to its end.
-pub(crate) async fn message(parent: &dyn ParentLink) -> Result<ParentMessage, String> {
+/// One `ParentMessage`: a connection to `PARENT_PORT`, `nonce` sent, the answer read to its end.
+pub(crate) async fn message(parent: &dyn ParentLink, nonce: &[u8; NONCE_LEN]) -> Result<ParentMessage, String> {
     let read = async {
-        let stream = parent.open(PARENT_PORT).await.map_err(|e| format!("connect to the parent: {e}"))?;
+        let mut stream = parent.open(PARENT_PORT).await.map_err(|e| format!("connect to the parent: {e}"))?;
+        stream.write_all(nonce).await.map_err(|e| format!("send the parent a nonce: {e}"))?;
         let mut text = Vec::new();
         stream
             .take(MAX_PARENT_MESSAGE as u64 + 1)

@@ -9,7 +9,7 @@ use crate::request::RequestAuthenticator;
 use crate::testing::*;
 use seal_proto::api::{ExtendRequest, SessionRequest, SignalRequest};
 use seal_proto::codec::b64url;
-use seal_proto::identity::{GitHubScope, OidcProvider, ProofPurpose};
+use seal_proto::identity::{DeploymentBinding, GitHubScope, OidcProvider, ProofPurpose};
 use seal_proto::integrity::Severity;
 use seal_proto::{Bearer, ErrorCode, UnixTime};
 
@@ -869,12 +869,39 @@ async fn deployment_identities() {
     let dv = DeploymentVerifier::new(s.https.clone());
     let now = at(T);
 
-    // SigV4 needs no binding header for a deployment.
-    let proof = presigned(BINDING_HOST, "host", None);
-    assert!(matches!(
-        dv.verify(&DeploymentProof::Proof(proof), &t, &now).await.unwrap(),
-        WorkloadIdentity::AwsRole { .. }
+    // SigV4 (the Nitro parent's instance role): bound to the nonce the enclave chose.
+    let bound = |nonce: [u8; 32]| {
+        let b = hex::encode(DeploymentBinding { nonce }.digest());
+        presigned(BINDING_HOST, "host%3Bx-seal-binding", Some(&b))
+    };
+    let fresh = DeploymentProof::Bound { proof: bound([7; 32]), nonce: [7; 32] };
+    assert!(matches!(dv.verify(&fresh, &t, &now).await.unwrap(), WorkloadIdentity::AwsRole { .. }));
+    // A proof bound to another nonce: an earlier boot's, replayed, or the wrong one.
+    let replayed = DeploymentProof::Bound { proof: bound([7; 32]), nonce: [8; 32] };
+    assert!(is_bad_proof(&dv.verify(&replayed, &t, &now).await.unwrap_err()));
+    // Unbound: any presigned GetCallerIdentity of the role, refused however it is offered.
+    for unbound in [
+        DeploymentProof::Proof(presigned(BINDING_HOST, "host", None)),
+        DeploymentProof::Bound { proof: presigned(BINDING_HOST, "host", None), nonce: [7; 32] },
+        DeploymentProof::Proof(bound([7; 32])),
+    ] {
+        assert!(is_bad_proof(&dv.verify(&unbound, &t, &now).await.unwrap_err()));
+    }
+    // A request proof's binding (its context digest) is not a deployment's.
+    let request_bound = presigned(BINDING_HOST, "host%3Bx-seal-binding", Some(&binding()));
+    assert!(is_bad_proof(
+        &dv.verify(&DeploymentProof::Bound { proof: request_bound, nonce: [7; 32] }, &t, &now).await.unwrap_err()
     ));
+    // Only SigV4 proofs bind.
+    let azure_bound = oidc(
+        OidcProvider::Azure,
+        jwt(rs256("rsa-1"), &azure_claims(&azure_v2(), "api://seal-deploy", "oid-dep"), Signer::Rsa),
+    );
+    assert!(is_bad_proof(
+        &dv.verify(&DeploymentProof::Bound { proof: azure_bound, nonce: [7; 32] }, &t, &now).await.unwrap_err()
+    ));
+    let sts_calls = s.seen_for(BINDING_HOST).len();
+    assert_eq!(sts_calls, 1, "only the fresh, bound proof reached STS");
     // Azure managed identity of the container group.
     let token = |oid: &str| {
         oidc(

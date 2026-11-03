@@ -747,10 +747,12 @@ The enclave's internal ports and components are in the crate docs and
   bundle (a chain matching the root id, a fresh state, and the state in force worked out
   from its own platform's guardian anchors), then its deployment identity. The cloud
   supplies a `DeploymentProof`: the ACI group's managed-identity token, a SigV4 request the
-  Nitro parent presigned with its instance role (`GetCallerIdentity` signing only `host`, in
-  a fresh `seal_proto::nitro::ParentMessage`, asked for only when the deployments name an
-  AWS role), or the project and service account from the enclave's own Confidential Space
-  attestation. The replica checks it against
+  Nitro parent presigned with its instance role (a `GetCallerIdentity` whose signed
+  `X-Seal-Binding` is bound to a nonce the replica sent for it, in a fresh
+  `seal_proto::nitro::ParentMessage`, asked for only when the deployments name an AWS role),
+  or the project and service account from the enclave's own Confidential Space attestation.
+  A SigV4 deployment proof without that binding is refused: any presigned request of the
+  role could otherwise be replayed as one, for as long as it is valid. The replica checks it against
   `TenantState::deployments` before requesting any key. So a genuine enclave that someone
   deploys for a tenant that never authorized it holds none of that tenant's keys. Service
   keys come with the guardian's `ServiceKeyCertificate`, which the replica serves in
@@ -809,12 +811,15 @@ The enclave's internal ports and components are in the crate docs and
   1 s per 1000 s, so a live connection may end up to about a second early.
 - **On AWS Nitro** the replica talks only to its parent instance, over vsock
   (`seal_proto::nitro`), where `seal-nitro-host` serves it:
-  - The parent's vsock port 9000 (`PARENT_PORT`, CID 3) answers each connection with one
-    `ParentMessage` as JSON and closes: `{"tenant": "<tenant>@<root id>", "deployment":
-    <IdentityProof::AwsSigV4>}`, at most 64 KiB. The replica waits up to 60 s at boot for the
-    first one and takes its `tenant` as the pin. Before requesting keys it takes another and
-    uses its `deployment`. A later message naming another tenant, or any other kind of proof,
-    is refused.
+  - On the parent's vsock port 9000 (`PARENT_PORT`, CID 3) the replica sends a fresh
+    32-byte nonce, and the parent answers one `ParentMessage` as JSON and closes:
+    `{"tenant": "<tenant>@<root id>", "deployment": <IdentityProof::AwsSigV4>}`, at most
+    64 KiB. The proof signs `host` and `x-seal-binding` =
+    hex(`DeploymentBinding { nonce }.digest()`, label `seal/deployment-binding/v1`). The
+    replica waits up to 60 s at boot for the first message and takes its `tenant` as the pin.
+    Before requesting keys it takes another, with a new nonce, and uses its `deployment`,
+    which must be bound to that nonce. A later message naming another tenant, or any other
+    kind of proof, is refused.
   - Port 9001 (`EGRESS_PORT`) takes `CONNECT host:port HTTP/1.1` for every outbound stream.
     The parent answers `200` and relays, or a 4xx or 5xx, which fails that dial. A replica
     sends only host names and addresses, never anything with spaces or `@`.

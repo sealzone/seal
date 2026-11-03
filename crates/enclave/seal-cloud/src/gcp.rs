@@ -85,7 +85,7 @@ mod tests {
                     service_account: "seal-dev-gcp@seal-512903.iam.gserviceaccount.com".into(),
                 }
             ),
-            DeploymentProof::Proof(_) => panic!("not attested"),
+            _ => panic!("not attested"),
         }
         // Our own evidence must verify: not after it expires, never from the debug image.
         let late = TrustedTime { now: 1_793_090_000, radius: 1 };

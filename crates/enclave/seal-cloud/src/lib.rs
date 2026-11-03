@@ -5,7 +5,7 @@
 //! | Cloud | Tenant pin | Deployment identity | Network |
 //! |-------|------------|---------------------|---------|
 //! | Azure ACI | `SEAL_TENANT`, allowed by an anchored re2 rule in the container policy | the group's managed-identity token (IMDS) | TCP and UDP; NAT gateway |
-//! | AWS Nitro | the first message the parent sends over vsock (`seal_proto::nitro::ParentMessage`) | `GetCallerIdentity` presigned by the parent with its instance role, in a fresh message | vsock to the parent's egress proxy (`CONNECT host:port`), and the parent forwards the enclave's port in over vsock; time from the hypervisor (`NitroClock`) |
+//! | AWS Nitro | the first message the parent sends over vsock (`seal_proto::nitro::ParentMessage`) | `GetCallerIdentity` presigned by the parent with its instance role, in a fresh message, bound to a nonce the enclave sent | vsock to the parent's egress proxy (`CONNECT host:port`), and the parent forwards the enclave's port in over vsock; time from the hypervisor (`NitroClock`) |
 //! | GCP Confidential Space | `tee-env-SEAL_TENANT`, the only override the launch policy allows | project and service account in the enclave's own attestation | TCP and UDP; Cloud NAT |
 //!
 //! The pin is unattested on every cloud; it can only narrow what the enclave serves.

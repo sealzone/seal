@@ -37,7 +37,7 @@ async fn sim_cloud_attests_and_tells_time() {
     assert_eq!(cloud.tenant_pin(), &pin());
     match cloud.deployment(&Default::default()).await.unwrap() {
         DeploymentProof::Attested(id) => assert_eq!(id, identity()),
-        DeploymentProof::Proof(_) => panic!("not the given proof"),
+        _ => panic!("not the given proof"),
     }
 }
 
@@ -59,7 +59,7 @@ async fn deployment_proofs_are_returned_intact() {
         for _ in 0..2 {
             match cloud.deployment(&Default::default()).await.unwrap() {
                 DeploymentProof::Proof(p) => assert_eq!(serde_json::to_string(&p).unwrap(), expected),
-                DeploymentProof::Attested(_) => panic!("not the given proof"),
+                _ => panic!("not the given proof"),
             }
         }
     }

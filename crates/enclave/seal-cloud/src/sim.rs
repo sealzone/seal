@@ -71,20 +71,23 @@ impl Sim {
     pub(crate) fn deployment(&self) -> DeploymentProof {
         match &self.deployment {
             DeploymentProof::Attested(identity) => DeploymentProof::Attested(identity.clone()),
-            DeploymentProof::Proof(proof) => DeploymentProof::Proof(match proof {
-                IdentityProof::Oidc { provider, jwt } => {
-                    IdentityProof::Oidc { provider: *provider, jwt: jwt.duplicate() }
-                }
-                IdentityProof::AwsSigV4 { method, url, headers, body } => IdentityProof::AwsSigV4 {
-                    method: method.clone(),
-                    url: url.clone(),
-                    headers: headers.iter().map(|(name, value)| (name.clone(), value.duplicate())).collect(),
-                    body: body.clone(),
-                },
-                IdentityProof::AppKey { key_id, signature } => {
-                    IdentityProof::AppKey { key_id: *key_id, signature: signature.clone() }
-                }
-            }),
+            DeploymentProof::Bound { proof, nonce } => DeploymentProof::Bound { proof: copy(proof), nonce: *nonce },
+            DeploymentProof::Proof(proof) => DeploymentProof::Proof(copy(proof)),
+        }
+    }
+}
+
+fn copy(proof: &IdentityProof) -> IdentityProof {
+    match proof {
+        IdentityProof::Oidc { provider, jwt } => IdentityProof::Oidc { provider: *provider, jwt: jwt.duplicate() },
+        IdentityProof::AwsSigV4 { method, url, headers, body } => IdentityProof::AwsSigV4 {
+            method: method.clone(),
+            url: url.clone(),
+            headers: headers.iter().map(|(name, value)| (name.clone(), value.duplicate())).collect(),
+            body: body.clone(),
+        },
+        IdentityProof::AppKey { key_id, signature } => {
+            IdentityProof::AppKey { key_id: *key_id, signature: signature.clone() }
         }
     }
 }

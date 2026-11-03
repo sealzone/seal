@@ -4,13 +4,16 @@
 //!
 //! | Who listens | vsock address | What |
 //! | --- | --- | --- |
-//! | the parent | `PARENT_CID`:`PARENT_PORT` | one `ParentMessage` per connection, as JSON, then the parent closes |
+//! | the parent | `PARENT_CID`:`PARENT_PORT` | the enclave sends a fresh 32-byte nonce; the parent answers one `ParentMessage`, as JSON, and closes |
 //! | the parent | `PARENT_CID`:`EGRESS_PORT` | egress: the enclave sends `CONNECT host:port HTTP/1.1`, the parent answers `200` and relays the bytes to and from `host:port` |
 //! | the enclave | its CID : the release's `listen` port (8443) | the enclave's one port: the parent relays each TCP connection to it, after a PROXY protocol v2 header naming the client |
 //!
 //! The enclave reads the first `ParentMessage` at boot: its `tenant` is the replica's tenant
-//! pin. Before requesting keys it connects again and takes that message's `deployment`, a
-//! fresh proof. A later message naming another tenant is refused.
+//! pin. Before requesting keys it connects again, with a nonce of its own, and takes that
+//! message's `deployment`: a proof whose signed `X-Seal-Binding` is
+//! hex(`DeploymentBinding { nonce }.digest()`), which no earlier proof of the role carries, so
+//! none can be replayed (`seal_authz::DeploymentVerifier`). A later message naming another
+//! tenant is refused.
 
 use serde::{Deserialize, Serialize};
 
@@ -23,6 +26,8 @@ pub const PARENT_CID: u32 = 3;
 pub const PARENT_PORT: u32 = 9000;
 /// The parent's egress port (`CONNECT host:port`).
 pub const EGRESS_PORT: u32 = 9001;
+/// What the enclave sends first on `PARENT_PORT`: a nonce of this many bytes, raw.
+pub const NONCE_LEN: usize = 32;
 /// The largest `ParentMessage` an enclave reads. A presigned request with a session token is
 /// about 2 KiB.
 pub const MAX_PARENT_MESSAGE: usize = 64 * 1024;
@@ -38,7 +43,8 @@ pub struct ParentMessage {
     /// The tenant pin, `<tenant>@<root id>`.
     pub tenant: TenantPin,
     /// An STS `GetCallerIdentity` request the parent presigned with its instance role
-    /// (`IdentityProof::AwsSigV4`, without `X-Seal-Binding`: a deployment has nothing to bind).
+    /// (`IdentityProof::AwsSigV4`), signing `host` and `x-seal-binding`, which is
+    /// hex(`DeploymentBinding { nonce }.digest()`) for the nonce this connection began with.
     pub deployment: IdentityProof,
 }
 

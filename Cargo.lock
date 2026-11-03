@@ -3418,6 +3418,7 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
+ "rand",
  "seal-authz",
  "seal-tee",
  "sealzone-attest",
